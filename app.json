@@ -1,0 +1,15 @@
+{
+  "name": "your-boat-manager",
+  "version": "1.0.0",
+  "expo": {
+    "scheme": "your-boat-manager",
+    "web": {
+      "output": "server"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "18b5aea5-e416-45eb-aaea-f5a659af4c91"
+      }
+    }
+  }
+}
