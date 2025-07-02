@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
 import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, Building } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
+import ChatInput from '@/components/ChatInput'; // Import the new ChatInput component
 
 interface Message {
   id: string;
@@ -184,7 +185,7 @@ export default function MessagesScreen() {
   const { contact: initialContactId } = useLocalSearchParams<{ contact?: string }>();
   const { user } = useAuth();
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [message, setMessage] = useState('');
+  // Removed message state and setMessage
   const [chats, setChats] = useState(mockChats);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
@@ -233,13 +234,14 @@ export default function MessagesScreen() {
     return matchesSearch && matchesType;
   });
 
-  const handleSend = () => {
-    if (!activeChat || !message.trim()) return;
+  const handleSend = useCallback((messageText: string) => {
+    if (!activeChat || (!messageText.trim() && !messageText.startsWith('image:'))) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
       senderId: user?.id || 'corp1',
-      text: message,
+      text: messageText.startsWith('image:') ? undefined : messageText,
+      image: messageText.startsWith('image:') ? messageText.substring(6) : undefined,
       timestamp: new Date(),
     };
 
@@ -254,7 +256,6 @@ export default function MessagesScreen() {
     });
 
     setChats(updatedChats);
-    setMessage('');
     
     // Scroll to bottom
     setTimeout(() => {
@@ -262,9 +263,9 @@ export default function MessagesScreen() {
     }, 100);
     
     setShowAttachmentOptions(false);
-  };
+  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
 
-  const handleChooseImage = async () => {
+  const handleChooseImage = useCallback(async () => {
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
       if (!permission.granted) return;
@@ -303,7 +304,7 @@ export default function MessagesScreen() {
     }
     
     setShowAttachmentOptions(false);
-  };
+  }, [mediaPermission, requestMediaPermission, activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
 
   // Handle toggling contact selection
   const toggleContactSelection = (contact: Contact) => {
@@ -588,54 +589,12 @@ export default function MessagesScreen() {
           })}
         </ScrollView>
 
-        <View style={styles.inputContainer}>
-          <TouchableOpacity 
-            style={styles.attachButton}
-            onPress={() => setShowAttachmentOptions(!showAttachmentOptions)}
-          >
-            <Paperclip size={24} color="#0066CC" />
-          </TouchableOpacity>
-          
-          {showAttachmentOptions && (
-            <View style={styles.attachmentOptions}>
-              <TouchableOpacity 
-                style={styles.attachmentOption}
-                onPress={handleChooseImage}
-              >
-                <Camera size={24} color="#0066CC" />
-                <Text style={styles.attachmentOptionText}>Photo</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.attachmentOption}
-                onPress={() => {
-                  alert('Fonctionnalité à venir');
-                  setShowAttachmentOptions(false);
-                }}
-              >
-                <Paperclip size={24} color="#0066CC" />
-                <Text style={styles.attachmentOptionText}>Document</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          
-          <TextInput
-            style={styles.input}
-            placeholder="Votre message..."
-            value={message}
-            onChangeText={setMessage}
-            multiline
-          />
-          <TouchableOpacity 
-            style={[
-              styles.sendButton,
-              !message.trim() && styles.sendButtonDisabled
-            ]}
-            onPress={handleSend}
-            disabled={!message.trim()}
-          >
-            <Send size={24} color="white" />
-          </TouchableOpacity>
-        </View>
+        <ChatInput
+          handleSend={handleSend}
+          showAttachmentOptions={showAttachmentOptions}
+          setShowAttachmentOptions={setShowAttachmentOptions}
+          handleChooseImage={handleChooseImage}
+        />
       </KeyboardAvoidingView>
     );
   };
@@ -882,9 +841,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
-    borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    borderRadius: 12,
     gap: 12,
     ...Platform.select({
       ios: {
@@ -1066,92 +1025,6 @@ const styles = StyleSheet.create({
   },
   otherMessageTime: {
     color: '#666',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: 12,
-    gap: 12,
-    backgroundColor: 'white',
-    position: 'relative',
-  },
-  attachButton: {
-    padding: 12,
-    backgroundColor: '#f0f7ff',
-    borderRadius: 24,
-  },
-  attachmentOptions: {
-    position: 'absolute',
-    bottom: 70,
-    left: 12,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 12,
-    flexDirection: 'row',
-    gap: 16,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-      },
-    }),
-  },
-  attachmentOption: {
-    alignItems: 'center',
-    gap: 8,
-    width: 60,
-  },
-  attachmentOptionText: {
-    fontSize: 12,
-    color: '#0066CC',
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-    borderRadius: 24,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    maxHeight: 120,
-    fontSize: 16,
-    color: '#1a1a1a',
-    ...Platform.select({
-      web: {
-        outlineStyle: 'none',
-      },
-    }),
-  },
-  sendButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#0066CC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#0066CC',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
-      },
-    }),
-  },
-  sendButtonDisabled: {
-    backgroundColor: '#94a3b8',
   },
   // Modal styles
   modalOverlay: {
@@ -1379,3 +1252,4 @@ const styles = StyleSheet.create({
     color: 'white',
   },
 });
+

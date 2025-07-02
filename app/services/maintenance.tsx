@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Text, TextInput } from 'react-native';
 import { PenTool as Tool, Wrench, Settings, Gauge, Bot as Boat, Navigation, Check, TriangleAlert as AlertTriangle, Calendar } from 'lucide-react-native';
-import { router } from 'expo-router';
 import ServiceForm from '@/components/ServiceForm';
 
 interface CheckItem {
@@ -9,6 +8,116 @@ interface CheckItem {
   label: string;
   checked: boolean;
 }
+
+// Extracted CheckboxList component
+const CheckboxList = ({ checkItems, setCheckItems, otherText, setOtherText, otherChecked, setOtherChecked, componentStyles }) => {
+  const handleToggleCheck = (id: string) => {
+    setCheckItems(prev =>
+      prev.map(item =>
+        item.id === id ? { ...item, checked: !item.checked } : item
+      )
+    );
+  };
+
+  const handleToggleOther = () => {
+    setOtherChecked(!otherChecked);
+  };
+
+  return (
+    <View style={componentStyles.checkboxContainer}>
+      {checkItems.map(item => (
+        <TouchableOpacity
+          key={item.id}
+          style={componentStyles.checkboxRow}
+          onPress={() => handleToggleCheck(item.id)}
+          activeOpacity={0.7}
+        >
+          <View style={[componentStyles.checkbox, item.checked && componentStyles.checkboxChecked]}>
+            {item.checked && <Check size={16} color="white" />}
+          </View>
+          <Text style={componentStyles.checkboxLabel}>{item.label}</Text>
+        </TouchableOpacity>
+      ))}
+
+      {/* Other option with text input */}
+      <TouchableOpacity
+        style={componentStyles.checkboxRow}
+        onPress={() => handleToggleOther()}
+        activeOpacity={0.7}
+      >
+        <View style={[componentStyles.checkbox, otherChecked && componentStyles.checkboxChecked]}>
+          {otherChecked && <Check size={16} color="white" />}
+        </View>
+        <Text style={componentStyles.checkboxLabel}>Autre demande d'entretien</Text>
+      </TouchableOpacity>
+
+      {otherChecked && (
+        <View style={componentStyles.otherInputContainer}>
+          <TextInput
+            style={componentStyles.otherInput}
+            value={otherText}
+            onChangeText={setOtherText}
+            placeholder="Précisez votre demande"
+            multiline
+          />
+        </View>
+      )}
+    </View>
+  );
+};
+
+// Extracted UrgencySelector component
+const UrgencySelector = ({ urgencyLevel, setUrgencyLevel, componentStyles }) => {
+  return (
+    <View style={componentStyles.urgencySelector}>
+      <Text style={componentStyles.urgencySelectorTitle}>Niveau d'urgence</Text>
+      <View style={componentStyles.urgencyOptions}>
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionSelected
+          ]}
+          onPress={() => setUrgencyLevel('normal')}
+        >
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionTextSelected
+          ]}>
+            Normal
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentSelected
+          ]}
+          onPress={() => setUrgencyLevel('urgent')}
+        >
+          <AlertTriangle
+            size={16}
+            color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'}
+          />
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentTextSelected
+          ]}>
+            Urgent
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {urgencyLevel === 'urgent' && (
+        <View style={componentStyles.urgencyNote}>
+          <AlertTriangle size={16} color="#DC2626" />
+          <Text style={componentStyles.urgencyNoteText}>
+            En sélectionnant "Urgent", votre demande sera traitée en priorité.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
 
 export default function MaintenanceScreen() {
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent'>('normal');
@@ -20,80 +129,26 @@ export default function MaintenanceScreen() {
     { id: 'rigging', label: 'Entretien gréement', checked: false },
     { id: 'cleaning', label: 'Nettoyage', checked: false },
   ]);
-  
+
   const [otherText, setOtherText] = useState('');
   const [otherChecked, setOtherChecked] = useState(false);
-
-  const handleToggleCheck = (id: string) => {
-    setCheckItems(prev => 
-      prev.map(item => 
-        item.id === id ? { ...item, checked: !item.checked } : item
-      )
-    );
-  };
-  
-  const handleToggleOther = () => {
-    setOtherChecked(!otherChecked);
-  };
 
   const handleSubmit = (formData: any) => {
     // Add checked items to form data
     const selectedItems = checkItems
       .filter(item => item.checked)
       .map(item => item.label);
-    
+
     const formDataWithChecks = {
       ...formData,
       selectedItems,
       other: otherChecked ? otherText : null,
       urgencyLevel
     };
-    
+
     console.log('Form submitted:', formDataWithChecks);
     // Handle form submission
   };
-
-  const CheckboxList = () => (
-    <View style={styles.checkboxContainer}>
-      {checkItems.map(item => (
-        <TouchableOpacity 
-          key={item.id}
-          style={styles.checkboxRow}
-          onPress={() => handleToggleCheck(item.id)}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
-            {item.checked && <Check size={16} color="white" />}
-          </View>
-          <Text style={styles.checkboxLabel}>{item.label}</Text>
-        </TouchableOpacity>
-      ))}
-      
-      {/* Other option with text input */}
-      <TouchableOpacity 
-        style={styles.checkboxRow}
-        onPress={() => handleToggleOther()}
-        activeOpacity={0.7}
-      >
-        <View style={[styles.checkbox, otherChecked && styles.checkboxChecked]}>
-          {otherChecked && <Check size={16} color="white" />}
-        </View>
-        <Text style={styles.checkboxLabel}>Autre demande d'entretien</Text>
-      </TouchableOpacity>
-      
-      {otherChecked && (
-        <View style={styles.otherInputContainer}>
-          <TextInput
-            style={styles.otherInput}
-            value={otherText}
-            onChangeText={setOtherText}
-            placeholder="Précisez votre demande"
-            multiline
-          />
-        </View>
-      )}
-    </View>
-  );
 
   return (
     <ScrollView style={styles.container}>
@@ -106,54 +161,20 @@ export default function MaintenanceScreen() {
           onSubmit={handleSubmit}
           customContent={
             <>
-              <CheckboxList />
-              <View style={styles.urgencySelector}>
-                <Text style={styles.urgencySelectorTitle}>Niveau d'urgence</Text>
-                <View style={styles.urgencyOptions}>
-                  <TouchableOpacity 
-                    style={[
-                      styles.urgencyOption,
-                      urgencyLevel === 'normal' && styles.urgencyOptionSelected
-                    ]}
-                    onPress={() => setUrgencyLevel('normal')}
-                  >
-                    <Text style={[
-                      styles.urgencyOptionText,
-                      urgencyLevel === 'normal' && styles.urgencyOptionTextSelected
-                    ]}>
-                      Normal
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={[
-                      styles.urgencyOption,
-                      urgencyLevel === 'urgent' && styles.urgencyOptionUrgentSelected
-                    ]}
-                    onPress={() => setUrgencyLevel('urgent')}
-                  >
-                    <AlertTriangle 
-                      size={16} 
-                      color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'} 
-                    />
-                    <Text style={[
-                      styles.urgencyOptionText,
-                      urgencyLevel === 'urgent' && styles.urgencyOptionUrgentTextSelected
-                    ]}>
-                      Urgent
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                
-                {urgencyLevel === 'urgent' && (
-                  <View style={styles.urgencyNote}>
-                    <AlertTriangle size={16} color="#DC2626" />
-                    <Text style={styles.urgencyNoteText}>
-                      En sélectionnant "Urgent", votre demande sera traitée en priorité.
-                    </Text>
-                  </View>
-                )}
-              </View>
+              <CheckboxList
+                checkItems={checkItems}
+                setCheckItems={setCheckItems}
+                otherText={otherText}
+                setOtherText={setOtherText}
+                otherChecked={otherChecked}
+                setOtherChecked={setOtherChecked}
+                componentStyles={styles}
+              />
+              <UrgencySelector
+                urgencyLevel={urgencyLevel}
+                setUrgencyLevel={setUrgencyLevel}
+                componentStyles={styles}
+              />
             </>
           }
         />

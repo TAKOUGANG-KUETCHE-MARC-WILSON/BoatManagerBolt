@@ -9,75 +9,52 @@ interface CheckItem {
   checked: boolean;
 }
 
-export default function AccessScreen() {
-  const [checkItems, setCheckItems] = useState<CheckItem[]>([
-    { id: 'key_management', label: 'Conservation des clés', checked: false },
-    { id: 'key_delivery', label: 'Remise / Récupération des clés au bon destinataire', checked: false },
-  ]);
-  
-  const [otherText, setOtherText] = useState('');
-  const [otherChecked, setOtherChecked] = useState(false);
-
+// Moved CheckboxList component outside AccessScreen
+const CheckboxList = ({ checkItems, setCheckItems, otherText, setOtherText, otherChecked, setOtherChecked, componentStyles }) => {
   const handleToggleCheck = (id: string) => {
-    setCheckItems(prev => 
-      prev.map(item => 
+    setCheckItems(prev =>
+      prev.map(item =>
         item.id === id ? { ...item, checked: !item.checked } : item
       )
     );
   };
-  
+
   const handleToggleOther = () => {
     setOtherChecked(!otherChecked);
   };
 
-  const handleSubmit = (formData: any) => {
-    // Add checked items to form data
-    const selectedItems = checkItems
-      .filter(item => item.checked)
-      .map(item => item.label);
-    
-    const formDataWithChecks = {
-      ...formData,
-      selectedItems,
-      other: otherChecked ? otherText : null
-    };
-    
-    console.log('Form submitted:', formDataWithChecks);
-    // Handle form submission
-  };
-
-  const CheckboxList = () => (
-    <View style={styles.checkboxContainer}>
+  return (
+    <View style={componentStyles.checkboxContainer}>
       {checkItems.map(item => (
-        <TouchableOpacity 
+        <TouchableOpacity
           key={item.id}
-          style={styles.checkboxRow}
+          style={componentStyles.checkboxRow}
           onPress={() => handleToggleCheck(item.id)}
           activeOpacity={0.7}
         >
-          <View style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
+          <View style={[componentStyles.checkbox, item.checked && componentStyles.checkboxChecked]}>
             {item.checked && <Check size={16} color="white" />}
           </View>
-          <Text style={styles.checkboxLabel}>{item.label}</Text>
+          <Text style={componentStyles.checkboxLabel}>{item.label}</Text>
         </TouchableOpacity>
       ))}
-      
+
       {/* Other option with text input */}
-      <TouchableOpacity 
-        style={styles.checkboxRow}
+      <TouchableOpacity
+        style={componentStyles.checkboxRow}
         onPress={() => handleToggleOther()}
         activeOpacity={0.7}
       >
-        <View style={[styles.checkbox, otherChecked && styles.checkboxChecked]}>
+        <View style={[componentStyles.checkbox, otherChecked && componentStyles.checkboxChecked]}>
           {otherChecked && <Check size={16} color="white" />}
         </View>
-        <Text style={styles.checkboxLabel}>Autre besoin</Text>
+        <Text style={componentStyles.checkboxLabel}>Autre besoin</Text>
       </TouchableOpacity>
-      
+
       {otherChecked && (
-        <View style={styles.otherInputContainer}>
+        <View style={componentStyles.otherInputContainer}>
           <TextInput
-            style={styles.otherInput}
+            style={componentStyles.otherInput}
             value={otherText}
             onChangeText={setOtherText}
             placeholder="Instructions particulières"
@@ -87,6 +64,32 @@ export default function AccessScreen() {
       )}
     </View>
   );
+};
+
+export default function AccessScreen() {
+  const [checkItems, setCheckItems] = useState<CheckItem[]>([
+    { id: 'key_management', label: 'Conservation des clés', checked: false },
+    { id: 'key_delivery', label: 'Remise / Récupération des clés au bon destinataire', checked: false },
+  ]);
+
+  const [otherText, setOtherText] = useState('');
+  const [otherChecked, setOtherChecked] = useState(false);
+
+  const handleSubmit = (formData: any) => {
+    // Add checked items to form data
+    const selectedItems = checkItems
+      .filter(item => item.checked)
+      .map(item => item.label);
+
+    const formDataWithChecks = {
+      ...formData,
+      selectedItems,
+      other: otherChecked ? otherText : null
+    };
+
+    console.log('Form submitted:', formDataWithChecks);
+    // Handle form submission
+  };
 
   return (
     <ScrollView style={styles.container}>
@@ -97,7 +100,17 @@ export default function AccessScreen() {
           fields={[]}
           submitLabel="Envoyer"
           onSubmit={handleSubmit}
-          customContent={<CheckboxList />}
+          customContent={
+            <CheckboxList
+              checkItems={checkItems}
+              setCheckItems={setCheckItems}
+              otherText={otherText}
+              setOtherText={setOtherText}
+              otherChecked={otherChecked}
+              setOtherChecked={setOtherChecked}
+              componentStyles={styles} // Pass styles to the component
+            />
+          }
         />
       </View>
     </ScrollView>

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, TextInput } from 'react-native';
+import { useState, useEffect, useCallback, memo } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Star, MapPin, Phone, Mail, Clock, Shield, Award, Briefcase, Ship, X } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
@@ -64,6 +64,107 @@ const services: Service[] = [
   },
 ];
 
+// Extracted and Memoized RatingModal component
+const RatingModal = memo(({
+  visible,
+  onClose,
+  rating,
+  setRating,
+  comment,
+  setComment,
+  onSubmit, // This will be handleSubmitRating from parent
+  boatManagerName, // Pass only necessary data, not the whole object
+  userFirstName,
+  userLastName
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Évaluer {boatManagerName}</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.ratingServiceInfo}>
+            <Text style={styles.ratingServiceTitle}>Boat Manager</Text>
+            <Text style={styles.ratingServiceDescription}>
+              Partagez votre expérience avec {boatManagerName}
+            </Text>
+          </View>
+
+          <View style={styles.starsContainer}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <TouchableOpacity
+                key={star}
+                onPress={() => setRating(star)}
+              >
+                <Star
+                  size={40}
+                  color="#FFC107"
+                  fill={star <= rating ? '#FFC107' : 'none'}
+                  style={styles.starIcon}
+                />
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.ratingLabel}>
+            {rating === 0 ? 'Sélectionnez une note' :
+             rating === 1 ? 'Très insatisfait' :
+             rating === 2 ? 'Insatisfait' :
+             rating === 3 ? 'Correct' :
+             rating === 4 ? 'Satisfait' : 'Très satisfait'}
+          </Text>
+
+          <View style={styles.commentContainer}>
+            <Text style={styles.commentLabel}>Commentaire (optionnel)</Text>
+            <TextInput
+              style={styles.commentInput}
+              value={comment}
+              onChangeText={setComment}
+              placeholder="Partagez votre expérience..."
+              multiline
+              numberOfLines={4}
+              textAlignVertical="top" // Ensure text starts from top
+            />
+          </View>
+
+          <View style={styles.ratingActions}>
+            <TouchableOpacity
+              style={styles.ratingCancelButton}
+              onPress={onClose}
+            >
+              <Text style={styles.ratingCancelText}>Annuler</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.ratingSubmitButton,
+                rating === 0 && styles.ratingSubmitButtonDisabled
+              ]}
+              onPress={onSubmit}
+              disabled={rating === 0}
+            >
+              <Text style={styles.ratingSubmitText}>Envoyer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
 export default function BoatManagerProfileScreen() {
   const { id } = useLocalSearchParams();
   const { user } = useAuth();
@@ -92,17 +193,14 @@ export default function BoatManagerProfileScreen() {
     router.push('/(tabs)/messages');
   };
 
-  const handleSubmitRating = () => {
+  // Memoized callback for submitting rating
+  const handleSubmitRating = useCallback(() => {
     if (rating === 0) {
       alert('Veuillez sélectionner une note');
       return;
     }
 
-    // Dans une vraie application, vous enverriez cette note à votre backend
-    alert('Votre évaluation a été enregistrée avec succès !');
-    setShowRatingModal(false);
-    
-    // Ajouter la nouvelle évaluation à la liste (simulation)
+    // Update mockReviews (global mock data)
     mockReviews.unshift({
       id: Date.now().toString(),
       author: `${user?.firstName} ${user?.lastName}`,
@@ -114,12 +212,19 @@ export default function BoatManagerProfileScreen() {
         year: 'numeric'
       })
     });
-    
-    // Mettre à jour la note moyenne (simulation)
+
+    // Update boatManager.rating and reviewCount (modifying a local constant, won't trigger re-render of this component based on these changes)
+    // In a real application, `boatManager` would likely be part of the component's state or managed by a global state/context,
+    // and updating it would involve calling a `setState` function to trigger a re-render.
     const totalRatings = mockReviews.reduce((sum, review) => sum + review.rating, 0);
     boatManager.rating = parseFloat((totalRatings / mockReviews.length).toFixed(1));
     boatManager.reviewCount = mockReviews.length;
-  };
+
+    alert('Votre évaluation a été enregistrée avec succès !');
+    setShowRatingModal(false);
+    setRating(0); // Reset rating
+    setComment(''); // Reset comment
+  }, [rating, comment, user]); // Dependencies for useCallback
 
   const StarRating = ({ rating }: { rating: number }) => (
     <View style={styles.ratingContainer}>
@@ -134,99 +239,13 @@ export default function BoatManagerProfileScreen() {
     </View>
   );
 
-  const RatingModal = () => (
-    <Modal
-      visible={showRatingModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowRatingModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Évaluer {boatManager.name}</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowRatingModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.ratingServiceInfo}>
-            <Text style={styles.ratingServiceTitle}>Boat Manager</Text>
-            <Text style={styles.ratingServiceDescription}>
-              Partagez votre expérience avec {boatManager.name}
-            </Text>
-          </View>
-          
-          <View style={styles.starsContainer}>
-            {[1, 2, 3, 4, 5].map((star) => (
-              <TouchableOpacity
-                key={star}
-                onPress={() => setRating(star)}
-              >
-                <Star
-                  size={40}
-                  color="#FFC107"
-                  fill={star <= rating ? '#FFC107' : 'none'}
-                  style={styles.starIcon}
-                />
-              </TouchableOpacity>
-            ))}
-          </View>
-          
-          <Text style={styles.ratingLabel}>
-            {rating === 0 ? 'Sélectionnez une note' : 
-             rating === 1 ? 'Très insatisfait' :
-             rating === 2 ? 'Insatisfait' :
-             rating === 3 ? 'Correct' :
-             rating === 4 ? 'Satisfait' : 'Très satisfait'}
-          </Text>
-          
-          <View style={styles.commentContainer}>
-            <Text style={styles.commentLabel}>Commentaire (optionnel)</Text>
-            <TextInput
-              style={styles.commentInput}
-              value={comment}
-              onChangeText={setComment}
-              placeholder="Partagez votre expérience..."
-              multiline
-              numberOfLines={4}
-            />
-          </View>
-          
-          <View style={styles.ratingActions}>
-            <TouchableOpacity 
-              style={styles.ratingCancelButton}
-              onPress={() => setShowRatingModal(false)}
-            >
-              <Text style={styles.ratingCancelText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[
-                styles.ratingSubmitButton,
-                rating === 0 && styles.ratingSubmitButtonDisabled
-              ]}
-              onPress={handleSubmitRating}
-              disabled={rating === 0}
-            >
-              <Text style={styles.ratingSubmitText}>Envoyer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
   return (
     <ScrollView style={styles.container}>
       {/* Cover Image */}
       <View style={styles.coverContainer}>
         <Image source={{ uri: boatManager.cover }} style={styles.coverImage} />
         <View style={styles.overlay} />
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -240,7 +259,7 @@ export default function BoatManagerProfileScreen() {
         <View style={styles.profileInfo}>
           <Text style={styles.name}>{boatManager.name}</Text>
           <Text style={styles.title}>{boatManager.title}</Text>
-          
+
           <View style={styles.locationContainer}>
             <MapPin size={16} color="#666" />
             <Text style={styles.location}>{boatManager.location}</Text>
@@ -257,14 +276,14 @@ export default function BoatManagerProfileScreen() {
 
       {/* Contact Buttons */}
       <View style={styles.contactButtons}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.contactButton}
           onPress={handleContact}
         >
           <Text style={styles.contactButtonText}>Contacter</Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={styles.rateButton}
           onPress={() => setShowRatingModal(true)}
         >
@@ -307,7 +326,7 @@ export default function BoatManagerProfileScreen() {
 
       {/* Tabs */}
       <View style={styles.tabs}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, selectedTab === 'services' && styles.activeTab]}
           onPress={() => setSelectedTab('services')}
         >
@@ -315,7 +334,7 @@ export default function BoatManagerProfileScreen() {
             Services
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, selectedTab === 'reviews' && styles.activeTab]}
           onPress={() => setSelectedTab('reviews')}
         >
@@ -354,8 +373,19 @@ export default function BoatManagerProfileScreen() {
           ))}
         </View>
       )}
-      
-      <RatingModal />
+
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        rating={rating}
+        setRating={setRating}
+        comment={comment}
+        setComment={setComment}
+        onSubmit={handleSubmitRating}
+        boatManagerName={boatManager.name}
+        userFirstName={user?.firstName}
+        userLastName={user?.lastName}
+      />
     </ScrollView>
   );
 }
@@ -652,6 +682,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
+    gap: 16,
   },
   modalHeader: {
     flexDirection: 'row',

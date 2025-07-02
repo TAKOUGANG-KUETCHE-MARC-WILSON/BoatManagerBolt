@@ -114,7 +114,7 @@ const mockChats: Chat[] = [
 export default function MessagesScreen() {
   const { user } = useAuth();
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [message, setMessage] = useState('');
+  // Removed message state and setMessage
   const [chats, setChats] = useState(mockChats);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
@@ -124,13 +124,7 @@ export default function MessagesScreen() {
   const [selectedContacts, setSelectedContacts] = useState<User[]>([]);
   const [contactSearchQuery, setContactSearchQuery] = useState('');
 
-  // Ref to hold the current message value
-  const messageRef = useRef('');
-
-  // Keep the ref updated with the latest message state
-  useEffect(() => {
-    messageRef.current = message;
-  }, [message]);
+  // Removed messageRef and its useEffect
 
   const filteredChats = chats.filter(chat => {
     const searchLower = searchQuery.toLowerCase();
@@ -142,19 +136,17 @@ export default function MessagesScreen() {
     );
   });
 
-  const handleSend = useCallback(() => {
-    // Access the current message value from the ref
-    const currentMessage = messageRef.current;
-
+  // handleSend now accepts messageText as an argument
+  const handleSend = useCallback((messageText: string) => {
     // Check if there's an active chat and if the message is not empty (after trimming whitespace)
     // or if it's an image message (which might not have text.trim())
-    if (!activeChat || (!currentMessage.trim() && !currentMessage.startsWith('image:'))) return;
+    if (!activeChat || (!messageText.trim() && !messageText.startsWith('image:'))) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
       senderId: user?.id || '1', // Use current user's ID or a default
-      text: currentMessage.startsWith('image:') ? undefined : currentMessage, // Don't set text if it's an image URI
-      image: currentMessage.startsWith('image:') ? currentMessage.substring(6) : undefined, // Extract image URI
+      text: messageText.startsWith('image:') ? undefined : messageText, // Don't set text if it's an image URI
+      image: messageText.startsWith('image:') ? messageText.substring(6) : undefined, // Extract image URI
       timestamp: new Date(),
     };
 
@@ -170,15 +162,15 @@ export default function MessagesScreen() {
     });
 
     setChats(updatedChats);
-    setMessage(''); // Clear the message input after sending
-
+    // No need to clear message state here, ChatInput manages its own
+    
     // Scroll to the end of the chat after a short delay to allow UI to update
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 100);
 
     setShowAttachmentOptions(false); // Hide attachment options after sending
-  }, [activeChat, user, chats, setChats, setMessage, scrollViewRef, setShowAttachmentOptions]);
+  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]); // Removed message from dependency array
 
   const handleChooseImage = useCallback(async () => {
     // Request media library permissions if not granted
@@ -432,8 +424,7 @@ export default function MessagesScreen() {
 
         {/* Use the new ChatInput component */}
         <ChatInput
-          message={message}
-          setMessage={setMessage}
+          // message and setMessage are no longer passed as props
           handleSend={handleSend}
           showAttachmentOptions={showAttachmentOptions}
           setShowAttachmentOptions={setShowAttachmentOptions}
@@ -808,7 +799,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1a1a1a',
   },
-  modalCloseButton: {
+  closeButton: {
     padding: 4,
   },
   modalSearchContainer: {

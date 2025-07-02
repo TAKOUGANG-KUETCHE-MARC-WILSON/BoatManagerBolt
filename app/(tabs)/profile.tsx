@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image, Modal, Alert, TextInput } from 'react-native';
 import { router } from 'expo-router';
-import { Ship, Users, Phone, Mail, Calendar, LogOut, MapPin, Image as ImageIcon, X, Plus, Pencil, Briefcase, Anchor, Star, ChevronRight, Settings, User } from 'lucide-react-native';
+import { Ship, Users, Phone, Mail, Calendar, LogOut, MapPin, Image as ImageIcon, X, Plus, Pencil, Briefcase, Anchor, Star, ChevronRight, Settings, User, Tag, Info, Hash, FileText as FileTextIcon } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/context/AuthContext';
 
@@ -51,22 +51,67 @@ interface Boat {
   image: string;
 }
 
+interface InventoryItem {
+  id: string;
+  category: string;
+  name: string;
+  brand?: string;
+  model?: string;
+  serialNumber?: string;
+  purchaseDate?: string;
+  notes?: string;
+}
+
 const avatars = {
   male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
   female: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
   neutral: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop',
 };
 
+// Mock inventory data for the profile page
+const mockInventory: InventoryItem[] = [
+  {
+    id: 'i1',
+    category: 'Navigation',
+    name: 'GPS',
+    brand: 'Garmin',
+    model: 'GPSMAP 1243xsv',
+    serialNumber: 'GAR123456',
+    purchaseDate: '2020-06-15',
+    notes: 'Installé sur le tableau de bord'
+  },
+  {
+    id: 'i2',
+    category: 'Sécurité',
+    name: 'Gilets de sauvetage',
+    brand: 'Plastimo',
+    purchaseDate: '2020-05-20',
+    notes: '6 gilets adultes'
+  },
+  {
+    id: 'i3',
+    category: 'Moteur',
+    name: 'Hélice de secours',
+    brand: 'Volvo',
+    model: 'P2-50',
+    purchaseDate: '2021-03-10'
+  }
+];
+
 export default function ProfileScreen() {
   const { isAuthenticated, user, logout } = useAuth();
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [showAvatarModal, setShowAvatarModal] = useState(false);
-  const [selectedTab, setSelectedTab] = useState<'boats' | 'ports' | 'satisfaction'>('boats');
+  const [selectedTab, setSelectedTab] = useState<'boats' | 'ports' | 'satisfaction' | 'inventory'>('boats');
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [selectedService, setSelectedService] = useState<ServiceHistory | null>(null);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
+
+  // New state for inventory item modal
+  const [showInventoryDetailModal, setShowInventoryDetailModal] = useState(false);
+  const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
 
   const [userProfile, setUserProfile] = useState({
     firstName: user?.firstName || 'Jean',
@@ -90,6 +135,7 @@ export default function ProfileScreen() {
       name: 'Le Petit Prince',
       type: 'Yacht',
       length: '15m',
+      homePort: 'Port de Nice',
       image: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop'
     }
   ]);
@@ -414,6 +460,82 @@ export default function ProfileScreen() {
     </Modal>
   );
 
+  const InventoryItemDetailModal = () => (
+    <Modal
+      visible={showInventoryDetailModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowInventoryDetailModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Détails de l'équipement</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowInventoryDetailModal(false)}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          {selectedInventoryItem ? (
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.inventoryDetailCard}>
+                <View style={styles.inventoryDetailHeader}>
+                  <Text style={styles.inventoryDetailName}>{selectedInventoryItem.name}</Text>
+                  <View style={styles.inventoryDetailCategoryBadge}>
+                    <Text style={styles.inventoryDetailCategoryText}>{selectedInventoryItem.category}</Text>
+                  </View>
+                </View>
+
+                {selectedInventoryItem.brand && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Tag size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Marque:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.brand}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.model && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Info size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Modèle:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.model}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.serialNumber && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Hash size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Numéro de série:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.serialNumber}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.purchaseDate && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Calendar size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Date d'achat:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.purchaseDate}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.notes && (
+                  <View style={styles.inventoryDetailNotesContainer}>
+                    <FileTextIcon size={16} color="#666" />
+                    <Text style={styles.inventoryDetailNotesLabel}>Notes:</Text>
+                    <Text style={styles.inventoryDetailNotesText}>{selectedInventoryItem.notes}</Text>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+          ) : (
+            <View style={styles.modalBody}>
+              <Text style={styles.emptyModalText}>Aucun détail d'équipement sélectionné.</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+
   const ProfileHeader = () => (
     <View style={styles.profileHeader}>
       <View style={styles.profileImageContainer}>
@@ -496,7 +618,7 @@ export default function ProfileScreen() {
         <MapPin size={24} color="#0066CC" />
         <View style={styles.portInfo}>
           <Text style={styles.portName}>Port de Marseille</Text>
-          <Text style={styles.portAddress}>Quai du Port, 13002 Marseille</Text>
+          <Text style={styles.portAddress}>Quai du Port, 13000 Marseille</Text>
         </View>
         <ChevronRight size={20} color="#666" />
       </View>
@@ -611,6 +733,58 @@ export default function ProfileScreen() {
     </View>
   );
 
+  const InventoryTab = () => (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleContainer}>
+          <Anchor size={24} color="#0066CC" />
+          <Text style={styles.sectionTitle}>Inventaire du bateau</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.addButton}
+          onPress={() => router.push(`/boats/inventory/new?boatId=${boats[0]?.id || '1'}`)}
+        >
+          <Plus size={20} color="#0066CC" />
+          <Text style={styles.addButtonText}>Ajouter</Text>
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.inventoryList}>
+        {mockInventory.length > 0 ? (
+          mockInventory.map((item) => (
+            <TouchableOpacity 
+              key={item.id} 
+              style={styles.inventoryItemCard}
+              onPress={() => {
+                setSelectedInventoryItem(item);
+                setShowInventoryDetailModal(true);
+              }}
+            >
+              <View style={styles.inventoryItemHeader}>
+                <Text style={styles.inventoryItemName}>{item.name}</Text>
+                <View style={styles.inventoryItemCategoryBadge}>
+                  <Text style={styles.inventoryItemCategoryText}>{item.category}</Text>
+                </View>
+              </View>
+              <Text style={styles.inventoryItemDetails}>
+                {item.brand} {item.model} {item.serialNumber}
+              </Text>
+              <ChevronRight size={20} color="#666" style={styles.inventoryItemChevron} />
+            </TouchableOpacity>
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <Anchor size={48} color="#ccc" />
+            <Text style={styles.emptyStateTitle}>Aucun équipement</Text>
+            <Text style={styles.emptyStateText}>
+              Ajoutez les équipements présents sur votre bateau.
+            </Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+
   const AccountSettings = () => (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
@@ -704,6 +878,14 @@ export default function ProfileScreen() {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity 
+            style={[styles.tab, selectedTab === 'inventory' && styles.activeTab]}
+            onPress={() => setSelectedTab('inventory')}
+          >
+            <Text style={[styles.tabText, selectedTab === 'inventory' && styles.activeTabText]}>
+              Inventaire
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
             style={[styles.tab, selectedTab === 'satisfaction' && styles.activeTab]}
             onPress={() => setSelectedTab('satisfaction')}
           >
@@ -716,6 +898,7 @@ export default function ProfileScreen() {
         {/* Tab Content */}
         {selectedTab === 'boats' && <BoatsList />}
         {selectedTab === 'ports' && <PortsSection />}
+        {selectedTab === 'inventory' && <InventoryTab />}
         {selectedTab === 'satisfaction' && <ServiceHistoryList />}
         
         {/* These sections are always visible regardless of the selected tab */}
@@ -725,6 +908,7 @@ export default function ProfileScreen() {
       <PhotoModal />
       <AvatarModal />
       <RatingModal />
+      <InventoryItemDetailModal />
     </>
   );
 }
@@ -1318,6 +1502,184 @@ modalCancelButton: {
   ratingContainer: {
     flexDirection: 'row',
     gap: 2,
+  },
+  inventoryList: {
+    gap: 16,
+  },
+  inventoryItemCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  inventoryItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  inventoryItemName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  inventoryItemCategoryBadge: {
+    backgroundColor: '#f0f7ff',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+  },
+  inventoryItemCategoryText: {
+    fontSize: 12,
+    color: '#0066CC',
+    fontWeight: '500',
+  },
+  inventoryItemDetails: {
+    fontSize: 14,
+    color: '#666',
+  },
+  inventoryItemChevron: {
+    position: 'absolute',
+    right: 16,
+    top: '50%',
+    marginTop: -10,
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  emptyStateTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+  },
+  inventoryDetailCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  inventoryDetailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  inventoryDetailName: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  inventoryDetailCategoryBadge: {
+    backgroundColor: '#f0f7ff',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+  },
+  inventoryDetailCategoryText: {
+    fontSize: 14,
+    color: '#0066CC',
+    fontWeight: '500',
+  },
+  inventoryDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  inventoryDetailLabel: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+    width: 120,
+  },
+  inventoryDetailValue: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    flex: 1,
+  },
+  inventoryDetailNotesContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    gap: 8,
+  },
+  inventoryDetailNotesLabel: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+    width: 120,
+  },
+  inventoryDetailNotesText: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    flex: 1,
+    lineHeight: 24,
+  },
+  emptyModalText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    padding: 20,
   },
 });
 

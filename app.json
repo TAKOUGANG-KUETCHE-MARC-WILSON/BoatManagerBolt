@@ -1,15 +1,52 @@
 {
-  "name": "your-boat-manager",
-  "version": "1.0.0",
-  "expo": {
-    "scheme": "your-boat-manager",
-    "web": {
-      "output": "server"
+  "android": {
+    "adaptiveIcon": {
+      "backgroundColor": "#ffffff",
+      "foregroundImage": "./assets/images/adaptive-icon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "18b5aea5-e416-45eb-aaea-f5a659af4c91"
-      }
-    }
+    "enableNewArchitecture": false,
+    "package": "com.marcwilson.yourboatmanager"
+  },
+  "assetBundlePatterns": [
+    "**/*"
+  ],
+  "experiments": {
+    "typedRoutes": true
+  },
+  "extra": {
+    "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
+    "EXPO_PUBLIC_SUPABASE_URL": "https://jxzwwwpxxrlukamxiurz.supabase.co",
+    "eas": {
+      "projectId": "1d81e9d2-3da4-4b9e-98dd-2dd3572e74a9"
+    },
+    "router": {}
+  },
+  "icon": "./assets/images/icon.png",
+  "ios": {
+    "bundleIdentifier": "com.marcwilson.yourboatmanager",
+    "supportsTablet": true
+  },
+  "jsEngine": "jsc",
+  "name": "YOUR BOAT MANAGER",
+  "orientation": "portrait",
+  "platforms": [
+    "android",
+    "ios"
+  ],
+  "plugins": [
+    "expo-router"
+  ],
+  "scheme": "yourboatmanager",
+  "sdkVersion": "53.0.0",
+  "slug": "boat-manager",
+  "splash": {
+    "backgroundColor": "#ffffff",
+    "image": "./assets/images/splash.png",
+    "resizeMode": "contain"
+  },
+  "userInterfaceStyle": "light",
+  "version": "1.0.0",
+  "web": {
+    "favicon": "./assets/images/favicon.png"
   }
 }

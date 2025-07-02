@@ -1,19 +1,73 @@
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity } from 'react-native';
+import { useState } from 'react';
+import { View, StyleSheet, ScrollView, Text, TouchableOpacity, TextInput } from 'react-native';
 import { PenTool as Tool, TriangleAlert as AlertTriangle } from 'lucide-react-native';
 import ServiceForm from '@/components/ServiceForm';
-import { useState } from 'react';
+
+// Extracted UrgencySelector component
+const UrgencySelector = ({ urgencyLevel, setUrgencyLevel, componentStyles }) => {
+  return (
+    <View style={componentStyles.urgencySelector}>
+      <Text style={componentStyles.urgencyLabel}>Niveau d'urgence</Text>
+      <View style={componentStyles.urgencyOptions}>
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionSelected
+          ]}
+          onPress={() => setUrgencyLevel('normal')}
+        >
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionTextSelected
+          ]}>
+            Normal
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentSelected
+          ]}
+          onPress={() => setUrgencyLevel('urgent')}
+        >
+          <AlertTriangle
+            size={16}
+            color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'}
+          />
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentTextSelected
+          ]}>
+            Urgent
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {urgencyLevel === 'urgent' && (
+        <View style={componentStyles.urgencyNote}>
+          <AlertTriangle size={16} color="#DC2626" />
+          <Text style={componentStyles.urgencyNoteText}>
+            En sélectionnant "Urgent", votre demande sera traitée en priorité.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
 
 export default function RepairScreen() {
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent'>('normal');
+  const [detailedDescription, setDetailedDescription] = useState('');
 
   const handleSubmit = (formData: any) => {
-    // Add urgency level to form data
-    const formDataWithUrgency = {
+    const formDataWithDetails = {
       ...formData,
+      detailedDescription, // Include the new detailed description
       urgencyLevel
     };
-    
-    console.log('Form submitted:', formDataWithUrgency);
+
+    console.log('Form submitted:', formDataWithDetails);
     // Handle form submission
   };
 
@@ -22,78 +76,39 @@ export default function RepairScreen() {
       <View style={styles.content}>
         <ServiceForm
           title="Réparation/Panne de votre bateau"
+          description="Décrivez le problème rencontré"
           fields={[
             {
               name: 'issueType',
               label: "Nature de la panne",
-              placeholder: "Description",
+              placeholder: "ex: Panne moteur, fuite, problème électrique...",
               icon: Tool,
-              multiline: true,
             },
           ]}
           submitLabel="Envoyer"
           onSubmit={handleSubmit}
           customContent={
             <>
-              <View style={styles.spacer} />
-              
               <View style={styles.inputContainer}>
                 <Text style={styles.label}>Description détaillée du problème</Text>
-                <View style={styles.inputWrapper}>
-                  <Tool size={20} color="#666" />
-                  <Text style={styles.placeholder}>Problème rencontré</Text>
+                <View style={styles.textAreaWrapper}>
+                  <TextInput
+                    style={styles.textArea}
+                    value={detailedDescription}
+                    onChangeText={setDetailedDescription}
+                    placeholder="Décrivez en détail le problème rencontré, les symptômes, quand cela a commencé, etc."
+                    multiline
+                    numberOfLines={4}
+                    textAlignVertical="top"
+                  />
                 </View>
               </View>
-              
-              <View style={styles.spacer} />
-              
-              <View style={styles.urgencySelector}>
-                <Text style={styles.urgencyLabel}>Niveau d'urgence</Text>
-                <View style={styles.urgencyOptions}>
-                  <TouchableOpacity 
-                    style={[
-                      styles.urgencyOption,
-                      urgencyLevel === 'normal' && styles.urgencyOptionSelected
-                    ]}
-                    onPress={() => setUrgencyLevel('normal')}
-                  >
-                    <Text style={[
-                      styles.urgencyOptionText,
-                      urgencyLevel === 'normal' && styles.urgencyOptionTextSelected
-                    ]}>
-                      Normal
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={[
-                      styles.urgencyOption,
-                      urgencyLevel === 'urgent' && styles.urgencyOptionUrgentSelected
-                    ]}
-                    onPress={() => setUrgencyLevel('urgent')}
-                  >
-                    <AlertTriangle 
-                      size={16} 
-                      color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'} 
-                    />
-                    <Text style={[
-                      styles.urgencyOptionText,
-                      urgencyLevel === 'urgent' && styles.urgencyOptionUrgentTextSelected
-                    ]}>
-                      Urgent
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                
-                {urgencyLevel === 'urgent' && (
-                  <View style={styles.urgencyNote}>
-                    <AlertTriangle size={16} color="#DC2626" />
-                    <Text style={styles.urgencyNoteText}>
-                      En sélectionnant "Urgent", votre demande sera traitée en priorité.
-                    </Text>
-                  </View>
-                )}
-              </View>
+
+              <UrgencySelector
+                urgencyLevel={urgencyLevel}
+                setUrgencyLevel={setUrgencyLevel}
+                componentStyles={styles}
+              />
             </>
           }
         />
@@ -110,11 +125,8 @@ const styles = StyleSheet.create({
   content: {
     padding: 24,
   },
-  spacer: {
-    height: 24, // Espace uniforme entre les sections
-  },
   inputContainer: {
-    marginBottom: 0, // Supprimé pour utiliser le spacer à la place
+    marginBottom: 16,
   },
   label: {
     fontSize: 16,
@@ -122,31 +134,27 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 8,
   },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  textAreaWrapper: {
     backgroundColor: 'white',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    paddingHorizontal: 12,
-    paddingVertical: 16,
-    minHeight: 100,
+    padding: 12,
   },
-  placeholder: {
-    flex: 1,
-    marginLeft: 8,
+  textArea: {
     fontSize: 16,
-    color: '#94a3b8',
+    color: '#1a1a1a',
+    minHeight: 120,
+    textAlignVertical: 'top',
   },
   urgencySelector: {
-    marginBottom: 0, // Supprimé pour uniformiser l'espacement
+    marginBottom: 24,
   },
   urgencyLabel: {
     fontSize: 16,
     fontWeight: '500',
     color: '#1a1a1a',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   urgencyOptions: {
     flexDirection: 'row',

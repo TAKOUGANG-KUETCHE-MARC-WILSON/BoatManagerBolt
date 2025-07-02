@@ -9,6 +9,147 @@ interface CheckItem {
   checked: boolean;
 }
 
+// Extracted CheckboxList component
+const CheckboxList = ({ checkItems, setCheckItems, otherText, setOtherText, otherChecked, setOtherChecked, componentStyles }) => {
+  const handleToggleCheck = (id: string) => {
+    if (id === 'all_equipment') {
+      // If "Check all equipment" is toggled, update its state
+      const allEquipmentChecked = !checkItems.find(item => item.id === 'all_equipment')?.checked;
+
+      // If checking "all equipment", uncheck all other items
+      if (allEquipmentChecked) {
+        setCheckItems(prev =>
+          prev.map(item =>
+            item.id === 'all_equipment' ? { ...item, checked: true } : { ...item, checked: false }
+          )
+        );
+      } else {
+        // Just uncheck the "all equipment" option
+        setCheckItems(prev =>
+          prev.map(item =>
+            item.id === 'all_equipment' ? { ...item, checked: false } : item
+          )
+        );
+      }
+    } else {
+      // If any other item is checked, uncheck the "all equipment" option
+      setCheckItems(prev =>
+        prev.map(item =>
+          item.id === id ? { ...item, checked: !item.checked } :
+          item.id === 'all_equipment' ? { ...item, checked: false } : item
+        )
+      );
+    }
+  };
+
+  const handleToggleOther = () => {
+    setOtherChecked(!otherChecked);
+    // If checking "other", uncheck "all equipment"
+    if (!otherChecked) {
+      setCheckItems(prev =>
+        prev.map(item =>
+          item.id === 'all_equipment' ? { ...item, checked: false } : item
+        )
+      );
+    }
+  };
+
+  return (
+    <View style={componentStyles.checkboxContainer}>
+      {checkItems.map(item => (
+        <TouchableOpacity
+          key={item.id}
+          style={componentStyles.checkboxRow}
+          onPress={() => handleToggleCheck(item.id)}
+          activeOpacity={0.7}
+        >
+          <View style={[componentStyles.checkbox, item.checked && componentStyles.checkboxChecked]}>
+            {item.checked && <Check size={16} color="white" />}
+          </View>
+          <Text style={componentStyles.checkboxLabel}>{item.label}</Text>
+        </TouchableOpacity>
+      ))}
+
+      {/* Other option with text input */}
+      <TouchableOpacity
+        style={componentStyles.checkboxRow}
+        onPress={() => handleToggleOther()}
+        activeOpacity={0.7}
+      >
+        <View style={[componentStyles.checkbox, otherChecked && componentStyles.checkboxChecked]}>
+          {otherChecked && <Check size={16} color="white" />}
+        </View>
+        <Text style={componentStyles.checkboxLabel}>Autre besoin</Text>
+      </TouchableOpacity>
+
+      {otherChecked && (
+        <View style={componentStyles.otherInputContainer}>
+          <TextInput
+            style={componentStyles.otherInput}
+            value={otherText}
+            onChangeText={setOtherText}
+            placeholder="Instructions particulières"
+            multiline
+          />
+        </View>
+      )}
+    </View>
+  );
+};
+
+// Extracted UrgencySelector component
+const UrgencySelector = ({ urgencyLevel, setUrgencyLevel, componentStyles }) => {
+  return (
+    <View style={componentStyles.urgencySelector}>
+      <Text style={componentStyles.urgencyLabel}>Niveau d'urgence</Text>
+      <View style={componentStyles.urgencyOptions}>
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionSelected
+          ]}
+          onPress={() => setUrgencyLevel('normal')}
+        >
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'normal' && componentStyles.urgencyOptionTextSelected
+          ]}>
+            Normal
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            componentStyles.urgencyOption,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentSelected
+          ]}
+          onPress={() => setUrgencyLevel('urgent')}
+        >
+          <AlertTriangle
+            size={16}
+            color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'}
+          />
+          <Text style={[
+            componentStyles.urgencyOptionText,
+            urgencyLevel === 'urgent' && componentStyles.urgencyOptionUrgentTextSelected
+          ]}>
+            Urgent
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {urgencyLevel === 'urgent' && (
+        <View style={componentStyles.urgencyNote}>
+          <AlertTriangle size={16} color="#DC2626" />
+          <Text style={componentStyles.urgencyNoteText}>
+            En sélectionnant "Urgent", votre demande sera traitée en priorité.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
 export default function ControlScreen() {
   const [checkItems, setCheckItems] = useState<CheckItem[]>([
     { id: 'all_equipment', label: 'Contrôle de tous les équipements', checked: false },
@@ -26,162 +167,27 @@ export default function ControlScreen() {
     { id: 'tension_batteries', label: 'Tension des batteries', checked: false },
     { id: 'niveaux', label: 'Contrôle des niveaux (carburant, huile, eau, ...)', checked: false },
   ]);
-  
+
   const [otherText, setOtherText] = useState('');
   const [otherChecked, setOtherChecked] = useState(false);
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent'>('normal');
-
-  const handleToggleCheck = (id: string) => {
-    if (id === 'all_equipment') {
-      // If "Check all equipment" is toggled, update its state
-      const allEquipmentChecked = !checkItems.find(item => item.id === 'all_equipment')?.checked;
-      
-      // If checking "all equipment", uncheck all other items
-      if (allEquipmentChecked) {
-        setCheckItems(prev => 
-          prev.map(item => 
-            item.id === 'all_equipment' ? { ...item, checked: true } : { ...item, checked: false }
-          )
-        );
-      } else {
-        // Just uncheck the "all equipment" option
-        setCheckItems(prev => 
-          prev.map(item => 
-            item.id === 'all_equipment' ? { ...item, checked: false } : item
-          )
-        );
-      }
-    } else {
-      // If any other item is checked, uncheck the "all equipment" option
-      setCheckItems(prev => 
-        prev.map(item => 
-          item.id === id ? { ...item, checked: !item.checked } : 
-          item.id === 'all_equipment' ? { ...item, checked: false } : item
-        )
-      );
-    }
-  };
-  
-  const handleToggleOther = () => {
-    setOtherChecked(!otherChecked);
-    // If checking "other", uncheck "all equipment"
-    if (!otherChecked) {
-      setCheckItems(prev => 
-        prev.map(item => 
-          item.id === 'all_equipment' ? { ...item, checked: false } : item
-        )
-      );
-    }
-  };
 
   const handleSubmit = (formData: any) => {
     // Add checked items to form data
     const selectedItems = checkItems
       .filter(item => item.checked)
       .map(item => item.label);
-    
+
     const formDataWithChecks = {
       ...formData,
       selectedItems,
       other: otherChecked ? otherText : null,
       urgencyLevel
     };
-    
+
     console.log('Form submitted:', formDataWithChecks);
     // Handle form submission
   };
-
-  const CheckboxList = () => (
-    <View style={styles.checkboxContainer}>
-      {checkItems.map(item => (
-        <TouchableOpacity 
-          key={item.id}
-          style={styles.checkboxRow}
-          onPress={() => handleToggleCheck(item.id)}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
-            {item.checked && <Check size={16} color="white" />}
-          </View>
-          <Text style={styles.checkboxLabel}>{item.label}</Text>
-        </TouchableOpacity>
-      ))}
-      
-      {/* Other option with text input */}
-      <TouchableOpacity 
-        style={styles.checkboxRow}
-        onPress={() => handleToggleOther()}
-        activeOpacity={0.7}
-      >
-        <View style={[styles.checkbox, otherChecked && styles.checkboxChecked]}>
-          {otherChecked && <Check size={16} color="white" />}
-        </View>
-        <Text style={styles.checkboxLabel}>Autre besoin</Text>
-      </TouchableOpacity>
-      
-      {otherChecked && (
-        <View style={styles.otherInputContainer}>
-          <TextInput
-            style={styles.otherInput}
-            value={otherText}
-            onChangeText={setOtherText}
-            placeholder="Instructions particulières"
-            multiline
-          />
-        </View>
-      )}
-    </View>
-  );
-
-  const UrgencySelector = () => (
-    <View style={styles.urgencySelector}>
-      <Text style={styles.urgencyLabel}>Niveau d'urgence</Text>
-      <View style={styles.urgencyOptions}>
-        <TouchableOpacity 
-          style={[
-            styles.urgencyOption,
-            urgencyLevel === 'normal' && styles.urgencyOptionSelected
-          ]}
-          onPress={() => setUrgencyLevel('normal')}
-        >
-          <Text style={[
-            styles.urgencyOptionText,
-            urgencyLevel === 'normal' && styles.urgencyOptionTextSelected
-          ]}>
-            Normal
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[
-            styles.urgencyOption,
-            urgencyLevel === 'urgent' && styles.urgencyOptionUrgentSelected
-          ]}
-          onPress={() => setUrgencyLevel('urgent')}
-        >
-          <AlertTriangle 
-            size={16} 
-            color={urgencyLevel === 'urgent' ? 'white' : '#DC2626'} 
-          />
-          <Text style={[
-            styles.urgencyOptionText,
-            urgencyLevel === 'urgent' && styles.urgencyOptionUrgentTextSelected
-          ]}>
-            Urgent
-          </Text>
-        </TouchableOpacity>
-      </View>
-      
-      {urgencyLevel === 'urgent' && (
-        <View style={styles.urgencyNote}>
-          <AlertTriangle size={16} color="#DC2626" />
-          <Text style={styles.urgencyNoteText}>
-            En sélectionnant "Urgent", votre demande sera traitée en priorité.
-          </Text>
-        </View>
-      )}
-    </View>
-  );
 
   return (
     <ScrollView style={styles.container}>
@@ -194,8 +200,20 @@ export default function ControlScreen() {
           onSubmit={handleSubmit}
           customContent={
             <>
-              <CheckboxList />
-              <UrgencySelector />
+              <CheckboxList
+                checkItems={checkItems}
+                setCheckItems={setCheckItems}
+                otherText={otherText}
+                setOtherText={setOtherText}
+                otherChecked={otherChecked}
+                setOtherChecked={setOtherChecked}
+                componentStyles={styles}
+              />
+              <UrgencySelector
+                urgencyLevel={urgencyLevel}
+                setUrgencyLevel={setUrgencyLevel}
+                componentStyles={styles}
+              />
             </>
           }
         />

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Image as ImageIcon, X, FileText, Calendar, PenTool as Tool, Clipboard, Plus, Download, Upload, ChevronRight, Check, Radio, Briefcase, Anchor, Sailboat, Fish, Users, Chrome as Home, Trophy, CircleHelp as HelpCircle } from 'lucide-react-native';
@@ -275,6 +275,313 @@ const mockUsageTypes: Record<string, UsageType> = {
   }
 };
 
+// Extracted and memoized UsageTypeTab component
+const UsageTypeTab = memo(({
+  usageType,
+  setUsageType,
+  leaseType,
+  setLeaseType,
+  leaseEndDate,
+  setLeaseEndDate,
+  otherUsageDescription,
+  setOtherUsageDescription,
+  handleToggleUsagePurpose,
+  handleSaveUsageType,
+}) => {
+  const handleSetLegalNature = useCallback((nature: 'personal' | 'professional') => {
+    setUsageType(prev => ({
+      ...prev,
+      legalNature: nature
+    }));
+  }, [setUsageType]);
+
+  const handleSetOwnershipStatus = useCallback((status: 'full_ownership' | 'joint_ownership' | 'financial_lease') => {
+    setUsageType(prev => ({
+      ...prev,
+      ownershipStatus: status
+    }));
+  }, [setUsageType]);
+
+  return (
+    <View style={styles.tabContent}>
+      {/* Legal Nature Section */}
+      <View style={styles.usageSection}>
+        <Text style={styles.usageSectionTitle}>Nature juridique de l'utilisation</Text>
+        <View style={styles.optionsContainer}>
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleSetLegalNature('personal')}
+          >
+            <View style={styles.radioContainer}>
+              {usageType.legalNature === 'personal' ? (
+                <View style={styles.radioChecked}>
+                  <View style={styles.radioInner} />
+                </View>
+              ) : (
+                <View style={styles.radioUnchecked} />
+              )}
+            </View>
+            <Text style={styles.optionText}>Particulier</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleSetLegalNature('professional')}
+          >
+            <View style={styles.radioContainer}>
+              {usageType.legalNature === 'professional' ? (
+                <View style={styles.radioChecked}>
+                  <View style={styles.radioInner} />
+                </View>
+              ) : (
+                <View style={styles.radioUnchecked} />
+              )}
+            </View>
+            <Text style={styles.optionText}>Professionnel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      
+      {/* Ownership Status Section */}
+      <View style={styles.usageSection}>
+        <Text style={styles.usageSectionTitle}>Statut de l'utilisateur</Text>
+        <View style={styles.optionsContainer}>
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleSetOwnershipStatus('full_ownership')}
+          >
+            <View style={styles.radioContainer}>
+              {usageType.ownershipStatus === 'full_ownership' ? (
+                <View style={styles.radioChecked}>
+                  <View style={styles.radioInner} />
+                </View>
+              ) : (
+                <View style={styles.radioUnchecked} />
+              )}
+            </View>
+            <Text style={styles.optionText}>Pleine propriété</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleSetOwnershipStatus('joint_ownership')}
+          >
+            <View style={styles.radioContainer}>
+              {usageType.ownershipStatus === 'joint_ownership' ? (
+                <View style={styles.radioChecked}>
+                  <View style={styles.radioInner} />
+                </View>
+              ) : (
+                <View style={styles.radioUnchecked} />
+              )}
+            </View>
+            <Text style={styles.optionText}>Indivision</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleSetOwnershipStatus('financial_lease')}
+          >
+            <View style={styles.radioContainer}>
+              {usageType.ownershipStatus === 'financial_lease' ? (
+                <View style={styles.radioChecked}>
+                  <View style={styles.radioInner} />
+                </View>
+              ) : (
+                <View style={styles.radioUnchecked} />
+              )}
+            </View>
+            <Text style={styles.optionText}>Location financière</Text>
+          </TouchableOpacity>
+          
+          {usageType.ownershipStatus === 'financial_lease' && (
+            <View style={styles.leaseDetailsContainer}>
+              <View style={styles.leaseDetailRow}>
+                <Text style={styles.leaseDetailLabel}>Type de contrat:</Text>
+                <TextInput
+                  style={styles.leaseDetailInput}
+                  value={leaseType}
+                  onChangeText={setLeaseType}
+                  placeholder="Type de contrat"
+                />
+              </View>
+              <View style={styles.leaseDetailRow}>
+                <Text style={styles.leaseDetailLabel}>Échéance:</Text>
+                <TextInput
+                  style={styles.leaseDetailInput}
+                  value={leaseEndDate}
+                  onChangeText={setLeaseEndDate}
+                  placeholder="JJ-MM-AAAA"
+                  keyboardType="numeric"
+                  inputMode="numeric"
+                />
+              </View>
+            </View>
+          )}
+        </View>
+      </View>
+      
+      {/* Usage Purposes Section */}
+      <View style={styles.usageSection}>
+        <Text style={styles.usageSectionTitle}>Utilisation</Text>
+        <View style={styles.optionsContainer}>
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('leisure')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.leisure ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Sailboat size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Loisir</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('fishing')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.fishing ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Fish size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Pêche</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('cruising')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.cruising ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Anchor size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Promenade</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('charter')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.charter ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Users size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Charter/Location</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('competition')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.competition ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Trophy size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Compétition</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('permanentHousing')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.permanentHousing ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <Home size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Habitat permanent</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.optionRow}
+            onPress={() => handleToggleUsagePurpose('other')}
+          >
+            <View style={styles.checkboxContainer}>
+              {usageType.usagePurposes.other ? (
+                <View style={styles.checkboxChecked}>
+                  <Check size={16} color="white" />
+                </View>
+              ) : (
+                <View style={styles.checkboxUnchecked} />
+              )}
+            </View>
+            <View style={styles.optionIconTextContainer}>
+              <HelpCircle size={20} color="#0066CC" />
+              <Text style={styles.optionText}>Autre</Text>
+            </View>
+          </TouchableOpacity>
+          
+          {usageType.usagePurposes.other && (
+            <View style={styles.otherUsageContainer}>
+              <TextInput
+                style={styles.otherUsageInput}
+                value={otherUsageDescription}
+                onChangeText={setOtherUsageDescription}
+                placeholder="Précisez l'utilisation"
+                multiline
+              />
+            </View>
+          )}
+        </View>
+      </View>
+      
+      <TouchableOpacity 
+        style={styles.saveUsageButton}
+        onPress={handleSaveUsageType}
+      >
+        <Text style={styles.saveUsageButtonText}>Enregistrer</Text>
+      </TouchableOpacity>
+    </View>
+  );
+});
+
 export default function BoatProfileScreen() {
   const { id } = useLocalSearchParams();
   const { user } = useAuth();
@@ -402,21 +709,7 @@ export default function BoatProfileScreen() {
     router.push(`/boats/inventory/${item.id}?boatId=${id}`);
   };
   
-  const handleSetLegalNature = (nature: 'personal' | 'professional') => {
-    setUsageType(prev => ({
-      ...prev,
-      legalNature: nature
-    }));
-  };
-  
-  const handleSetOwnershipStatus = (status: 'full_ownership' | 'joint_ownership' | 'financial_lease') => {
-    setUsageType(prev => ({
-      ...prev,
-      ownershipStatus: status
-    }));
-  };
-  
-  const handleToggleUsagePurpose = (purpose: keyof UsageType['usagePurposes']) => {
+  const handleToggleUsagePurpose = useCallback((purpose: keyof UsageType['usagePurposes']) => {
     setUsageType(prev => ({
       ...prev,
       usagePurposes: {
@@ -424,9 +717,9 @@ export default function BoatProfileScreen() {
         [purpose]: !prev.usagePurposes[purpose]
       }
     }));
-  };
+  }, [setUsageType]);
   
-  const handleSaveUsageType = () => {
+  const handleSaveUsageType = useCallback(() => {
     // Create updated usage type with all fields
     const updatedUsageType: UsageType = {
       ...usageType,
@@ -447,7 +740,7 @@ export default function BoatProfileScreen() {
     }
     
     Alert.alert('Succès', 'Les informations d\'utilisation ont été enregistrées avec succès');
-  };
+  }, [usageType, leaseType, leaseEndDate, otherUsageDescription, id]);
 
   if (!id || typeof id !== 'string' || !boatDetails) {
     return (
@@ -769,285 +1062,6 @@ export default function BoatProfileScreen() {
     </View>
   );
   
-  const UsageTypeTab = () => (
-    <View style={styles.tabContent}>
-      {/* Legal Nature Section */}
-      <View style={styles.usageSection}>
-        <Text style={styles.usageSectionTitle}>Nature juridique de l'utilisation</Text>
-        <View style={styles.optionsContainer}>
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleSetLegalNature('personal')}
-          >
-            <View style={styles.radioContainer}>
-              {usageType.legalNature === 'personal' ? (
-                <View style={styles.radioChecked}>
-                  <View style={styles.radioInner} />
-                </View>
-              ) : (
-                <View style={styles.radioUnchecked} />
-              )}
-            </View>
-            <Text style={styles.optionText}>Particulier</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleSetLegalNature('professional')}
-          >
-            <View style={styles.radioContainer}>
-              {usageType.legalNature === 'professional' ? (
-                <View style={styles.radioChecked}>
-                  <View style={styles.radioInner} />
-                </View>
-              ) : (
-                <View style={styles.radioUnchecked} />
-              )}
-            </View>
-            <Text style={styles.optionText}>Professionnel</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      
-      {/* Ownership Status Section */}
-      <View style={styles.usageSection}>
-        <Text style={styles.usageSectionTitle}>Statut de l'utilisateur</Text>
-        <View style={styles.optionsContainer}>
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleSetOwnershipStatus('full_ownership')}
-          >
-            <View style={styles.radioContainer}>
-              {usageType.ownershipStatus === 'full_ownership' ? (
-                <View style={styles.radioChecked}>
-                  <View style={styles.radioInner} />
-                </View>
-              ) : (
-                <View style={styles.radioUnchecked} />
-              )}
-            </View>
-            <Text style={styles.optionText}>Pleine propriété</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleSetOwnershipStatus('joint_ownership')}
-          >
-            <View style={styles.radioContainer}>
-              {usageType.ownershipStatus === 'joint_ownership' ? (
-                <View style={styles.radioChecked}>
-                  <View style={styles.radioInner} />
-                </View>
-              ) : (
-                <View style={styles.radioUnchecked} />
-              )}
-            </View>
-            <Text style={styles.optionText}>Indivision</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleSetOwnershipStatus('financial_lease')}
-          >
-            <View style={styles.radioContainer}>
-              {usageType.ownershipStatus === 'financial_lease' ? (
-                <View style={styles.radioChecked}>
-                  <View style={styles.radioInner} />
-                </View>
-              ) : (
-                <View style={styles.radioUnchecked} />
-              )}
-            </View>
-            <Text style={styles.optionText}>Location financière</Text>
-          </TouchableOpacity>
-          
-          {usageType.ownershipStatus === 'financial_lease' && (
-            <View style={styles.leaseDetailsContainer}>
-              <View style={styles.leaseDetailRow}>
-                <Text style={styles.leaseDetailLabel}>Type de contrat:</Text>
-                <TextInput
-                  style={styles.leaseDetailInput}
-                  value={leaseType}
-                  onChangeText={setLeaseType}
-                  placeholder="Type de contrat"
-                />
-              </View>
-              <View style={styles.leaseDetailRow}>
-                <Text style={styles.leaseDetailLabel}>Échéance:</Text>
-                <TextInput
-                  style={styles.leaseDetailInput}
-                  value={leaseEndDate}
-                  onChangeText={setLeaseEndDate}
-                  placeholder="JJ-MM-AAAA"
-                  keyboardType="numeric"
-                  inputMode="numeric"
-                />
-              </View>
-            </View>
-          )}
-        </View>
-      </View>
-      
-      {/* Usage Purposes Section */}
-      <View style={styles.usageSection}>
-        <Text style={styles.usageSectionTitle}>Utilisation</Text>
-        <View style={styles.optionsContainer}>
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('leisure')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.leisure ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Sailboat size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Loisir</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('fishing')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.fishing ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Fish size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Pêche</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('cruising')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.cruising ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Anchor size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Promenade</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('charter')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.charter ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Users size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Charter/Location</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('competition')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.competition ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Trophy size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Compétition</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('permanentHousing')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.permanentHousing ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <Home size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Habitat permanent</Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.optionRow}
-            onPress={() => handleToggleUsagePurpose('other')}
-          >
-            <View style={styles.checkboxContainer}>
-              {usageType.usagePurposes.other ? (
-                <View style={styles.checkboxChecked}>
-                  <Check size={16} color="white" />
-                </View>
-              ) : (
-                <View style={styles.checkboxUnchecked} />
-              )}
-            </View>
-            <View style={styles.optionIconTextContainer}>
-              <HelpCircle size={20} color="#0066CC" />
-              <Text style={styles.optionText}>Autre</Text>
-            </View>
-          </TouchableOpacity>
-          
-          {usageType.usagePurposes.other && (
-            <View style={styles.otherUsageContainer}>
-              <TextInput
-                style={styles.otherUsageInput}
-                value={otherUsageDescription}
-                onChangeText={setOtherUsageDescription}
-                placeholder="Précisez l'utilisation"
-                multiline
-              />
-            </View>
-          )}
-        </View>
-      </View>
-      
-      <TouchableOpacity 
-        style={styles.saveUsageButton}
-        onPress={handleSaveUsageType}
-      >
-        <Text style={styles.saveUsageButtonText}>Enregistrer</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -1124,7 +1138,20 @@ export default function BoatProfileScreen() {
         {activeTab === 'documents' && <DocumentsTab />}
         {activeTab === 'technical' && <TechnicalRecordsTab />}
         {activeTab === 'inventory' && <InventoryTab />}
-        {activeTab === 'usage' && <UsageTypeTab />}
+        {activeTab === 'usage' && (
+          <UsageTypeTab
+            usageType={usageType}
+            setUsageType={setUsageType}
+            leaseType={leaseType}
+            setLeaseType={setLeaseType}
+            leaseEndDate={leaseEndDate}
+            setLeaseEndDate={setLeaseEndDate}
+            otherUsageDescription={otherUsageDescription}
+            setOtherUsageDescription={setOtherUsageDescription}
+            handleToggleUsagePurpose={handleToggleUsagePurpose}
+            handleSaveUsageType={handleSaveUsageType}
+          />
+        )}
       </ScrollView>
 
       <AddDocumentModal />

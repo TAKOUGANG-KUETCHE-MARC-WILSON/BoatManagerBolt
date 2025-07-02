@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Platform, Alert, Modal, TextInput } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Shield, Eye, EyeOff, Lock, Share2, Bell, Database, Trash2, User, Users, Bot as Boat, Building, X, Check } from 'lucide-react-native';
+import { useAuth } from '@/context/AuthContext';
 
 interface VisibilityOption {
   id: string;
@@ -27,6 +28,7 @@ interface PrivacySetting {
 }
 
 export default function PrivacyScreen() {
+  const { user, logout } = useAuth(); // Destructure logout from useAuth
   const [visibilitySettings, setVisibilitySettings] = useState<VisibilitySetting[]>([
     {
       id: 'profile_visibility',
@@ -92,10 +94,11 @@ export default function PrivacyScreen() {
 
   const [showVisibilityModal, setShowVisibilityModal] = useState(false);
   const [selectedVisibilitySetting, setSelectedVisibilitySetting] = useState<VisibilitySetting | null>(null);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false); // New state for delete confirmation modal
 
   const toggleSetting = (id: string) => {
-    setSettings(prev =>
-      prev.map(setting =>
+    setSettings(prev => 
+      prev.map(setting => 
         setting.id === id
           ? { ...setting, enabled: !setting.enabled }
           : setting
@@ -104,40 +107,16 @@ export default function PrivacyScreen() {
   };
 
   const handleDataRequest = () => {
+    // Attempt to open email client, but immediately show confirmation
     Alert.alert(
-      'Demande de données personnelles',
-      'Votre demande d\'exportation de données a été enregistrée. Vous recevrez un email contenant vos données dans les 48 heures.',
+      'Demande transmise',
+      'Votre demande de données personnelles a été transmise.',
       [{ text: 'OK' }]
     );
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert(
-      'Supprimer le compte',
-      'Êtes-vous sûr de vouloir supprimer votre compte ? Cette action est irréversible et toutes vos données seront définitivement supprimées.',
-      [
-        {
-          text: 'Annuler',
-          style: 'cancel'
-        },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: () => {
-            Alert.alert(
-              'Compte supprimé',
-              'Votre compte a été supprimé avec succès. Vous allez être déconnecté.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => router.replace('/login')
-                }
-              ]
-            );
-          }
-        }
-      ]
-    );
+    setShowDeleteConfirmModal(true);
   };
 
   const openVisibilityModal = (setting: VisibilitySetting) => {
@@ -216,6 +195,55 @@ export default function PrivacyScreen() {
           >
             <Text style={styles.modalSaveButtonText}>Enregistrer</Text>
           </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const DeleteConfirmModal = () => (
+    <Modal
+      visible={showDeleteConfirmModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowDeleteConfirmModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.confirmModalContent}>
+          <Text style={styles.confirmModalTitle}>Supprimer le compte</Text>
+          <Text style={styles.confirmModalText}>
+            Êtes-vous sûr de vouloir supprimer votre compte ? Cette action est irréversible et toutes vos données seront définitivement supprimées.
+          </Text>
+
+          <View style={styles.confirmModalActions}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setShowDeleteConfirmModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Non</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.confirmDeleteButton}
+              onPress={() => {
+                // Simulate account deletion
+                // In a real app, you would call an API to delete the account
+                logout(); // Log out the user
+                setShowDeleteConfirmModal(false);
+                Alert.alert(
+                  'Compte supprimé',
+                  'Votre compte a été supprimé avec succès. Vous allez être déconnecté.',
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => router.replace('/login') // Redirect to login
+                    }
+                  ]
+                );
+              }}
+            >
+              <Text style={styles.confirmDeleteButtonText}>Oui</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -314,6 +342,7 @@ export default function PrivacyScreen() {
       </View>
 
       <VisibilityModal />
+      <DeleteConfirmModal />
     </ScrollView>
   );
 }
@@ -367,14 +396,14 @@ const styles = StyleSheet.create({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
       },
       android: {
-        elevation: 3,
+        elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -394,14 +423,14 @@ const styles = StyleSheet.create({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
       },
       android: {
-        elevation: 3,
+        elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -576,5 +605,67 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  confirmModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '90%',
+    maxWidth: 500,
+    padding: 24,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
+  },
+  confirmModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 16,
+  },
+  confirmModalText: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 24,
+    lineHeight: 24,
+  },
+  confirmModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+  },
+  confirmDeleteButton: {
+    flex: 1,
+    backgroundColor: '#EF4444',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  confirmDeleteButtonText: {
+    fontSize: 16,
+    color: 'white',
+    fontWeight: '500',
   },
 });
