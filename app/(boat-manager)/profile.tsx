@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, TextInput, Alert } from 'react-native';
-import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus } from 'lucide-react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/context/AuthContext';
+import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useAuth } from '@/context/AuthContext';
 
 interface Service {
   id: string;
@@ -13,7 +13,7 @@ interface Service {
 }
 
 interface BoatManagerProfile {
-  title: string; // Ajout du champ title pour la fonction
+  title: string;
   experience: string;
   certifications: string[];
   ports: {
@@ -21,7 +21,7 @@ interface BoatManagerProfile {
     name: string;
     boatCount: number;
   }[];
-  bio: string; // Ajout d'un champ pour la biographie
+  bio: string;
 }
 
 const services: Service[] = [
@@ -57,12 +57,221 @@ const services: Service[] = [
   },
 ];
 
+const avatars = {
+  male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+  female: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
+  neutral: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop',
+};
+
+// Extracted EditProfileModal component
+const EditProfileModal = ({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalContent}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Modifier mon profil</Text>
+          <TouchableOpacity 
+            style={styles.closeButton}
+            onPress={onClose}
+          >
+            <X size={24} color="#666" />
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView style={styles.modalBody}>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Votre fonction</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.title}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
+              placeholder="Ex: Boat Manager Senior"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Expérience</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.experience}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, experience: text }))}
+              placeholder="Ex: 8 ans"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Certifications</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.certifications}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, certifications: text }))}
+              placeholder="Ex: Certification YBM, Expert Maritime"
+            />
+            <Text style={styles.helperText}>Séparez les certifications par des virgules</Text>
+            
+            <View style={styles.addCertificationContainer}>
+              <TextInput
+                style={styles.addCertificationInput}
+                value={newCertification}
+                onChangeText={setNewCertification}
+                placeholder="Ajouter une certification"
+              />
+              <TouchableOpacity 
+                style={styles.addCertificationButton}
+                onPress={handleAddCertification}
+              >
+                <Plus size={20} color="white" />
+              </TouchableOpacity>
+            </View>
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Biographie</Text>
+            <TextInput
+              style={[styles.formInput, styles.textArea]}
+              value={formData.bio}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, bio: text }))}
+              placeholder="Parlez de vous et de votre expérience..."
+              multiline
+              numberOfLines={4}
+            />
+          </View>
+        </ScrollView>
+        
+        <View style={styles.modalFooter}>
+          <TouchableOpacity 
+            style={styles.cancelButton}
+            onPress={onClose}
+          >
+            <Text style={styles.cancelButtonText}>Annuler</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.saveButton}
+            onPress={handleSaveProfile}
+          >
+            <Text style={styles.saveButtonText}>Enregistrer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  </Modal>
+)
+
+// Extracted PhotoModal component
+const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalContent}>
+        <Text style={styles.modalTitle}>Photo de profil</Text>
+
+        <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
+          <ImageIcon size={24} color="#0066CC" />
+          <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.modalOption} onPress={onSelectAvatar}>
+          <User size={24} color="#0066CC" />
+          <Text style={styles.modalOptionText}>Choisir un avatar</Text>
+        </TouchableOpacity>
+        
+        {hasCustomPhoto && (
+          <TouchableOpacity 
+            style={[styles.modalOption, styles.deleteOption]} 
+            onPress={onDeletePhoto}
+          >
+            <X size={24} color="#ff4444" />
+            <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity 
+          style={styles.modalCancelButton}
+          onPress={onClose}
+        >
+          <Text style={styles.modalCancelText}>Annuler</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+)
+
+// Extracted AvatarModal component
+const AvatarModal = ({ visible, onClose, onSelectAvatar }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalContent}>
+        <Text style={styles.modalTitle}>Choisir un avatar</Text>
+        
+        <TouchableOpacity 
+          style={styles.avatarOption} 
+          onPress={() => onSelectAvatar('male')}
+        >
+          <Image 
+            source={{ uri: avatars.male }} 
+            style={styles.avatarPreview} 
+          />
+          <Text style={styles.avatarOptionText}>Avatar Homme</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.avatarOption} 
+          onPress={() => onSelectAvatar('female')}
+        >
+          <Image 
+            source={{ uri: avatars.female }} 
+            style={styles.avatarPreview} 
+          />
+          <Text style={styles.avatarOptionText}>Avatar Femme</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.avatarOption} 
+          onPress={() => onSelectAvatar('neutral')}
+        >
+          <Image 
+            source={{ uri: avatars.neutral }} 
+            style={styles.avatarPreview} 
+          />
+          <Text style={styles.avatarOptionText}>Avatar Neutre</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.modalCancelButton}
+          onPress={onClose}
+        >
+          <Text style={styles.modalCancelText}>Annuler</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+)
+
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
   const [selectedTab, setSelectedTab] = useState<'services' | 'ports'>('services');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
+
+  // New state for local avatar
+  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral); // Default neutral avatar
 
   // Simuler les données du Boat Manager
   const [profile, setProfile] = useState<BoatManagerProfile>({
@@ -103,7 +312,10 @@ export default function ProfileScreen() {
   const handleChoosePhoto = async () => {
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
-      if (!permission.granted) return;
+      if (!permission.granted) {
+        Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie pour choisir une photo.');
+        return;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -114,10 +326,20 @@ export default function ProfileScreen() {
     });
 
     if (!result.canceled) {
-      // Ici, vous mettriez à jour l'avatar de l'utilisateur
-      console.log('Photo selected:', result.assets[0].uri);
+      setLocalAvatar(result.assets[0].uri); // Update local avatar state
     }
     setShowPhotoModal(false);
+  };
+
+  const handleDeletePhoto = () => {
+    setLocalAvatar(avatars.neutral); // Set to default neutral avatar
+    setShowPhotoModal(false);
+  };
+
+  const handleSelectAvatar = (type: keyof typeof avatars) => {
+    setLocalAvatar(avatars[type]);
+    setShowAvatarModal(false);
+    setShowPhotoModal(false); // Close PhotoModal after selecting avatar
   };
 
   const handleEditProfile = () => {
@@ -158,148 +380,20 @@ export default function ProfileScreen() {
     }
   };
 
-  // Modal pour éditer le profil
-  const EditProfileModal = () => (
-    <Modal
-      visible={showEditModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowEditModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Modifier mon profil</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowEditModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Votre fonction</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.title}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
-                placeholder="Ex: Boat Manager Senior"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Expérience</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.experience}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, experience: text }))}
-                placeholder="Ex: 8 ans"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Certifications</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.certifications}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, certifications: text }))}
-                placeholder="Ex: Certification YBM, Expert Maritime"
-              />
-              <Text style={styles.helperText}>Séparez les certifications par des virgules</Text>
-              
-              <View style={styles.addCertificationContainer}>
-                <TextInput
-                  style={styles.addCertificationInput}
-                  value={newCertification}
-                  onChangeText={setNewCertification}
-                  placeholder="Ajouter une certification"
-                />
-                <TouchableOpacity 
-                  style={styles.addCertificationButton}
-                  onPress={handleAddCertification}
-                >
-                  <Plus size={20} color="white" />
-                </TouchableOpacity>
-              </View>
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Biographie</Text>
-              <TextInput
-                style={[styles.formInput, styles.textArea]}
-                value={formData.bio}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, bio: text }))}
-                placeholder="Parlez de vous et de votre expérience..."
-                multiline
-                numberOfLines={4}
-              />
-            </View>
-          </ScrollView>
-          
-          <View style={styles.modalFooter}>
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => setShowEditModal(false)}
-            >
-              <Text style={styles.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.saveButton}
-              onPress={handleSaveProfile}
-            >
-              <Text style={styles.saveButtonText}>Enregistrer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  // Modal pour choisir une photo
-  const PhotoModal = () => (
-    <Modal
-      visible={showPhotoModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowPhotoModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Photo de profil</Text>
-
-          <TouchableOpacity style={styles.modalOption} onPress={handleChoosePhoto}>
-            <ImageIcon size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.modalCancelButton}
-            onPress={() => setShowPhotoModal(false)}
-          >
-            <Text style={styles.modalCancelText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
   return (
     <ScrollView style={styles.container}>
       {/* Profile Header */}
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
           <Image 
-            source={{ uri: user?.avatar }} 
+            source={{ uri: localAvatar }} // Use localAvatar here
             style={styles.avatar}
           />
           <TouchableOpacity 
             style={styles.editPhotoButton}
             onPress={() => setShowPhotoModal(true)}
           >
-            <ImageIcon size={20} color="white" />
+            <Pencil size={16} color="white" />
           </TouchableOpacity>
         </View>
         <View style={styles.profileInfo}>
@@ -427,8 +521,29 @@ export default function ProfileScreen() {
         <Text style={styles.logoutText}>Se déconnecter</Text>
       </TouchableOpacity>
 
-      <EditProfileModal />
-      <PhotoModal />
+      <EditProfileModal 
+        visible={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        formData={formData}
+        setFormData={setFormData}
+        handleSaveProfile={handleSaveProfile}
+        newCertification={newCertification}
+        setNewCertification={setNewCertification}
+        handleAddCertification={handleAddCertification}
+      />
+      <PhotoModal 
+        visible={showPhotoModal}
+        onClose={() => setShowPhotoModal(false)}
+        onChoosePhoto={handleChoosePhoto}
+        onDeletePhoto={handleDeletePhoto}
+        hasCustomPhoto={localAvatar !== avatars.neutral}
+        onSelectAvatar={() => setShowAvatarModal(true)}
+      />
+      <AvatarModal 
+        visible={showAvatarModal}
+        onClose={() => setShowAvatarModal(false)}
+        onSelectAvatar={handleSelectAvatar}
+      />
     </ScrollView>
   );
 }
@@ -706,6 +821,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1a1a1a',
     marginBottom: 16,
+    padding: 16,
   },
   closeButton: {
     padding: 4,
@@ -740,6 +856,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 4,
+    marginLeft: 4,
   },
   addCertificationContainer: {
     flexDirection: 'row',
@@ -822,6 +939,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1a1a1a',
   },
+  deleteOption: {
+    backgroundColor: '#fff5f5',
+  },
+  deleteOptionText: {
+    fontSize: 16,
+    color: '#ff4444',
+  },
   modalCancelButton: {
     padding: 16,
     alignItems: 'center',
@@ -831,5 +955,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#ff4444',
     fontWeight: '600',
+  },
+  avatarOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    padding: 16,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  avatarPreview: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  avatarOptionText: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    flex: 1,
   },
 });

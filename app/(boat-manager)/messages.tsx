@@ -1,16 +1,23 @@
+// app/(boat-manager)/messages.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
-import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera } from 'lucide-react-native';
+import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker'; // Import DocumentPicker
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import ChatInput from '@/components/ChatInput'; // Import the new ChatInput component
+import ChatInput from '@/components/ChatInput';
 
 interface Message {
   id: string;
   senderId: string;
   text?: string;
   image?: string;
+  file?: { // New file property
+    name: string;
+    uri: string;
+    type: string;
+  };
   timestamp: Date;
 }
 
@@ -59,7 +66,7 @@ const mockClients: Client[] = [
     ],
     lastMessage: {
       id: '1',
-      senderId: '1',
+      senderId: "1",
       text: "J'aimerais planifier une maintenance pour la semaine prochaine.",
       timestamp: new Date('2024-02-20T10:05:00'),
     },
@@ -240,16 +247,26 @@ const mockMessages: Record<string, Message[]> = {
       text: 'Je vous confirme la date du prochain contrôle.',
       timestamp: new Date('2024-02-19T15:30:00'),
     },
+    {
+      id: '5',
+      senderId: '2',
+      file: {
+        name: 'rapport_inspection.pdf',
+        uri: 'https://www.africau.edu/images/default/sample.pdf', // Sample PDF
+        type: 'application/pdf',
+      },
+      timestamp: new Date('2024-02-19T15:35:00'),
+    },
   ],
   '3': [
     {
-      id: '5',
+      id: '6',
       senderId: '3',
       text: 'Merci pour votre intervention rapide.',
       timestamp: new Date('2024-02-18T09:15:00'),
     },
     {
-      id: '6',
+      id: '7',
       senderId: 'bm1',
       text: 'Je reste à votre disposition si besoin.',
       timestamp: new Date('2024-02-18T09:20:00'),
@@ -263,13 +280,12 @@ export default function MessagesScreen() {
   const [activeClient, setActiveClient] = useState<Client | null>(
     initialClientId ? mockClients.find(c => c.id === initialClientId) || null : null
   );
-  // Removed message state and setMessage
-  const [searchQuery, setSearchQuery] = useState('');
-  const scrollViewRef = useRef<ScrollView>(null);
-  const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
   const [messages, setMessages] = useState<Message[]>(
     initialClientId ? mockMessages[initialClientId] || [] : []
   );
+  const [searchQuery, setSearchQuery] = useState('');
+  const scrollViewRef = useRef<ScrollView>(null);
+  const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
   
   // New conversation modal state
   const [showNewConversationModal, setShowNewConversationModal] = useState(false);
@@ -353,6 +369,41 @@ export default function MessagesScreen() {
     
     setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, activeClient, user, setMessages, scrollViewRef, setShowAttachmentOptions]);
+
+  // New handleChooseDocument function
+  const handleChooseDocument = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all document types
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0 && activeClient) {
+        const file = result.assets[0];
+        const newMessage: Message = {
+          id: Date.now().toString(),
+          senderId: user?.id || 'bm1',
+          file: {
+            name: file.name,
+            uri: file.uri,
+            type: file.mimeType || 'application/octet-stream', // Default to generic binary type
+          },
+          timestamp: new Date(),
+        };
+
+        setMessages(prev => [...prev, newMessage]);
+
+        setTimeout(() => {
+          scrollViewRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Error picking document:', error);
+      alert('Une erreur est survenue lors de la sélection du document.');
+    } finally {
+      setShowAttachmentOptions(false);
+    }
+  }, [activeClient, user, setMessages, scrollViewRef, setShowAttachmentOptions]);
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { 
@@ -516,7 +567,7 @@ export default function MessagesScreen() {
                   numberOfLines={1}
                 >
                   {lastMessage.senderId === (user?.id || 'bm1') ? 'Vous : ' : ''}
-                  {lastMessage.text || 'Image'}
+                  {lastMessage.text || (lastMessage.image ? 'Image' : lastMessage.file ? `Document: ${lastMessage.file.name}` : '')}
                 </Text>
               )}
               <View style={styles.boatsList}>
@@ -611,6 +662,16 @@ export default function MessagesScreen() {
                       source={{ uri: msg.image }}
                       style={styles.messageImage}
                     />
+                  ) : msg.file ? ( // Render file message
+                    <View style={styles.messageFileContainer}>
+                      <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                      <Text style={[
+                        styles.messageFileName,
+                        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                      ]}>
+                        {msg.file.name}
+                      </Text>
+                    </View>
                   ) : (
                     <Text style={[
                       styles.messageText,
@@ -636,6 +697,7 @@ export default function MessagesScreen() {
           showAttachmentOptions={showAttachmentOptions}
           setShowAttachmentOptions={setShowAttachmentOptions}
           handleChooseImage={handleChooseImage}
+          handleChooseDocument={handleChooseDocument} // Pass the new function
         />
       </KeyboardAvoidingView>
     );
@@ -1117,6 +1179,18 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 8,
   },
+  messageFileContainer: { // New style for file messages
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    backgroundColor: '#f0f7ff',
+    borderRadius: 8,
+  },
+  messageFileName: { // New style for file name
+    fontSize: 14,
+    fontWeight: '500',
+  },
   messageTime: {
     fontSize: 12,
     alignSelf: 'flex-end',
@@ -1344,7 +1418,7 @@ const styles = StyleSheet.create({
         elevation: 4,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 102, 204, 0.2)',
+        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
       },
     }),
   },

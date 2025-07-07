@@ -228,9 +228,28 @@ export default function ProfileScreen() {
   };
 
   const handleLogout = () => {
-    logout();
-    router.replace('/login');
+    Alert.alert(
+      'Se déconnecter',
+      'Êtes-vous sûr de vouloir vous déconnecter ?',
+      [
+        {
+          text: 'Annuler',
+          style: 'cancel',
+        },
+        {
+          text: 'Se déconnecter',
+          style: 'destructive',
+          onPress: () => {
+            logout();
+            router.replace('/login');
+          },
+        },
+      ],
+      { cancelable: true }
+    );
   };
+    
+
 
   const handleRateService = (service: ServiceHistory) => {
     setSelectedService(service);
@@ -885,21 +904,14 @@ export default function ProfileScreen() {
               Inventaire
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tab, selectedTab === 'satisfaction' && styles.activeTab]}
-            onPress={() => setSelectedTab('satisfaction')}
-          >
-            <Text style={[styles.tabText, selectedTab === 'satisfaction' && styles.activeTabText]}>
-              Ma satisfaction
-            </Text>
-          </TouchableOpacity>
+         
         </View>
         
         {/* Tab Content */}
         {selectedTab === 'boats' && <BoatsList />}
         {selectedTab === 'ports' && <PortsSection />}
         {selectedTab === 'inventory' && <InventoryTab />}
-        {selectedTab === 'satisfaction' && <ServiceHistoryList />}
+       
         
         {/* These sections are always visible regardless of the selected tab */}
         <BoatManagersList />

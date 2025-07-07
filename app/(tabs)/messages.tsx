@@ -1,9 +1,11 @@
+// app/(tabs)/messages.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
-import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon } from 'lucide-react-native';
+import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native'; // Import FileText icon
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker'; // Import DocumentPicker
 import { useAuth } from '@/context/AuthContext';
-import ChatInput from '@/components/ChatInput'; // Import the new ChatInput component
+import ChatInput from '@/components/ChatInput';
 
 type UserRole = 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'back_office';
 
@@ -20,9 +22,9 @@ interface Message {
   senderId: string;
   text?: string;
   image?: string;
-  file?: {
+  file?: { // New file property
     name: string;
-    url: string;
+    uri: string;
     type: string;
   };
   timestamp: Date;
@@ -107,6 +109,16 @@ const mockChats: Chat[] = [
         image: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
         timestamp: new Date('2024-02-19T15:31:00'),
       },
+      {
+        id: '5',
+        senderId: '1',
+        file: {
+          name: 'rapport_maintenance.pdf',
+          uri: 'https://www.africau.edu/images/default/sample.pdf', // Sample PDF
+          type: 'application/pdf',
+        },
+        timestamp: new Date('2024-02-19T15:35:00'),
+      },
     ],
   },
 ];
@@ -114,7 +126,6 @@ const mockChats: Chat[] = [
 export default function MessagesScreen() {
   const { user } = useAuth();
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [message, setMessage] = useState('');
   const [chats, setChats] = useState(mockChats);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
@@ -123,14 +134,6 @@ export default function MessagesScreen() {
   const [showNewConversationModal, setShowNewConversationModal] = useState(false);
   const [selectedContacts, setSelectedContacts] = useState<User[]>([]);
   const [contactSearchQuery, setContactSearchQuery] = useState('');
-
-  // Ref to hold the current message value
-  const messageRef = useRef('');
-
-  // Keep the ref updated with the latest message state
-  useEffect(() => {
-    messageRef.current = message;
-  }, [message]);
 
   const filteredChats = chats.filter(chat => {
     const searchLower = searchQuery.toLowerCase();
@@ -142,23 +145,17 @@ export default function MessagesScreen() {
     );
   });
 
-  const handleSend = useCallback(() => {
-    // Access the current message value from the ref
-    const currentMessage = messageRef.current;
-
-    // Check if there's an active chat and if the message is not empty (after trimming whitespace)
-    // or if it's an image message (which might not have text.trim())
-    if (!activeChat || (!currentMessage.trim() && !currentMessage.startsWith('image:'))) return;
+  const handleSend = useCallback((messageText: string) => {
+    if (!activeChat || (!messageText.trim() && !messageText.startsWith('image:'))) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
-      senderId: user?.id || '1', // Use current user's ID or a default
-      text: currentMessage.startsWith('image:') ? undefined : currentMessage, // Don't set text if it's an image URI
-      image: currentMessage.startsWith('image:') ? currentMessage.substring(6) : undefined, // Extract image URI
+      senderId: user?.id || '1',
+      text: messageText.startsWith('image:') ? undefined : messageText,
+      image: messageText.startsWith('image:') ? messageText.substring(6) : undefined,
       timestamp: new Date(),
     };
 
-    // Update the messages for the active chat
     const updatedChats = chats.map(chat => {
       if (chat.id === activeChat.id) {
         return {
@@ -170,18 +167,15 @@ export default function MessagesScreen() {
     });
 
     setChats(updatedChats);
-    setMessage(''); // Clear the message input after sending
-
-    // Scroll to the end of the chat after a short delay to allow UI to update
+    
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 100);
 
-    setShowAttachmentOptions(false); // Hide attachment options after sending
-  }, [activeChat, user, chats, setChats, setMessage, scrollViewRef, setShowAttachmentOptions]);
+    setShowAttachmentOptions(false);
+  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
 
   const handleChooseImage = useCallback(async () => {
-    // Request media library permissions if not granted
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
       if (!permission.granted) {
@@ -190,7 +184,6 @@ export default function MessagesScreen() {
       }
     }
 
-    // Launch image library
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -201,12 +194,11 @@ export default function MessagesScreen() {
     if (!result.canceled && activeChat) {
       const newMessage: Message = {
         id: Date.now().toString(),
-        senderId: user?.id || '1', // Use current user's ID or a default
+        senderId: user?.id || '1',
         image: result.assets[0].uri,
         timestamp: new Date(),
       };
 
-      // Directly update the messages state for the active chat
       setChats(prevChats =>
         prevChats.map(chat =>
           chat.id === activeChat.id
@@ -215,14 +207,54 @@ export default function MessagesScreen() {
         )
       );
 
-      // Scroll to the end of the chat after a short delay
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 100);
     }
 
-    setShowAttachmentOptions(false); // Hide attachment options
+    setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, activeChat, user, setChats, scrollViewRef, setShowAttachmentOptions]);
+
+  // New handleChooseDocument function
+  const handleChooseDocument = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all document types
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0 && activeChat) {
+        const file = result.assets[0];
+        const newMessage: Message = {
+          id: Date.now().toString(),
+          senderId: user?.id || '1',
+          file: {
+            name: file.name,
+            uri: file.uri,
+            type: file.mimeType || 'application/octet-stream', // Default to generic binary type
+          },
+          timestamp: new Date(),
+        };
+
+        setChats(prevChats =>
+          prevChats.map(chat =>
+            chat.id === activeChat.id
+              ? { ...chat, messages: [...chat.messages, newMessage] }
+              : chat
+          )
+        );
+
+        setTimeout(() => {
+          scrollViewRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Error picking document:', error);
+      alert('Une erreur est survenue lors de la sélection du document.');
+    } finally {
+      setShowAttachmentOptions(false);
+    }
+  }, [activeChat, user, setChats, scrollViewRef, setShowAttachmentOptions]);
 
   const handleCall = () => {
     if (activeChat) {
@@ -255,10 +287,9 @@ export default function MessagesScreen() {
   const handleCreateConversation = () => {
     if (selectedContacts.length === 0) return;
 
-    // Create a new chat
     const newChat: Chat = {
       id: `chat-${Date.now()}`,
-      participants: [...selectedContacts, mockUsers[0]], // Add current user
+      participants: [...selectedContacts, mockUsers[0]],
       isGroup: selectedContacts.length > 1,
       name: selectedContacts.length > 1
         ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
@@ -336,7 +367,7 @@ export default function MessagesScreen() {
                 </Text>
               </View>
               <Text style={styles.chatItemLastMessage} numberOfLines={1}>
-                {lastMessage?.text || (lastMessage?.image ? 'Image' : '')}
+                {lastMessage?.text || (lastMessage?.image ? 'Image' : lastMessage?.file ? `Document: ${lastMessage.file.name}` : '')}
               </Text>
             </View>
           </TouchableOpacity>
@@ -408,6 +439,16 @@ export default function MessagesScreen() {
                     source={{ uri: msg.image }}
                     style={styles.messageImage}
                   />
+                ) : msg.file ? ( // Render file message
+                  <View style={styles.messageFileContainer}>
+                    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                    <Text style={[
+                      styles.messageFileName,
+                      isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                    ]}>
+                      {msg.file.name}
+                    </Text>
+                  </View>
                 ) : (
                   <Text style={[
                     styles.messageText,
@@ -430,20 +471,17 @@ export default function MessagesScreen() {
           })}
         </ScrollView>
 
-        {/* Use the new ChatInput component */}
         <ChatInput
-          message={message}
-          setMessage={setMessage}
           handleSend={handleSend}
           showAttachmentOptions={showAttachmentOptions}
           setShowAttachmentOptions={setShowAttachmentOptions}
           handleChooseImage={handleChooseImage}
+          handleChooseDocument={handleChooseDocument} // Pass the new function
         />
       </KeyboardAvoidingView>
     );
   };
 
-  // New Conversation Modal
   const NewConversationModal = () => (
     <Modal
       visible={showNewConversationModal}
@@ -750,6 +788,18 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 8,
   },
+  messageFileContainer: { // New style for file messages
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    backgroundColor: '#f0f7ff',
+    borderRadius: 8,
+  },
+  messageFileName: { // New style for file name
+    fontSize: 14,
+    fontWeight: '500',
+  },
   messageTime: {
     fontSize: 12,
     alignSelf: 'flex-end',
@@ -760,14 +810,6 @@ const styles = StyleSheet.create({
   otherMessageTime: {
     color: '#666',
   },
-  // Input container styles are now in ChatInput.tsx
-  // attachButton styles are now in ChatInput.tsx
-  // attachmentOptions styles are now in ChatInput.tsx
-  // attachmentOption styles are now in ChatInput.tsx
-  // attachmentOptionText styles are now in ChatInput.tsx
-  // input styles are now in ChatInput.tsx
-  // sendButton styles are now in ChatInput.tsx
-  // sendButtonDisabled styles are now in ChatInput.tsx
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -808,7 +850,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1a1a1a',
   },
-  modalCloseButton: {
+  closeButton: {
     padding: 4,
   },
   modalSearchContainer: {
@@ -958,3 +1000,4 @@ const styles = StyleSheet.create({
     color: 'white',
   },
 });
+

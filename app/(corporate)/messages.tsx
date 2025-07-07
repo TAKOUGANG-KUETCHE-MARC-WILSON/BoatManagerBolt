@@ -1,19 +1,21 @@
+// app/(corporate)/messages.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
-import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, Building } from 'lucide-react-native';
+import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native'; // Import FileText icon
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker'; // Import DocumentPicker
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import ChatInput from '@/components/ChatInput'; // Import the new ChatInput component
+import ChatInput from '@/components/ChatInput';
 
 interface Message {
   id: string;
   senderId: string;
   text?: string;
   image?: string;
-  file?: {
+  file?: { // New file property
     name: string;
-    url: string;
+    uri: string;
     type: string;
   };
   timestamp: Date;
@@ -33,7 +35,7 @@ interface Chat {
   messages: Message[];
   isGroup: boolean;
   name?: string;
-  lastMessage?: Message;
+  unreadCount?: number;
 }
 
 // Mock data
@@ -105,6 +107,16 @@ const mockChats: Chat[] = [
         senderId: '3',
         image: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
         timestamp: new Date('2024-02-19T15:31:00'),
+      },
+      {
+        id: '5',
+        senderId: '1',
+        file: { // Example file message
+          name: 'plan_bateau.pdf',
+          uri: 'https://www.africau.edu/images/default/sample.pdf', // Sample PDF
+          type: 'application/pdf',
+        },
+        timestamp: new Date('2024-02-19T15:35:00'),
       },
     ],
   },
@@ -185,7 +197,6 @@ export default function MessagesScreen() {
   const { contact: initialContactId } = useLocalSearchParams<{ contact?: string }>();
   const { user } = useAuth();
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  // Removed message state and setMessage
   const [chats, setChats] = useState(mockChats);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
@@ -306,6 +317,66 @@ export default function MessagesScreen() {
     setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
 
+  // New handleChooseDocument function
+  const handleChooseDocument = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all document types
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0 && activeChat) {
+        const file = result.assets[0];
+        const newMessage: Message = {
+          id: Date.now().toString(),
+          senderId: user?.id || 'corp1',
+          file: {
+            name: file.name,
+            uri: file.uri,
+            type: file.mimeType || 'application/octet-stream', // Default to generic binary type
+          },
+          timestamp: new Date(),
+        };
+
+        const updatedChats = chats.map(chat => {
+          if (chat.id === activeChat.id) {
+            return {
+              ...chat,
+              messages: [...chat.messages, newMessage],
+            };
+          }
+          return chat;
+        });
+
+        setChats(updatedChats);
+
+        setTimeout(() => {
+          scrollViewRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Error picking document:', error);
+      alert('Une erreur est survenue lors de la sélection du document.');
+    } finally {
+      setShowAttachmentOptions(false);
+    }
+  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  };
+
   // Handle toggling contact selection
   const toggleContactSelection = (contact: Contact) => {
     if (selectedContacts.some(c => c.id === contact.id)) {
@@ -415,34 +486,6 @@ export default function MessagesScreen() {
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-  };
-
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('fr-FR', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-  };
-
-  const getRoleIcon = (role: Contact['role']) => {
-    switch (role) {
-      case 'pleasure_boater':
-        return User;
-      case 'boat_manager':
-        return Boat;
-      case 'nautical_company':
-        return Building;
-      case 'back_office':
-        return Building;
-    }
-  };
-
   const ChatList = () => (
     <ScrollView style={styles.chatList}>
       <View style={styles.headerContainer}>
@@ -498,7 +541,7 @@ export default function MessagesScreen() {
                 </Text>
               </View>
               <Text style={styles.chatItemLastMessage} numberOfLines={1}>
-                {lastMessage?.text || 'Image'}
+                {lastMessage?.text || (lastMessage?.image ? 'Image' : lastMessage?.file ? `Document: ${lastMessage.file.name}` : '')}
               </Text>
             </View>
           </TouchableOpacity>
@@ -570,6 +613,16 @@ export default function MessagesScreen() {
                     source={{ uri: msg.image }}
                     style={styles.messageImage}
                   />
+                ) : msg.file ? ( // Render file message
+                  <View style={styles.messageFileContainer}>
+                    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                    <Text style={[
+                      styles.messageFileName,
+                      isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                    ]}>
+                      {msg.file.name}
+                    </Text>
+                  </View>
                 ) : (
                   <Text style={[
                     styles.messageText,
@@ -594,6 +647,7 @@ export default function MessagesScreen() {
           showAttachmentOptions={showAttachmentOptions}
           setShowAttachmentOptions={setShowAttachmentOptions}
           handleChooseImage={handleChooseImage}
+          handleChooseDocument={handleChooseDocument} // Pass the new function
         />
       </KeyboardAvoidingView>
     );
@@ -770,14 +824,17 @@ export default function MessagesScreen() {
                   <View style={styles.contactItemInfo}>
                     <Text style={styles.contactItemName}>{contact.name}</Text>
                     <View style={styles.contactItemTypeContainer}>
-                      {getContactTypeIcon(contact.role)}
+                      {getContactTypeIcon(contact.type)}
                       <Text style={[
                         styles.contactItemType,
-                        { color: getContactTypeColor(contact.role) }
+                        { color: getContactTypeColor(contact.type) }
                       ]}>
-                        {getContactTypeLabel(contact.role)}
+                        {getContactTypeLabel(contact.type)}
                       </Text>
                     </View>
+                    {contact.details && (
+                      <Text style={styles.contactItemDetails}>{contact.details}</Text>
+                    )}
                   </View>
                 </View>
                 <View style={[
@@ -815,7 +872,7 @@ export default function MessagesScreen() {
 
   return (
     <View style={styles.container}>
-      {activeChat ? <ChatView /> : <ChatList />}
+      {activeClient ? <ChatView /> : <ChatList />}
       <NewConversationModal />
     </View>
   );
@@ -870,6 +927,18 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  chatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 12,
+  },
+  activeChatItem: {
+    backgroundColor: '#f0f7ff',
+  },
   newConversationButton: {
     width: 48,
     height: 48,
@@ -892,22 +961,24 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  chatItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-    gap: 12,
-  },
-  activeChatItem: {
-    backgroundColor: '#f0f7ff',
+  avatarContainer: {
+    position: 'relative',
   },
   avatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: 'white',
   },
   chatItemContent: {
     flex: 1,
@@ -930,6 +1001,42 @@ const styles = StyleSheet.create({
   chatItemLastMessage: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 8,
+  },
+  unreadMessage: {
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  boatsList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  boatBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  boatName: {
+    fontSize: 12,
+    color: '#0066CC',
+  },
+  unreadBadge: {
+    backgroundColor: '#0066CC',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  unreadCount: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
   },
   chatView: {
     flex: 1,
@@ -942,16 +1049,28 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
+    gap: 12,
   },
   backButton: {
     padding: 4,
     marginRight: 12,
   },
-  headerName: {
+  headerAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  headerInfo: {
     flex: 1,
-    fontSize: 18,
+  },
+  headerName: {
+    fontSize: 16,
     fontWeight: '600',
     color: '#1a1a1a',
+  },
+  headerStatus: {
+    fontSize: 12,
+    color: '#666',
   },
   headerActions: {
     flexDirection: 'row',
@@ -995,12 +1114,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomLeftRadius: 4,
   },
-  messageSender: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#0066CC',
-    marginBottom: 2,
-  },
   messageText: {
     fontSize: 16,
     lineHeight: 22,
@@ -1016,6 +1129,18 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 8,
   },
+  messageFileContainer: { // New style for file messages
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    backgroundColor: '#f0f7ff',
+    borderRadius: 8,
+  },
+  messageFileName: { // New style for file name
+    fontSize: 14,
+    fontWeight: '500',
+  },
   messageTime: {
     fontSize: 12,
     alignSelf: 'flex-end',
@@ -1026,7 +1151,7 @@ const styles = StyleSheet.create({
   otherMessageTime: {
     color: '#666',
   },
-  // Modal styles
+  // New conversation modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1201,6 +1326,10 @@ const styles = StyleSheet.create({
   contactItemType: {
     fontSize: 12,
     fontWeight: '500',
+  },
+  contactItemDetails: {
+    fontSize: 12,
+    color: '#666',
   },
   contactItemCheckbox: {
     width: 24,

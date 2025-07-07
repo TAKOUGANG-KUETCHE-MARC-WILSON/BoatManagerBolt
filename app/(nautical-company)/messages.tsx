@@ -1,8 +1,9 @@
 // app/(nautical-company)/messages.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
-import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon } from 'lucide-react-native';
+import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native'; // Import FileText icon
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker'; // Import DocumentPicker
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput'; // Import the new ChatInput component
@@ -12,6 +13,11 @@ interface Message {
   senderId: string;
   text?: string;
   image?: string;
+  file?: { // New file property
+    name: string;
+    uri: string;
+    type: string;
+  };
   timestamp: Date;
 }
 
@@ -152,16 +158,26 @@ const mockMessages: Record<string, Message[]> = {
       text: 'Je vous confirme la date du prochain contrôle.',
       timestamp: new Date('2024-02-19T15:30:00'),
     },
+    {
+      id: '5',
+      senderId: '2',
+      file: {
+        name: 'rapport_inspection.pdf',
+        uri: 'https://www.africau.edu/images/default/sample.pdf', // Sample PDF
+        type: 'application/pdf',
+      },
+      timestamp: new Date('2024-02-19T15:35:00'),
+    },
   ],
   '3': [
     {
-      id: '5',
+      id: '6',
       senderId: '3',
       text: 'Merci pour votre intervention rapide.',
       timestamp: new Date('2024-02-18T09:15:00'),
     },
     {
-      id: '6',
+      id: '7',
       senderId: 'nc1',
       text: 'Je reste à votre disposition si besoin.',
       timestamp: new Date('2024-02-18T09:20:00'),
@@ -251,7 +267,6 @@ const mockContacts: Contact[] = [
     type: 'boat_manager',
     email: 'marie.martin@ybm.com',
     phone: '+33 6 12 34 56 78',
-    details: 'Port de Marseille',
     online: true,
   },
   {
@@ -261,7 +276,6 @@ const mockContacts: Contact[] = [
     type: 'boat_manager',
     email: 'pierre.dubois@ybm.com',
     phone: '+33 6 23 45 67 89',
-    details: 'Port de Nice',
     online: false,
   },
   // Entreprises du nautisme
@@ -488,6 +502,52 @@ export default function MessagesScreen() {
     setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
 
+  // New handleChooseDocument function
+  const handleChooseDocument = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all document types
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0 && activeChat) {
+        const file = result.assets[0];
+        const newMessage: Message = {
+          id: Date.now().toString(),
+          senderId: user?.id || 'nc1',
+          file: {
+            name: file.name,
+            uri: file.uri,
+            type: file.mimeType || 'application/octet-stream', // Default to generic binary type
+          },
+          timestamp: new Date(),
+        };
+
+        const updatedChats = chats.map(chat => {
+          if (chat.id === activeChat.id) {
+            return {
+              ...chat,
+              messages: [...chat.messages, newMessage],
+              unreadCount: 0, // Clear unread count for active chat
+            };
+          }
+          return chat;
+        });
+
+        setChats(updatedChats);
+
+        setTimeout(() => {
+          scrollViewRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Error picking document:', error);
+      alert('Une erreur est survenue lors de la sélection du document.');
+    } finally {
+      setShowAttachmentOptions(false);
+    }
+  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
+
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], {
       hour: '2-digit',
@@ -691,7 +751,7 @@ export default function MessagesScreen() {
                   numberOfLines={1}
                 >
                   {lastMessage.senderId === (user?.id || 'nc1') ? 'Vous : ' : ''}
-                  {lastMessage.text || 'Image'}
+                  {lastMessage.text || (lastMessage.image ? 'Image' : lastMessage.file ? `Document: ${lastMessage.file.name}` : '')}
                 </Text>
               )}
               {/* Display boat info only for pleasure boaters in 1-on-1 chats */}
@@ -800,6 +860,16 @@ export default function MessagesScreen() {
                       source={{ uri: msg.image }}
                       style={styles.messageImage}
                     />
+                  ) : msg.file ? ( // Render file message
+                    <View style={styles.messageFileContainer}>
+                      <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                      <Text style={[
+                        styles.messageFileName,
+                        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                      ]}>
+                        {msg.file.name}
+                      </Text>
+                    </View>
                   ) : (
                     <Text style={[
                       styles.messageText,
@@ -825,6 +895,7 @@ export default function MessagesScreen() {
           showAttachmentOptions={showAttachmentOptions}
           setShowAttachmentOptions={setShowAttachmentOptions}
           handleChooseImage={handleChooseImage}
+          handleChooseDocument={handleChooseDocument} // Pass the new function
         />
       </KeyboardAvoidingView>
     );
@@ -1000,12 +1071,12 @@ export default function MessagesScreen() {
                   <View style={styles.contactItemInfo}>
                     <Text style={styles.contactItemName}>{contact.name}</Text>
                     <View style={styles.contactItemTypeContainer}>
-                      {getContactTypeIcon(contact.type)}
+                      {getContactTypeIcon(contact.role)}
                       <Text style={[
                         styles.contactItemType,
-                        { color: getContactTypeColor(contact.type) }
+                        { color: getContactTypeColor(contact.role) }
                       ]}>
-                        {getContactTypeLabel(contact.type)}
+                        {getContactTypeLabel(contact.role)}
                       </Text>
                     </View>
                     {contact.details && (
@@ -1103,6 +1174,18 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  chatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 12,
+  },
+  activeChatItem: {
+    backgroundColor: '#f0f7ff',
+  },
   newConversationButton: {
     width: 48,
     height: 48,
@@ -1125,22 +1208,24 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  chatItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-    gap: 12,
-  },
-  activeChatItem: {
-    backgroundColor: '#f0f7ff',
+  avatarContainer: {
+    position: 'relative',
   },
   avatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: 'white',
   },
   chatItemContent: {
     flex: 1,
@@ -1163,6 +1248,42 @@ const styles = StyleSheet.create({
   chatItemLastMessage: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 8,
+  },
+  unreadMessage: {
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  boatsList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  boatBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  boatName: {
+    fontSize: 12,
+    color: '#0066CC',
+  },
+  unreadBadge: {
+    backgroundColor: '#0066CC',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  unreadCount: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
   },
   chatView: {
     flex: 1,
@@ -1175,6 +1296,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
+    gap: 12,
   },
   backButton: {
     padding: 4,
@@ -1192,6 +1314,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#1a1a1a',
+  },
+  headerStatus: {
+    fontSize: 12,
+    color: '#666',
   },
   headerActions: {
     flexDirection: 'row',
@@ -1255,6 +1381,18 @@ const styles = StyleSheet.create({
     width: 200,
     height: 150,
     borderRadius: 8,
+  },
+  messageFileContainer: { // New style for file messages
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    backgroundColor: '#f0f7ff',
+    borderRadius: 8,
+  },
+  messageFileName: { // New style for file name
+    fontSize: 14,
+    fontWeight: '500',
   },
   messageTime: {
     fontSize: 12,
@@ -1442,6 +1580,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  contactItemDetails: {
+    fontSize: 12,
+    color: '#666',
+  },
   contactItemCheckbox: {
     width: 24,
     height: 24,
@@ -1491,53 +1633,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'white',
   },
-  unreadMessage: {
-    color: '#1a1a1a',
-    fontWeight: '500',
-  },
-  boatsList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  boatBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f7ff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-  },
-  boatName: {
-    fontSize: 12,
-    color: '#0066CC',
-  },
-  unreadBadge: {
-    backgroundColor: '#0066CC',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  unreadCount: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  onlineIndicator: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: 'white',
-  },
-  avatarContainer: {
-    position: 'relative',
-  },
 });
+

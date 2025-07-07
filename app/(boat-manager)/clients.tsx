@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput } from 'react-native';
-import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, Circle as XCircle, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput, Modal } from 'react-native';
+import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, X, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native'; // Changed XCircle to X
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 
@@ -213,6 +213,10 @@ export default function HomeScreen() {
   const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [boatManagerSearchQuery, setBoatManagerSearchQuery] = useState('');
 
+  // New state for company details modal
+  const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
+  const [selectedCompanyDetails, setSelectedCompanyDetails] = useState<Company | null>(null);
+
   const currentDate = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long',
     day: 'numeric',
@@ -285,8 +289,10 @@ export default function HomeScreen() {
     router.push(`/client/${clientId}`);
   };
 
-  const handleCompanyDetails = (companyId: string) => {
-    router.push(`/company/${companyId}`);
+  // Modified handleCompanyDetails to open modal
+  const handleCompanyDetails = (company: Company) => {
+    setSelectedCompanyDetails(company);
+    setShowCompanyDetailsModal(true);
   };
 
   const handleCompanyMessage = (companyId: string) => {
@@ -402,7 +408,6 @@ export default function HomeScreen() {
               {[1, 2, 3, 4, 5].map((star) => (
                 <Star
                   key={star}
-                  size={16}
                   fill={star <= 4 ? '#FFC107' : 'none'}
                   color={star <= 4 ? '#FFC107' : '#D1D5DB'}
                 />
@@ -429,7 +434,7 @@ export default function HomeScreen() {
           </View>
           <TouchableOpacity 
             style={styles.viewAllButton}
-            onPress={() => router.push('/clients-list')}
+            onPress={() => router.push('/(boat-manager)/clients-list')}
           >
             <Text style={styles.viewAllText}>Voir tous</Text>
             <ChevronRight size={20} color="#0066CC" />
@@ -566,7 +571,7 @@ export default function HomeScreen() {
               <TouchableOpacity 
                 key={company.id} 
                 style={styles.companyCardCompact}
-                onPress={() => handleCompanyDetails(company.id)}
+                onPress={() => handleCompanyDetails(company)} // Pass the full company object
               >
                 <Image source={{ uri: company.logo }} style={styles.companyLogoCompact} />
                 <Text style={styles.companyNameCompact}>{company.name}</Text>
@@ -607,7 +612,7 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity 
                     style={styles.companyActionCompact}
-                    onPress={() => handleCompanyDetails(company.id)}
+                    onPress={() => handleCompanyDetails(company)} // Pass the full company object
                   >
                     <ChevronRight size={18} color="#0066CC" />
                   </TouchableOpacity>
@@ -750,6 +755,63 @@ export default function HomeScreen() {
           </View>
         )}
       </View>
+
+      {/* Company Details Modal */}
+      <Modal
+        visible={showCompanyDetailsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCompanyDetailsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Détails de l'entreprise</Text>
+              <TouchableOpacity 
+                style={styles.closeButton}
+                onPress={() => setShowCompanyDetailsModal(false)}
+              >
+                <X size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+            
+            {selectedCompanyDetails && (
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.companyDetailsCard}>
+                  <Image source={{ uri: selectedCompanyDetails.logo }} style={styles.companyDetailsLogo} />
+                  <Text style={styles.companyDetailsName}>{selectedCompanyDetails.name}</Text>
+                  
+                  <View style={styles.companyDetailsRow}>
+                    <MapPin size={20} color="#666" />
+                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.location}</Text>
+                  </View>
+                  
+                  <View style={styles.companyDetailsRow}>
+                    <Mail size={20} color="#666" />
+                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.contactEmail}</Text>
+                  </View>
+                  
+                  <View style={styles.companyDetailsRow}>
+                    <Phone size={20} color="#666" />
+                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.contactPhone}</Text>
+                  </View>
+                  
+                  <View style={styles.companyDetailsServices}>
+                    <Text style={styles.companyDetailsServicesTitle}>Services proposés :</Text>
+                    <View style={styles.servicesTagsCompact}>
+                      {selectedCompanyDetails.services.map((service, index) => (
+                        <View key={index} style={styles.serviceTagCompact}>
+                          <Text style={styles.serviceTagTextCompact}>{service}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -1253,6 +1315,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
+    lineHeight: 24,
   },
   clientCard: {
     backgroundColor: 'white',
@@ -1401,5 +1464,107 @@ const styles = StyleSheet.create({
   boatManagerSpecialtyText: {
     fontSize: 10,
     color: '#0066CC',
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '90%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 16,
+  },
+  companyDetailsCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  companyDetailsLogo: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  companyDetailsName: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginBottom: 12,
+  },
+  companyDetailsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  companyDetailsText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  companyDetailsServices: {
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    paddingTop: 16,
+    width: '100%',
+  },
+  companyDetailsServicesTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 8,
   },
 });

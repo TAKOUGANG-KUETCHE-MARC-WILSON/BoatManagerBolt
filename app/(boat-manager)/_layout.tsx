@@ -90,6 +90,14 @@ export default function BoatManagerTabLayout() {
           href: null, // Masquer cet écran de la barre d'onglets
         }}
       />
+      <Tabs.Screen
+        name="clients-list"
+        options={{
+         title: 'Devis',
+          headerShown: false,
+          href: null, // Masquer cet écran de la barre d'onglets
+        }}
+      />
     </Tabs>
   );
 }

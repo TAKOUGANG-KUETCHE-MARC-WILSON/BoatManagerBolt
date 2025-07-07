@@ -44,6 +44,17 @@ export default function CorporateTabLayout() {
           tabBarIcon: ({ color, size }) => <FileText color={color} size={size} />,
         }}
       />
+       <Tabs.Screen
+        name="partners"
+        options={{
+          headerShown: false,
+          href: null, // Masquer cet écran de la barre d'onglets
+        }}
+      />
+        
+        
+        
+        }}
       <Tabs.Screen
         name="messages"
         options={{

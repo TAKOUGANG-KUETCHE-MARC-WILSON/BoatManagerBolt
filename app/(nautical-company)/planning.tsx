@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Modal, TextInput, Alert } from 'react-native';
 import { Calendar as CalendarIcon, Clock, Bot as Boat, MapPin, User, ChevronRight, ChevronLeft, MessageSquare, FileText, Plus, X, Check, Building } from 'lucide-react-native';
 import { router } from 'expo-router';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 
 interface Appointment {
   id: string;
@@ -177,18 +178,17 @@ const mockBoatManagers: BoatManager[] = [
   },
 ];
 
-export default function PlanningScreen() {
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [view, setView] = useState<'day' | 'week'>('day');
-  const [appointments, setAppointments] = useState<Appointment[]>(mockAppointments);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showClientModal, setShowClientModal] = useState(false);
-  const [showBoatModal, setShowBoatModal] = useState(false);
-  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false);
-  
-  // New appointment form state
+// AddAppointmentModal component
+interface AddAppointmentModalProps {
+  visible: boolean;
+  onClose: () => void;
+  initialDate: Date;
+  onSave: (newAppointment: Appointment) => void;
+}
+
+const AddAppointmentModal = ({ visible, onClose, initialDate, onSave }: AddAppointmentModalProps) => {
   const [newAppointment, setNewAppointment] = useState<Partial<Appointment>>({
-    date: selectedDate.toISOString().split('T')[0],
+    date: initialDate.toISOString().split('T')[0],
     time: '09:00',
     duration: 60,
     type: 'maintenance',
@@ -197,30 +197,33 @@ export default function PlanningScreen() {
     description: '',
   });
   
-  // Selected client and boat for new appointment
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedBoat, setSelectedBoat] = useState<Client['boats'][0] | null>(null);
   const [selectedBoatManager, setSelectedBoatManager] = useState<BoatManager | null>(null);
   const [withBoatManager, setWithBoatManager] = useState(false);
+  const [showClientModal, setShowClientModal] = useState(false);
+  const [showBoatModal, setShowBoatModal] = useState(false);
+  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false);
+  const [isScheduleDatePickerVisible, setIsScheduleDatePickerVisible] = useState(false);
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('fr-FR', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric'
-    });
-  };
-
-  const formatTime = (time: string) => {
-    return time.replace(':', 'h');
-  };
-
-  const formatDuration = (duration: number) => {
-    const hours = Math.floor(duration / 60);
-    const minutes = duration % 60;
-    return `${hours}h${minutes ? minutes : ''}`;
-  };
+  // Reset form when modal becomes visible
+  useMemo(() => {
+    if (visible) {
+      setNewAppointment({
+        date: initialDate.toISOString().split('T')[0],
+        time: '09:00',
+        duration: 60,
+        type: 'maintenance',
+        status: 'scheduled',
+        location: 'Port de Marseille',
+        description: '',
+      });
+      setSelectedClient(null);
+      setSelectedBoat(null);
+      setSelectedBoatManager(null);
+      setWithBoatManager(false);
+    }
+  }, [visible, initialDate]);
 
   const getAppointmentColor = (type: Appointment['type']) => {
     switch (type) {
@@ -233,17 +236,17 @@ export default function PlanningScreen() {
       case 'installation':
         return '#F59E0B';
       case 'improvement':
-        return '#8B5CF6'; // Purple
+        return '#8B5CF6';
       case 'access':
-        return '#0EA5E9'; // Light Blue
+        return '#0EA5E9';
       case 'security':
-        return '#DC2626'; // Red
+        return '#DC2626';
       case 'administrative':
-        return '#6366F1'; // Indigo
+        return '#6366F1';
       case 'sell':
-        return '#F97316'; // Orange
+        return '#F97316';
       case 'buy':
-        return '#EAB308'; // Yellow
+        return '#EAB308';
       default:
         return '#666666';
     }
@@ -276,79 +279,36 @@ export default function PlanningScreen() {
     }
   };
 
-  const handlePreviousDay = () => {
-    const newDate = new Date(selectedDate);
-    newDate.setDate(selectedDate.getDate() - 1);
-    setSelectedDate(newDate);
-    setNewAppointment(prev => ({
-      ...prev,
-      date: newDate.toISOString().split('T')[0]
-    }));
-  };
+  const handleDateConfirm = useCallback((date: Date) => {
+    console.log('Date selected:', date);
+    setNewAppointment(prev => ({ ...prev, date: date.toISOString().split('T')[0] }));
+    setIsScheduleDatePickerVisible(false);
+  }, []);
 
-  const handleNextDay = () => {
-    const newDate = new Date(selectedDate);
-    newDate.setDate(selectedDate.getDate() + 1);
-    setSelectedDate(newDate);
-    setNewAppointment(prev => ({
-      ...prev,
-      date: newDate.toISOString().split('T')[0]
-    }));
-  };
-
-  const handleMessage = (clientId: string) => {
-    router.push(`/(nautical-company)/messages?client=${clientId}`);
-  };
-
-  const handleClientDetails = (clientId: string) => {
-    router.push(`/client/${clientId}`);
-  };
-
-  const handleAppointmentDetails = (appointmentId: string) => {
-    router.push(`/appointment/${appointmentId}`);
-  };
-
-  const handleAddAppointment = () => {
-    setSelectedClient(null);
-    setSelectedBoat(null);
-    setSelectedBoatManager(null);
-    setWithBoatManager(false);
-    setNewAppointment({
-      date: selectedDate.toISOString().split('T')[0],
-      time: '09:00',
-      duration: 60,
-      type: 'maintenance',
-      status: 'scheduled',
-      location: 'Port de Marseille',
-      description: '',
-    });
-    setShowAddModal(true);
-  };
-
-  const handleSelectClient = (client: Client) => {
+  const handleSelectClient = useCallback((client: Client) => {
     setSelectedClient(client);
     setSelectedBoat(null);
     setShowClientModal(false);
-  };
+  }, []);
 
-  const handleSelectBoat = (boat: Client['boats'][0]) => {
+  const handleSelectBoat = useCallback((boat: Client['boats'][0]) => {
     setSelectedBoat(boat);
     setShowBoatModal(false);
-  };
+  }, []);
 
-  const handleSelectBoatManager = (boatManager: BoatManager) => {
+  const handleSelectBoatManager = useCallback((boatManager: BoatManager) => {
     setSelectedBoatManager(boatManager);
     setShowBoatManagerModal(false);
-  };
+  }, []);
 
-  const toggleWithBoatManager = () => {
-    setWithBoatManager(!withBoatManager);
-    if (!withBoatManager) {
+  const toggleWithBoatManager = useCallback(() => {
+    setWithBoatManager(prev => !prev);
+    if (withBoatManager) { // If it was true, and now becoming false
       setSelectedBoatManager(null);
     }
-  };
+  }, [withBoatManager]);
 
-  const validateAppointmentForm = () => {
+  const validateAppointmentForm = useCallback(() => {
     if (!selectedClient) {
       Alert.alert('Erreur', 'Veuillez sélectionner un client');
       return false;
@@ -380,12 +340,12 @@ export default function PlanningScreen() {
     }
     
     return true;
-  };
+  }, [selectedClient, selectedBoat, withBoatManager, selectedBoatManager, newAppointment]);
 
-  const handleSaveAppointment = () => {
+  const handleSaveAppointment = useCallback(() => {
     if (!validateAppointmentForm()) return;
     
-    const newAppointmentComplete: Appointment = {
+    const appointmentToSave: Appointment = {
       id: Date.now().toString(),
       date: newAppointment.date!,
       time: newAppointment.time!,
@@ -405,40 +365,22 @@ export default function PlanningScreen() {
       description: newAppointment.description || '',
     };
     
-    // Add boat manager if selected
     if (withBoatManager && selectedBoatManager) {
-      newAppointmentComplete.boatManager = {
+      appointmentToSave.boatManager = {
         id: selectedBoatManager.id,
         name: selectedBoatManager.name
       };
     }
     
-    setAppointments(prev => [...prev, newAppointmentComplete]);
-    setShowAddModal(false);
+    onSave(appointmentToSave);
+    onClose();
     
     Alert.alert(
       'Succès',
       'Le rendez-vous a été créé avec succès',
       [{ text: 'OK' }]
     );
-  };
-
-  const filteredAppointments = useMemo(() => {
-    return appointments.filter(appointment => {
-      const appointmentDate = new Date(appointment.date);
-      return appointmentDate.toDateString() === selectedDate.toDateString();
-    }).sort((a, b) => {
-      return a.time.localeCompare(b.time);
-    });
-  }, [selectedDate, appointments]);
-
-  const timeSlots = useMemo(() => {
-    const slots = [];
-    for (let hour = 8; hour <= 18; hour++) {
-      slots.push(`${hour.toString().padStart(2, '0')}:00`);
-    }
-    return slots;
-  }, []);
+  }, [validateAppointmentForm, newAppointment, selectedClient, selectedBoat, withBoatManager, selectedBoatManager, onSave, onClose]);
 
   // Client selection modal
   const ClientSelectionModal = () => (
@@ -574,13 +516,12 @@ export default function PlanningScreen() {
     </Modal>
   );
 
-  // Add appointment modal
-  const AddAppointmentModal = () => (
+  return (
     <Modal
-      visible={showAddModal}
+      visible={visible}
       transparent
       animationType="slide"
-      onRequestClose={() => setShowAddModal(false)}
+      onRequestClose={onClose}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
@@ -588,7 +529,7 @@ export default function PlanningScreen() {
             <Text style={styles.modalTitle}>Nouveau rendez-vous</Text>
             <TouchableOpacity 
               style={styles.closeButton}
-              onPress={() => setShowAddModal(false)}
+              onPress={onClose}
             >
               <X size={24} color="#666" />
             </TouchableOpacity>
@@ -680,12 +621,17 @@ export default function PlanningScreen() {
                 </View>
                 <View style={styles.formFieldContent}>
                   <Text style={styles.formFieldLabel}>Date</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    value={newAppointment.date}
-                    onChangeText={(text) => setNewAppointment(prev => ({ ...prev, date: text }))}
-                    placeholder="AAAA-MM-JJ"
-                  />
+                  <TouchableOpacity 
+                    style={styles.datePickerTouchable} // New style for TouchableOpacity
+                    onPress={() => {
+                      console.log('Opening date picker');
+                      setIsScheduleDatePickerVisible(true);
+                    }}
+                  >
+                    <Text style={newAppointment.date ? styles.formFieldValue : styles.formFieldPlaceholder}>
+                      {newAppointment.date || 'Sélectionner une date'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
               
@@ -794,7 +740,7 @@ export default function PlanningScreen() {
           <View style={styles.modalActions}>
             <TouchableOpacity 
               style={styles.cancelButton}
-              onPress={() => setShowAddModal(false)}
+              onPress={onClose}
             >
               <Text style={styles.cancelButtonText}>Annuler</Text>
             </TouchableOpacity>
@@ -809,8 +755,139 @@ export default function PlanningScreen() {
           </View>
         </View>
       </View>
+
+      <ClientSelectionModal />
+      <BoatSelectionModal />
+      <BoatManagerSelectionModal />
+      <DateTimePickerModal
+        isVisible={isScheduleDatePickerVisible}
+        mode="date"
+        onConfirm={handleDateConfirm}
+        onCancel={() => setIsScheduleDatePickerVisible(false)}
+      />
     </Modal>
   );
+};
+
+export default function PlanningScreen() {
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [view, setView] = useState<'day' | 'week'>('day');
+  const [appointments, setAppointments] = useState<Appointment[]>(mockAppointments);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('fr-FR', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  };
+
+  const formatTime = (time: string) => {
+    return time.replace(':', 'h');
+  };
+
+  const formatDuration = (duration: number) => {
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    return `${hours}h${minutes ? minutes : ''}`;
+  };
+
+  const getAppointmentColor = (type: Appointment['type']) => {
+    switch (type) {
+      case 'maintenance':
+        return '#0066CC';
+      case 'repair':
+        return '#EF4444';
+      case 'control':
+        return '#10B981';
+      case 'installation':
+        return '#F59E0B';
+      case 'improvement':
+        return '#8B5CF6';
+      case 'access':
+        return '#0EA5E9';
+      case 'security':
+        return '#DC2626';
+      case 'administrative':
+        return '#6366F1';
+      case 'sell':
+        return '#F97316';
+      case 'buy':
+        return '#EAB308';
+      default:
+        return '#666666';
+    }
+  };
+
+  const getAppointmentLabel = (type: Appointment['type']) => {
+    switch (type) {
+      case 'maintenance':
+        return 'Maintenance';
+      case 'repair':
+        return 'Réparation';
+      case 'control':
+        return 'Contrôle';
+      case 'installation':
+        return 'Installation';
+      case 'improvement':
+        return 'Amélioration';
+      case 'access':
+        return 'Accès';
+      case 'security':
+        return 'Sécurité';
+      case 'administrative':
+        return 'Administratif';
+      case 'sell':
+        return 'Vente';
+      case 'buy':
+        return 'Achat';
+      default:
+        return type;
+    }
+  };
+
+  const handlePreviousDay = () => {
+    const newDate = new Date(selectedDate);
+    newDate.setDate(selectedDate.getDate() - 1);
+    setSelectedDate(newDate);
+  };
+
+  const handleNextDay = () => {
+    const newDate = new Date(selectedDate);
+    newDate.setDate(selectedDate.getDate() + 1);
+    setSelectedDate(newDate);
+  };
+
+  const handleMessage = (clientId: string) => {
+    router.push(`/(nautical-company)/messages?client=${clientId}`);
+  };
+
+  const handleClientDetails = (clientId: string) => {
+    router.push(`/client/${clientId}`);
+  };
+
+  const handleAppointmentDetails = (appointmentId: string) => {
+    router.push(`/appointment/${appointmentId}`);
+  };
+
+  const handleAddAppointment = () => {
+    setShowAddModal(true);
+  };
+
+  const handleSaveNewAppointment = useCallback((newAppointment: Appointment) => {
+    setAppointments(prev => [...prev, newAppointment]);
+  }, []);
+
+  const filteredAppointments = useMemo(() => {
+    return appointments.filter(appointment => {
+      const appointmentDate = new Date(appointment.date);
+      return appointmentDate.toDateString() === selectedDate.toDateString();
+    }).sort((a, b) => {
+      return a.time.localeCompare(b.time);
+    });
+  }, [selectedDate, appointments]);
 
   return (
     <View style={styles.container}>
@@ -839,7 +916,7 @@ export default function PlanningScreen() {
               style={[styles.viewButton, view === 'day' && styles.activeViewButton]}
               onPress={() => setView('day')}
             >
-              <Text style={[styles.viewButtonText, view === 'day' && styles.activeViewButtonText]}>
+              <Text style={[styles.viewButtonText, view === 'day' && styles.viewButtonTextActive]}>
                 Jour
               </Text>
             </TouchableOpacity>
@@ -847,7 +924,7 @@ export default function PlanningScreen() {
               style={[styles.viewButton, view === 'week' && styles.activeViewButton]}
               onPress={() => setView('week')}
             >
-              <Text style={[styles.viewButtonText, view === 'week' && styles.activeViewButtonText]}>
+              <Text style={[styles.viewButtonText, view === 'week' && styles.viewButtonTextActive]}>
                 Semaine
               </Text>
             </TouchableOpacity>
@@ -961,10 +1038,12 @@ export default function PlanningScreen() {
         )}
       </ScrollView>
 
-      <ClientSelectionModal />
-      <BoatSelectionModal />
-      <BoatManagerSelectionModal />
-      <AddAppointmentModal />
+      <AddAppointmentModal 
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        initialDate={selectedDate}
+        onSave={handleSaveNewAppointment}
+      />
     </View>
   );
 }
@@ -1033,7 +1112,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  activeViewButtonText: {
+  viewButtonTextActive: {
     color: '#0066CC',
     fontWeight: '600',
   },
@@ -1347,6 +1426,12 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     padding: 0,
   },
+  datePickerTouchable: { // New style for the TouchableOpacity acting as date input
+    flex: 1,
+    height: '100%',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
   textArea: {
     height: 80,
     textAlignVertical: 'top',
@@ -1424,10 +1509,6 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
   },
-  companyToggleLabel: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
   toggleButton: {
     width: 50,
     height: 28,
@@ -1454,4 +1535,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     alignSelf: 'flex-start',
   },
+  companyToggleLabel: {
+    fontSize: 16,
+    color: '#1a1a1a',
+  },
 });
+

@@ -1,5 +1,4 @@
-// app/(nautical-company)/profile.tsx
-import { useState } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput } from 'react-native';
 import { router } from 'expo-router';
 import { Ship, Users, Phone, Mail, Calendar, LogOut, MapPin, Image as ImageIcon, X } from 'lucide-react-native';
@@ -18,10 +17,145 @@ interface Port {
   boatCount: number;
 }
 
+// Extracted EditProfileModal component
+const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalContent}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Modifier mon profil</Text>
+          <TouchableOpacity 
+            style={styles.closeButton}
+            onPress={onClose}
+          >
+            <X size={24} color="#666" />
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView style={styles.editFormContainer}>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Nom ou raison sociale</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.name}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, name: text }))}
+              placeholder="Nom ou raison sociale"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Fonction / Spécialité</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.title}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
+              placeholder="Fonction / Spécialité"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Email</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.email}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, email: text }))}
+              placeholder="Email"
+              keyboardType="email-address"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Téléphone</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.phone}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, phone: text }))}
+              placeholder="Téléphone"
+              keyboardType="phone-pad"
+            />
+          </View>
+          
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Adresse</Text>
+            <TextInput
+              style={styles.formInput}
+              value={formData.address}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, address: text }))}
+              placeholder="Adresse"
+              multiline
+            />
+          </View>
+        </ScrollView>
+        
+        <View style={styles.modalActions}>
+          <TouchableOpacity 
+            style={styles.modalCancelButton}
+            onPress={onClose}
+          >
+            <Text style={styles.modalCancelText}>Annuler</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.modalSaveButton}
+            onPress={handleSaveProfile}
+          >
+            <Text style={styles.modalSaveText}>Enregistrer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  </Modal>
+));
+
+// Extracted PhotoModal component
+const PhotoModal = memo(({ visible, onClose, onChoosePhoto, hasPhoto }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalContent}>
+        <Text style={styles.modalTitle}>Photo de profil</Text>
+
+        <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
+          <ImageIcon size={24} color="#0066CC" />
+          <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
+        </TouchableOpacity>
+        
+        {hasPhoto && (
+          <TouchableOpacity 
+            style={[styles.modalOption, styles.deleteOption]} 
+            onPress={() => {
+              // In a real app, you'd handle deletion logic here
+              onClose();
+            }}
+          >
+            <X size={24} color="#ff4444" />
+            <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity 
+          style={styles.modalCancelButton}
+          onPress={onClose}
+        >
+          <Text style={styles.modalCancelText}>Annuler</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+));
+
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
   const [showPhotoModal, setShowPhotoModal] = useState(false);
-  const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'services' | 'ports'>('services');
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
@@ -135,119 +269,6 @@ export default function ProfileScreen() {
     Alert.alert('Succès', 'Votre profil a été mis à jour avec succès.');
   };
 
-  const PhotoModal = () => (
-    <Modal
-      visible={showPhotoModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowPhotoModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Photo de profil</Text>
-
-          <TouchableOpacity style={styles.modalOption} onPress={handleChoosePhoto}>
-            <ImageIcon size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.modalCancelButton}
-            onPress={() => setShowPhotoModal(false)}
-          >
-            <Text style={styles.modalCancelText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const EditProfileModal = () => (
-    <Modal
-      visible={showEditProfileModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowEditProfileModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Modifier mon profil</Text>
-          
-          <ScrollView style={styles.editFormContainer}>
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Nom ou raison sociale</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editForm.name}
-                onChangeText={(text) => setEditForm(prev => ({ ...prev, name: text }))}
-                placeholder="Nom ou raison sociale"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Fonction / Spécialité</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editForm.title}
-                onChangeText={(text) => setEditForm(prev => ({ ...prev, title: text }))}
-                placeholder="Fonction / Spécialité"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Email</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editForm.email}
-                onChangeText={(text) => setEditForm(prev => ({ ...prev, email: text }))}
-                placeholder="Email"
-                keyboardType="email-address"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Téléphone</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editForm.phone}
-                onChangeText={(text) => setEditForm(prev => ({ ...prev, phone: text }))}
-                placeholder="Téléphone"
-                keyboardType="phone-pad"
-              />
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Adresse</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editForm.address}
-                onChangeText={(text) => setEditForm(prev => ({ ...prev, address: text }))}
-                placeholder="Adresse"
-                multiline
-              />
-            </View>
-          </ScrollView>
-          
-          <View style={styles.modalActions}>
-            <TouchableOpacity 
-              style={styles.modalCancelButton}
-              onPress={() => setShowEditProfileModal(false)}
-            >
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.modalSaveButton}
-              onPress={handleSaveProfile}
-            >
-              <Text style={styles.modalSaveText}>Enregistrer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
   return (
     <>
       <ScrollView style={styles.container}>
@@ -356,8 +377,19 @@ export default function ProfileScreen() {
           <Text style={styles.logoutText}>Se déconnecter</Text>
         </TouchableOpacity>
       </ScrollView>
-      <PhotoModal />
-      <EditProfileModal />
+      <EditProfileModal 
+        visible={showEditProfileModal}
+        onClose={() => setShowEditProfileModal(false)}
+        formData={editForm}
+        setFormData={setEditForm}
+        handleSaveProfile={handleSaveProfile}
+      />
+      <PhotoModal 
+        visible={showPhotoModal}
+        onClose={() => setShowPhotoModal(false)}
+        onChoosePhoto={handleChoosePhoto}
+        hasPhoto={!!companyProfile.profileImage}
+      />
     </>
   );
 }
@@ -593,42 +625,21 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
   modalTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
-    marginBottom: 16,
-    padding: 16,
   },
-  modalOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  modalOptionText: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
-
-modalCancelButton: {
-  flex: 1,
-  backgroundColor: '#f1f5f9',
-  paddingVertical: 12,
-  borderRadius: 8,
-  alignItems: 'center',
-  justifyContent: 'center',
-},
-
-
-  
-  modalCancelText: {
-    fontSize: 16,
-    color: '#ff4444',
-    fontWeight: '600',
+  closeButton: {
+    padding: 4,
   },
   editFormContainer: {
     maxHeight: 400,
@@ -661,33 +672,60 @@ modalCancelButton: {
     borderTopColor: '#f0f0f0',
     gap: 12,
   },
+  modalCancelButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelText: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+  },
   modalSaveButton: {
-  flex: 1,
-  backgroundColor: '#0066CC',
-  paddingVertical: 12,
-  borderRadius: 8,
-  alignItems: 'center',
-  justifyContent: 'center',
-  ...Platform.select({
-    ios: {
-      shadowColor: '#0066CC',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.2,
-      shadowRadius: 4,
-    },
-    android: {
-      elevation: 2,
-    },
-    web: {
-      boxShadow: '0 2px 4px rgba(0, 102, 204, 0.2)',
-    },
-  }),
-},
-
+    flex: 1,
+    backgroundColor: '#0066CC',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0066CC',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 102, 204, 0.2)',
+      },
+    }),
+  },
   modalSaveText: {
     fontSize: 16,
     fontWeight: '600',
     color: 'white',
   },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    padding: 16,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  modalOptionText: {
+    fontSize: 16,
+    color: '#1a1a1a',
+  },
+  deleteOption: {
+    backgroundColor: '#fff5f5',
+  },
 });
-
