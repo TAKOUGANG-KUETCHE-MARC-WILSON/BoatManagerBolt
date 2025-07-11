@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Platform, TextInput } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Mail, Phone, Bot as Boat, ChevronRight, Search } from 'lucide-react-native';
-import { supabase } from '@/src/lib/supabase'; // Importation du client Supabase
+import { useAuth } from '@/context/AuthContext'; // Import useAuth
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 // Interface pour les données client, incluant les bateaux via un JOIN
 interface Client {
@@ -17,7 +18,7 @@ interface Client {
   has_new_requests?: boolean; // Corresponds to 'has_new_requests' in DB
   has_new_messages?: boolean; // Corresponds to 'has_new_messages' in DB
   // Les bateaux sont maintenant un tableau d'objets Boat, rempli par le JOIN
-  boats: Array<{
+  boat: Array<{ // Changed from 'boats' to 'boat' to match Supabase relation name
     id: string;
     name: string;
     type: string;
@@ -25,6 +26,7 @@ interface Client {
 }
 
 export default function ClientsListScreen() {
+  const { user } = useAuth(); // Get the authenticated user
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,30 +36,90 @@ export default function ClientsListScreen() {
     const fetchClients = async () => {
       setLoading(true);
       setError(null);
-      // Utilisation de select('*, boats(*)') pour joindre les données des bateaux
-      // Supabase va automatiquement chercher les bateaux liés via la clé étrangère id_user
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boats(id, name, type)')
-        .eq('profile', 'pleasure_boater'); // Filtrer uniquement les plaisanciers
 
-      if (error) {
-        console.error('Error fetching clients:', error);
-        setError('Failed to load clients.');
-        setClients([]);
-      } else {
-        // Assurez-vous que les données des bateaux sont bien un tableau, même si vide
-        const formattedData = data.map(client => ({
-          ...client,
-          boats: client.boats || [] // S'assurer que 'boats' est toujours un tableau
-        }));
-        setClients(formattedData as Client[]);
+      if (!user || user.role !== 'boat_manager') {
+        setError('Accès non autorisé. Seuls les Boat Managers peuvent voir cette liste.');
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      try {
+        // 1. Récupérer les IDs des ports gérés par le Boat Manager connecté
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', user.id);
+
+        if (bmPortsError) {
+          console.error('Error fetching boat manager ports:', bmPortsError);
+          setError('Échec du chargement des ports du Boat Manager.');
+          setLoading(false);
+          return;
+        }
+
+        const managedPortIds = bmPorts.map(p => p.port_id);
+
+        if (managedPortIds.length === 0) {
+          setClients([]); // No ports managed, so no clients to show
+          setLoading(false);
+          return;
+        }
+
+        // 2. Récupérer les IDs des plaisanciers associés à ces ports
+        // We need to find users who have at least one port assignment that matches a managedPortId
+        const { data: clientPortAssignments, error: clientPortError } = await supabase
+          .from('user_ports')
+          .select('user_id')
+          .in('port_id', managedPortIds);
+
+        if (clientPortError) {
+          console.error('Error fetching client port assignments:', clientPortError);
+          setError('Échec du chargement des associations de ports des clients.');
+          setLoading(false);
+          return;
+        }
+        
+        const uniqueClientIds = [...new Set(clientPortAssignments.map(cpa => cpa.user_id))];
+
+        if (uniqueClientIds.length === 0) {
+          setClients([]); // No clients associated with these ports
+          setLoading(false);
+          return;
+        }
+
+        // 3. Récupérer les détails des plaisanciers et de leurs bateaux
+        // Use 'boat' as the relation name for the join
+        const { data, error: clientsError } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boat(id, name, type)')
+          .in('id', uniqueClientIds)
+          .eq('profile', 'pleasure_boater'); // Filter only pleasure boaters
+
+        if (clientsError) {
+          console.error('Error fetching clients:', clientsError);
+          setError(`Échec du chargement des clients: ${clientsError.message}`); // More detailed error
+          setClients([]);
+        } else {
+          // Ensure 'boat' is always an array, even if empty
+          const formattedData = data.map(client => ({
+            ...client,
+            boat: client.boat || [] // Supabase returns the relation as 'boat'
+          }));
+          setClients(formattedData as Client[]);
+        }
+      } catch (e) {
+        console.error('Unexpected error fetching clients:', e);
+        setError('Une erreur inattendue est survenue.');
+        setClients([]);
+      } finally {
+        setLoading(false);
+      }
     };
 
-    fetchClients();
-  }, []);
+    if (user) { // Only fetch if user is available
+      fetchClients();
+    }
+  }, [user]); // Removed 'availablePorts' from dependencies
 
   const filteredClients = useMemo(() => {
     if (!clientSearchQuery) {
@@ -70,7 +132,7 @@ export default function ClientsListScreen() {
         fullName.includes(query) ||
         client.e_mail.toLowerCase().includes(query) ||
         client.phone.toLowerCase().includes(query) ||
-        client.boats?.some(boat => boat.name.toLowerCase().includes(query))
+        client.boat?.some(boat => boat.name.toLowerCase().includes(query)) // Use 'boat'
       );
     });
   }, [clientSearchQuery, clients]);
@@ -176,9 +238,9 @@ export default function ClientsListScreen() {
                 </View>
               </View>
 
-              {client.boats && client.boats.length > 0 && (
+              {client.boat && client.boat.length > 0 && ( // Use 'boat'
                 <View style={styles.boatsList}>
-                  {client.boats.map((boat) => (
+                  {client.boat.map((boat) => ( // Use 'boat'
                     <View key={boat.id} style={styles.boatItem}>
                       <View style={styles.boatInfo}>
                         <Boat size={16} color="#0066CC" />
@@ -407,3 +469,4 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
 });
+

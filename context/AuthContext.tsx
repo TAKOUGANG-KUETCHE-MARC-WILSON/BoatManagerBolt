@@ -287,55 +287,61 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
   const login = async (email: string, password: string, portId?: string) => {
-    const { data: users, error: userError } = await supabase
-      .from('users')
-      .select('id, e_mail, password, profile')
-      .eq('e_mail', email);
+  const { data: users, error: userError } = await supabase
+    .from('users')
+    .select('id, e_mail, password, profile')
+    .eq('e_mail', email);
 
-    if (userError || !users || users.length === 0) {
-      throw new Error('Email ou mot de passe incorrect.');
-    }
+  if (userError || !users || users.length === 0) {
+    throw new Error('Email ou mot de passe incorrect.');
+  }
 
-    const userInDb = users[0];
+  const userInDb = users[0];
 
-    const passwordMatch = await bcrypt.compare(password, userInDb.password);
+  const passwordMatch = await bcrypt.compare(password, userInDb.password);
 
-    if (!passwordMatch) {
-      throw new Error('Email ou mot de passe incorrect.');
-    }
+  if (!passwordMatch) {
+    throw new Error('Email ou mot de passe incorrect.');
+  }
 
-    await saveSession(userInDb.id.toString());
-    const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+  // ✅ Mise à jour du champ last_login avec la date actuelle
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ last_login: new Date().toISOString() })
+    .eq('id', userInDb.id);
 
-    if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
-      const parsedPortId = parseInt(portId); // Ensure portId is parsed
-      if (isNaN(parsedPortId)) {
-        console.error('Invalid portId provided to login function:', portId);
-        // Optionally handle gracefully, e.g., by not assigning the port
-      } else {
-        const { data: existingPortAssignment, error: existingPortError } = await supabase
+  if (updateError) {
+    console.error('Erreur lors de la mise à jour de last_login:', updateError);
+  }
+
+  await saveSession(userInDb.id.toString());
+  const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+
+  // (le reste du code est inchangé)
+  if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
+    const parsedPortId = parseInt(portId);
+    if (!isNaN(parsedPortId)) {
+      const { data: existingPortAssignment, error: existingPortError } = await supabase
+        .from('user_ports')
+        .select('*')
+        .eq('user_id', userProfile.id)
+        .eq('port_id', parsedPortId);
+
+      if (!existingPortAssignment || existingPortAssignment.length === 0) {
+        const { error: insertPortError } = await supabase
           .from('user_ports')
-          .select('*')
-          .eq('user_id', userProfile.id)
-          .eq('port_id', parsedPortId);
+          .insert({ user_id: userProfile.id, port_id: parsedPortId });
 
-        if (existingPortError) {
-          console.error('Error checking existing port assignment during login:', existingPortError);
-        }
-
-        if (!existingPortAssignment || existingPortAssignment.length === 0) {
-          const { error: insertPortError } = await supabase
-            .from('user_ports')
-            .insert({ user_id: userProfile.id, port_id: parsedPortId });
-
-          if (insertPortError) {
-            console.error('Error inserting user port during login:', insertPortError);
-          }
+        if (insertPortError) {
+          console.error('Error inserting user port during login:', insertPortError);
         }
       }
     }
-    redirectUser(userProfile?.role || 'pleasure_boater');
-  };
+  }
+
+  redirectUser(userProfile?.role || 'pleasure_boater');
+};
+
 
   const signup = async (
   firstName: string,
