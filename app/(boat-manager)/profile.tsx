@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch } from 'react-native';
 import { router } from 'expo-router';
 import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 interface Service {
   id: string;
@@ -13,15 +14,24 @@ interface Service {
 }
 
 interface BoatManagerProfile {
-  title: string;
+  id: string;
+  first_name: string;
+  last_name: string;
+  e_mail: string;
+  phone: string;
+  avatar: string;
+  job_title: string; // New field for job title
   experience: string;
-  certifications: string[];
-  ports: {
+  certification: string[]; // Changed to 'certification' to match DB
+  bio: string;
+  rating: number;
+  review_count: number;
+  created_at: string;
+  ports: Array<{
     id: string;
     name: string;
-    boatCount: number;
-  }[];
-  bio: string;
+    boatCount: number; // This will be fetched separately
+  }>;
 }
 
 const services: Service[] = [
@@ -64,7 +74,7 @@ const avatars = {
 };
 
 // Extracted EditProfileModal component
-const EditProfileModal = ({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => (
+const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => (
   <Modal
     visible={visible}
     transparent
@@ -88,8 +98,8 @@ const EditProfileModal = ({ visible, onClose, formData, setFormData, handleSaveP
             <Text style={styles.formLabel}>Votre fonction</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.title}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
+              value={formData.job_title} // Changed from title to job_title
+              onChangeText={(text) => setFormData(prev => ({ ...prev, job_title: text }))}
               placeholder="Ex: Boat Manager Senior"
             />
           </View>
@@ -108,8 +118,8 @@ const EditProfileModal = ({ visible, onClose, formData, setFormData, handleSaveP
             <Text style={styles.formLabel}>Certifications</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.certifications}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, certifications: text }))}
+              value={formData.certification} // Changed from certifications to certification
+              onChangeText={(text) => setFormData(prev => ({ ...prev, certification: text }))}
               placeholder="Ex: Certification YBM, Expert Maritime"
             />
             <Text style={styles.helperText}>Séparez les certifications par des virgules</Text>
@@ -161,10 +171,10 @@ const EditProfileModal = ({ visible, onClose, formData, setFormData, handleSaveP
       </View>
     </View>
   </Modal>
-)
+));
 
 // Extracted PhotoModal component
-const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
+const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
   <Modal
     visible={visible}
     transparent
@@ -204,10 +214,10 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomP
       </View>
     </View>
   </Modal>
-)
+));
 
 // Extracted AvatarModal component
-const AvatarModal = ({ visible, onClose, onSelectAvatar }) => (
+const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
   <Modal
     visible={visible}
     transparent
@@ -260,7 +270,7 @@ const AvatarModal = ({ visible, onClose, onSelectAvatar }) => (
       </View>
     </View>
   </Modal>
-)
+));
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -270,39 +280,83 @@ export default function ProfileScreen() {
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  // New state for local avatar
-  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral); // Default neutral avatar
-
-  // Simuler les données du Boat Manager
-  const [profile, setProfile] = useState<BoatManagerProfile>({
-    title: 'Boat Manager Senior', // Titre/fonction du Boat Manager
-    experience: '8 ans',
-    certifications: ['Certification YBM', 'Expert Maritime'],
-    bio: "Je suis à votre disposition pour vous accompagner dans tous vos projets nautiques et garantir une expérience sans souci sur l'eau.",
-    ports: [
-      {
-        id: 'p1',
-        name: 'Port de Marseille',
-        boatCount: 12,
-      },
-      {
-        id: 'p2',
-        name: 'Port de Cassis',
-        boatCount: 8,
-      },
-    ],
-  });
+  const [profile, setProfile] = useState<BoatManagerProfile | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // État pour le formulaire d'édition
   const [formData, setFormData] = useState({
-    title: profile.title,
-    experience: profile.experience,
-    bio: profile.bio,
-    certifications: profile.certifications.join(', '), // Convertir le tableau en chaîne pour l'édition
+    job_title: '',
+    experience: '',
+    bio: '',
+    certification: '', // Changed to certification
   });
 
   // État pour gérer l'ajout de certification
   const [newCertification, setNewCertification] = useState('');
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('users')
+        .select('*, user_ports(port_id, ports(id, name))') // Select user and their ports
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        setLoading(false);
+        return;
+      }
+
+      // Process ports and boat counts
+      const userPorts = data.user_ports || [];
+      const processedPorts = await Promise.all(userPorts.map(async (up: any) => {
+        const { count, error: countError } = await supabase
+          .from('boat')
+          .select('*', { count: 'exact', head: true })
+          .eq('id_port', up.ports.id);
+
+        if (countError) {
+          console.error('Error fetching boat count:', countError);
+          return { id: up.ports.id, name: up.ports.name, boatCount: 0 };
+        }
+        return { id: up.ports.id, name: up.ports.name, boatCount: count || 0 };
+      }));
+
+      setProfile({
+        id: data.id,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        e_mail: data.e_mail,
+        phone: data.phone,
+        avatar: data.avatar,
+        job_title: data.job_title || '',
+        experience: data.experience || '',
+        certification: data.certification || [],
+        bio: data.bio || '',
+        rating: data.rating || 0,
+        review_count: data.review_count || 0,
+        created_at: data.created_at,
+        ports: processedPorts,
+      });
+
+      setFormData({
+        job_title: data.job_title || '',
+        experience: data.experience || '',
+        bio: data.bio || '',
+        certification: (data.certification || []).join(', '),
+      });
+
+      setLoading(false);
+    };
+
+    fetchProfile();
+  }, [user]);
 
   const handleLogout = () => {
     logout();
@@ -326,59 +380,132 @@ export default function ProfileScreen() {
     });
 
     if (!result.canceled) {
-      setLocalAvatar(result.assets[0].uri); // Update local avatar state
+      // Update avatar in DB
+      if (user?.id) {
+        const { error } = await supabase
+          .from('users')
+          .update({ avatar: result.assets[0].uri })
+          .eq('id', user.id);
+
+        if (error) {
+          console.error('Error updating avatar:', error);
+          Alert.alert('Erreur', 'Impossible de mettre à jour la photo de profil.');
+        } else {
+          setProfile(prev => prev ? { ...prev, avatar: result.assets[0].uri } : null);
+        }
+      }
     }
     setShowPhotoModal(false);
   };
 
-  const handleDeletePhoto = () => {
-    setLocalAvatar(avatars.neutral); // Set to default neutral avatar
+  const handleDeletePhoto = async () => {
+    // Reset to default neutral avatar in DB
+    if (user?.id) {
+      const { error } = await supabase
+        .from('users')
+        .update({ avatar: avatars.neutral })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Error deleting avatar:', error);
+        Alert.alert('Erreur', 'Impossible de supprimer la photo de profil.');
+      } else {
+        setProfile(prev => prev ? { ...prev, avatar: avatars.neutral } : null);
+      }
+    }
     setShowPhotoModal(false);
   };
 
-  const handleSelectAvatar = (type: keyof typeof avatars) => {
-    setLocalAvatar(avatars[type]);
+  const handleSelectAvatar = async (type: keyof typeof avatars) => {
+    // Update avatar in DB
+    if (user?.id) {
+      const { error } = await supabase
+        .from('users')
+        .update({ avatar: avatars[type] })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Error selecting avatar:', error);
+        Alert.alert('Erreur', 'Impossible de sélectionner l\'avatar.');
+      } else {
+        setProfile(prev => prev ? { ...prev, avatar: avatars[type] } : null);
+      }
+    }
     setShowAvatarModal(false);
     setShowPhotoModal(false); // Close PhotoModal after selecting avatar
   };
 
   const handleEditProfile = () => {
-    setFormData({
-      title: profile.title,
-      experience: profile.experience,
-      bio: profile.bio,
-      certifications: profile.certifications.join(', '),
-    });
-    setShowEditModal(true);
+    if (profile) {
+      setFormData({
+        job_title: profile.job_title,
+        experience: profile.experience,
+        bio: profile.bio,
+        certification: (profile.certification || []).join(', '),
+      });
+      setShowEditModal(true);
+    }
   };
 
-  const handleSaveProfile = () => {
-    // Convertir la chaîne de certifications en tableau
-    const certificationsArray = formData.certifications
+  const handleSaveProfile = async () => {
+    if (!profile?.id) return;
+
+    const certificationsArray = formData.certification
       .split(',')
       .map(cert => cert.trim())
       .filter(cert => cert !== '');
 
-    setProfile(prev => ({
-      ...prev,
-      title: formData.title,
-      experience: formData.experience,
-      bio: formData.bio,
-      certifications: certificationsArray,
-    }));
-    setShowEditModal(false);
-    Alert.alert('Succès', 'Votre profil a été mis à jour avec succès.');
+    const { error } = await supabase
+      .from('users')
+      .update({
+        job_title: formData.job_title,
+        experience: formData.experience,
+        bio: formData.bio,
+        certification: certificationsArray,
+      })
+      .eq('id', profile.id);
+
+    if (error) {
+      console.error('Error updating profile:', error);
+      Alert.alert('Erreur', 'Impossible de mettre à jour votre profil.');
+    } else {
+      setProfile(prev => prev ? {
+        ...prev,
+        job_title: formData.job_title,
+        experience: formData.experience,
+        bio: formData.bio,
+        certification: certificationsArray,
+      } : null);
+      setShowEditModal(false);
+      Alert.alert('Succès', 'Votre profil a été mis à jour avec succès.');
+    }
   };
 
   const handleAddCertification = () => {
     if (newCertification.trim()) {
       setFormData(prev => ({
         ...prev,
-        certifications: prev.certifications ? `${prev.certifications}, ${newCertification}` : newCertification,
+        certification: prev.certification ? `${prev.certification}, ${newCertification}` : newCertification,
       }));
       setNewCertification('');
     }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text>Chargement du profil...</Text>
+      </View>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text>Profil non trouvé.</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -386,7 +513,7 @@ export default function ProfileScreen() {
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
           <Image 
-            source={{ uri: localAvatar }} // Use localAvatar here
+            source={{ uri: profile.avatar }} // Use profile.avatar here
             style={styles.avatar}
           />
           <TouchableOpacity 
@@ -397,8 +524,8 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.profileInfo}>
-          <Text style={styles.name}>{user?.firstName} {user?.lastName}</Text>
-          <Text style={styles.title}>{profile.title}</Text>
+          <Text style={styles.name}>{profile.first_name} {profile.last_name}</Text>
+          <Text style={styles.title}>{profile.job_title}</Text>
           <TouchableOpacity 
             style={styles.editProfileButton}
             onPress={handleEditProfile}
@@ -412,15 +539,15 @@ export default function ProfileScreen() {
       <View style={styles.section}>
         <View style={styles.infoRow}>
           <Mail size={20} color="#0066CC" />
-          <Text style={styles.infoText}>{user?.email}</Text>
+          <Text style={styles.infoText}>{profile.e_mail}</Text>
         </View>
         <View style={styles.infoRow}>
           <Phone size={20} color="#0066CC" />
-          <Text style={styles.infoText}>+33 6 12 34 56 78</Text>
+          <Text style={styles.infoText}>{profile.phone}</Text>
         </View>
         <View style={styles.infoRow}>
           <Calendar size={20} color="#0066CC" />
-          <Text style={styles.infoText}>Membre depuis janvier 2024</Text>
+          <Text style={styles.infoText}>Membre depuis {new Date(profile.created_at).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' })}</Text>
         </View>
       </View>
 
@@ -444,7 +571,7 @@ export default function ProfileScreen() {
           <View>
             <Text style={styles.experienceLabel}>Certifications</Text>
             <Text style={styles.experienceValue}>
-              {profile.certifications.join(', ')}
+              {(profile.certification || []).join(', ')}
             </Text>
           </View>
         </View>
@@ -536,7 +663,7 @@ export default function ProfileScreen() {
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
-        hasCustomPhoto={localAvatar !== avatars.neutral}
+        hasCustomPhoto={profile.avatar !== avatars.neutral}
         onSelectAvatar={() => setShowAvatarModal(true)}
       />
       <AvatarModal 
@@ -598,6 +725,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 20,
+    marginBottom: 16,
   },
   editProfileText: {
     color: '#0066CC',
@@ -976,3 +1104,4 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 });
+

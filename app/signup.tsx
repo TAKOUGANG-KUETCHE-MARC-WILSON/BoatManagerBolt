@@ -1,15 +1,9 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, Modal, ActivityIndicator } from 'react-native';
-import { Mail, User, ArrowLeft, Anchor, MapPin, Search, Lock, Apple, LogIn, Plus, X, Check } from 'lucide-react-native';
+import { Mail, User, ArrowLeft, Anchor, MapPin, Lock, Plus, X } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-import PortSelectionModal from '@/components/PortSelectionModal'; // Import the new component
-
-// Required for Google Auth on web
-WebBrowser.maybeCompleteAuthSession();
+import PortSelectionModal from '@/components/PortSelectionModal';
 
 interface SignupForm {
   firstName: string;
@@ -20,15 +14,11 @@ interface SignupForm {
     portId: string;
     portName: string;
   }>;
-}
-
-interface PortAssignment {
-  portId: string;
-  portName: string;
+  general?: string;
 }
 
 export default function SignupScreen() {
-  const { pendingServiceRequest, clearPendingServiceRequest, login, loginWithSocial, ports } = useAuth();
+  const { pendingServiceRequest, clearPendingServiceRequest, signup, ports } = useAuth();
   const [form, setForm] = useState<SignupForm>({
     firstName: '',
     lastName: '',
@@ -40,25 +30,6 @@ export default function SignupScreen() {
   const [showPortModal, setShowPortModal] = useState(false);
   const [errors, setErrors] = useState<Partial<SignupForm>>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
-
-  // Google Auth setup
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    expoClientId: 'YOUR_EXPO_CLIENT_ID',
-    iosClientId: 'YOUR_IOS_CLIENT_ID',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID',
-    webClientId: 'YOUR_WEB_CLIENT_ID',
-  });
-
-  // Check if Apple Authentication is available on this device
-  useState(() => {
-    const checkAppleAuthAvailability = async () => {
-      const isAvailable = await AppleAuthentication.isAvailableAsync();
-      setIsAppleAuthAvailable(isAvailable);
-    };
-    
-    checkAppleAuthAvailability();
-  });
 
   const validateForm = () => {
     const newErrors: Partial<SignupForm> = {};
@@ -81,94 +52,18 @@ export default function SignupScreen() {
     if (validateForm()) {
       try {
         setIsLoading(true);
-        // Utiliser le premier port pour l'authentification initiale
-        // Les autres ports seront gérés par le backend
-        if (form.ports.length > 0) {
-          await login(form.email, form.password, form.ports[0].portId);
-
-          if (pendingServiceRequest) {
-            clearPendingServiceRequest();
-            router.replace('/(tabs)/requests');
-          } else {
-            router.replace('/(tabs)');
-          }
-        } else {
-          setErrors({ ports: 'Au moins un port d\'attache est requis' });
-          setIsLoading(false);
-        }
-      } catch (error) {
+        setErrors({});
+        await signup(form.firstName, form.lastName, form.email, form.password, form.ports);
+      } catch (error: any) {
         console.error('Failed to create account:', error);
+        setErrors(prev => ({ ...prev, general: error.message || 'Échec de la création du compte.' }));
+      } finally {
         setIsLoading(false);
       }
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    try {
-      setIsLoading(true);
-      const result = await promptAsync();
-      
-      if (result.type === 'success') {
-        // The user has been successfully authenticated
-        const { authentication } = result;
-        
-        // In a real app, you would send this token to your backend
-        // For now, we'll simulate a successful login
-        if (form.ports.length > 0) {
-          await loginWithSocial('google', authentication?.accessToken || '', form.ports[0].portId);
-          
-          if (pendingServiceRequest) {
-            clearPendingServiceRequest();
-            router.replace('/(tabs)/requests');
-          } else {
-            router.replace('/(tabs)');
-          }
-        } else {
-          setErrors({ ports: 'Au moins un port d\'attache est requis' });
-          setIsLoading(false);
-        }
-      } else {
-        setIsLoading(false);
-      }
-    } catch (error) {
-      console.error('Google sign in error:', error);
-      setIsLoading(false);
-    }
-  };
-
-  const handleAppleSignIn = async () => {
-    try {
-      setIsLoading(true);
-      const credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [
-          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-          AppleAuthentication.AppleAuthenticationScope.EMAIL,
-        ],
-      });
-      
-      // In a real app, you would send this credential to your backend
-      // For now, we'll simulate a successful login
-      if (form.ports.length > 0) {
-        await loginWithSocial('apple', credential.identityToken || '', form.ports[0].portId);
-        
-        if (pendingServiceRequest) {
-          clearPendingServiceRequest();
-          router.replace('/(tabs)/requests');
-        } else {
-          router.replace('/(tabs)');
-        }
-      } else {
-        setErrors({ ports: 'Au moins un port d\'attache est requis' });
-        setIsLoading(false);
-      }
-    } catch (error) {
-      console.error('Apple sign in error:', error);
-      setIsLoading(false);
     }
   };
 
   const handleAddPort = (port: { id: string; name: string }) => {
-    // Vérifier si le port est déjà dans la liste
     if (!form.ports.some(p => p.portId === port.id)) {
       setForm(prev => ({
         ...prev,
@@ -223,7 +118,6 @@ export default function SignupScreen() {
             <Text style={styles.formTitle}>Vos informations</Text>
           </View>
 
-          {/* Port selection - Required for all signup methods */}
           <View style={styles.portSelectionContainer}>
             <Text style={styles.portSelectionTitle}>Port d'attache</Text>
             <Text style={styles.portSelectionSubtitle}>
@@ -256,50 +150,8 @@ export default function SignupScreen() {
             {errors.ports && <Text style={styles.errorText}>{errors.ports}</Text>}
           </View>
 
-          {/* Social Login Options */}
-          <View style={styles.socialLoginContainer}>
-            <Text style={styles.socialLoginTitle}>Connexion rapide</Text>
-
-            <View style={styles.socialButtonsContainer}>
-              <TouchableOpacity
-                style={styles.googleButton}
-                onPress={handleGoogleSignIn}
-                disabled={isLoading || !request}
-              >
-                <View style={styles.googleIconContainer}>
-                  <Text style={styles.googleIcon}>G</Text>
-                </View>
-                <Text style={styles.socialButtonText}>Continuer avec Google</Text>
-              </TouchableOpacity>
-
-              {isAppleAuthAvailable ? (
-                <AppleAuthentication.AppleAuthenticationButton
-                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-                  cornerRadius={12}
-                  style={styles.appleButton}
-                  onPress={handleAppleSignIn}
-                />
-              ) : Platform.OS === 'web' ? (
-                <TouchableOpacity
-                  style={styles.appleButtonWeb}
-                  onPress={handleAppleSignIn}
-                >
-                  <Apple size={20} color="white" />
-                  <Text style={styles.appleButtonText}>Continuer avec Apple</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>ou</Text>
-              <View style={styles.dividerLine} />
-            </View>
-          </View>
-
-          {/* Manual Signup Form */}
           <View style={styles.form}>
+            {errors.general && <Text style={styles.errorText}>{errors.general}</Text>}
             <View style={styles.inputContainer}>
               <View style={[styles.inputWrapper, errors.firstName && styles.inputWrapperError]}>
                 <User size={20} color={errors.firstName ? '#ff4444' : '#666'} />
@@ -383,7 +235,6 @@ export default function SignupScreen() {
               style={styles.loginLink}
               onPress={() => router.push('/login')}
             >
-              <LogIn size={16} color="#0066CC" />
               <Text style={styles.loginLinkText}>
                 Déjà un compte ? Connectez-vous
               </Text>
@@ -396,7 +247,7 @@ export default function SignupScreen() {
         visible={showPortModal}
         onClose={() => setShowPortModal(false)}
         onSelectPort={handleAddPort}
-        selectedPortId={null} // No single selected port for multi-select
+        selectedPortId={null}
         portsData={ports}
         searchQuery={portSearch}
         onSearchQueryChange={setPortSearch}

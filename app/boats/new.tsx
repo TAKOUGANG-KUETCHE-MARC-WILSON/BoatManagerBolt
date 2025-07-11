@@ -1,9 +1,11 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Image as ImageIcon, X, MapPin, Search, User, Phone, Mail, Info } from 'lucide-react-native';
+import { ArrowLeft, Image as ImageIcon, X, MapPin, Search, User, Phone, Mail, Info, Check } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/context/AuthContext';
+import PortSelectionModal from '@/components/PortSelectionModal';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 interface BoatForm {
   photo: string;
@@ -15,30 +17,18 @@ interface BoatForm {
   engine: string;
   engineHours: string;
   length: string;
-  homePort: string;
-  portId: string;
+  homePort: string; // Display name for the port
+  portId: string; // ID for the port in the database
 }
 
-interface Port {
+interface BoatManagerDetails {
   id: string;
-  name: string;
-  boatManagerId: string;
-}
-
-interface BoatManager {
-  id: string;
-  name: string;
+  firstName: string;
+  lastName: string;
   email: string;
   phone: string;
-  ports: string[];
+  avatar: string;
 }
-
-const mockBoatManagers: BoatManager[] = [
-  { id: 'bm1', name: 'Marie Martin', email: 'marie.martin@ybm.com', phone: '+33612345678', ports: ['p1'] },
-  { id: 'bm2', name: 'Pierre Dubois', email: 'pierre.dubois@ybm.com', phone: '+33623456789', ports: ['p2'] },
-  { id: 'bm3', name: 'Sophie Laurent', email: 'sophie.laurent@ybm.com', phone: '+33634567890', ports: ['p3'] },
-  { id: 'bm4', name: 'Lucas Bernard', email: 'lucas.bernard@ybm.com', phone: '+33645678901', ports: ['p4'] },
-];
 
 const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }: {
   visible: boolean;
@@ -87,7 +77,7 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
 );
 
 export default function NewBoatScreen() {
-  const { ports } = useAuth();
+  const { user, ports: availablePorts } = useAuth();
   const [form, setForm] = useState<BoatForm>({
     photo: '',
     name: '',
@@ -104,18 +94,66 @@ export default function NewBoatScreen() {
   const [errors, setErrors] = useState<Partial<BoatForm>>({});
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
-  const [showPortSuggestions, setShowPortSuggestions] = useState(false);
+  const [showPortModal, setShowPortModal] = useState(false);
   const [portSearch, setPortSearch] = useState('');
+  const [selectedBoatManagerDetails, setSelectedBoatManagerDetails] = useState<BoatManagerDetails | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const filteredPorts = ports.filter(port => 
-    port.name.toLowerCase().includes(portSearch.toLowerCase())
-  );
+  // Fetch Boat Manager details when portId changes
+  useEffect(() => {
+    const fetchBoatManagerDetails = async () => {
+      if (form.portId) {
+        // Find the boat manager ID associated with the selected port
+        const { data: userPorts, error: userPortsError } = await supabase
+          .from('user_ports')
+          .select('user_id')
+          .eq('port_id', parseInt(form.portId))
+          .limit(1); // Assuming one boat manager per port for simplicity
 
-  const selectedBoatManager = form.portId 
-    ? mockBoatManagers.find(bm => 
-        bm.ports.includes(form.portId)
-      )
-    : null;
+        if (userPortsError) {
+          console.error('Error fetching user_ports:', userPortsError);
+          setSelectedBoatManagerDetails(null);
+          return;
+        }
+
+        if (userPorts && userPorts.length > 0) {
+          const boatManagerId = userPorts[0].user_id;
+          // Fetch boat manager's profile details
+          const { data: bmProfile, error: bmProfileError } = await supabase
+            .from('users')
+            .select('id, first_name, last_name, e_mail, phone, avatar')
+            .eq('id', boatManagerId)
+            .eq('profile', 'boat_manager') // Ensure it's a boat manager
+            .single();
+
+          if (bmProfileError) {
+            console.error('Error fetching boat manager profile:', bmProfileError);
+            setSelectedBoatManagerDetails(null);
+            return;
+          }
+
+          if (bmProfile) {
+            setSelectedBoatManagerDetails({
+              id: bmProfile.id,
+              firstName: bmProfile.first_name,
+              lastName: bmProfile.last_name,
+              email: bmProfile.e_mail,
+              phone: bmProfile.phone,
+              avatar: bmProfile.avatar,
+            });
+          } else {
+            setSelectedBoatManagerDetails(null);
+          }
+        } else {
+          setSelectedBoatManagerDetails(null);
+        }
+      } else {
+        setSelectedBoatManagerDetails(null);
+      }
+    };
+
+    fetchBoatManagerDetails();
+  }, [form.portId]);
 
   const handleChoosePhoto = async () => {
     if (!mediaPermission?.granted) {
@@ -147,7 +185,7 @@ export default function NewBoatScreen() {
       homePort: port.name 
     }));
     setPortSearch(port.name);
-    setShowPortSuggestions(false);
+    setShowPortModal(false);
     if (errors.homePort) {
       setErrors(prev => ({ ...prev, homePort: undefined }));
     }
@@ -155,8 +193,8 @@ export default function NewBoatScreen() {
 
   const handlePortInputChange = (text: string) => {
     setPortSearch(text);
-    setShowPortSuggestions(true);
-    setForm(prev => ({ ...prev, portId: '', homePort: text }));
+    setShowPortModal(true); // Always show modal when typing
+    setForm(prev => ({ ...prev, portId: '', homePort: text })); // Clear portId until a valid one is selected
   };
 
   const validateForm = () => {
@@ -172,43 +210,56 @@ export default function NewBoatScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (validateForm()) {
-      // Find the boat manager for the selected port
-      const selectedPort = ports.find(port => port.id === form.portId);
-      if (!selectedPort) {
-        Alert.alert('Erreur', 'Port d\'attache invalide');
+      if (!user?.id) {
+        Alert.alert('Erreur', 'Utilisateur non authentifié.');
         return;
       }
 
-      // Show confirmation with boat manager assignment
-      Alert.alert(
-        'Confirmation',
-        'Votre bateau sera automatiquement rattaché au Boat Manager du port sélectionné. Voulez-vous continuer ?',
-        [
-          {
-            text: 'Annuler',
-            style: 'cancel'
-          },
-          {
-            text: 'Confirmer',
-            onPress: () => {
-              // Here you would typically save the boat data and create the association
-              // For now, we'll just show a success message and navigate to the boat profile
-              Alert.alert(
-                'Succès',
-                'Votre bateau a été créé et rattaché au Boat Manager avec succès.',
-                [
-                  {
-                    text: 'OK',
-                    onPress: () => router.push(`/boats/1`) // Navigate to the boat profile page
-                  }
-                ]
-              );
-            }
-          }
-        ]
-      );
+      setIsLoading(true);
+
+      try {
+        const { data, error } = await supabase
+          .from('boat')
+          .insert({
+            id_user: user.id,
+            name: form.name,
+            type: form.type,
+            modele: form.model,
+            annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null, // Assuming YYYY format, set to Jan 1st
+            type_moteur: form.engine,
+            temps_moteur: form.engineHours,
+            longueur: form.length,
+            image: form.photo,
+            id_port: parseInt(form.portId),
+            constructeur: form.manufacturer,
+            // 'etat' is not in the form, assuming it has a default value in DB or is nullable
+          })
+          .select('id')
+          .single();
+
+        if (error) {
+          console.error('Error inserting boat:', error);
+          Alert.alert('Erreur', `Échec de l'ajout du bateau: ${error.message}`);
+        } else {
+          Alert.alert(
+            'Succès',
+            'Votre bateau a été créé et rattaché au Boat Manager avec succès.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.push(`/boats/${data.id}`) // Navigate to the new boat's profile
+              }
+            ]
+          );
+        }
+      } catch (e) {
+        console.error('Unexpected error during boat submission:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -320,7 +371,7 @@ export default function NewBoatScreen() {
               placeholder="Port d'attache"
               value={portSearch}
               onChangeText={handlePortInputChange}
-              onFocus={() => setShowPortSuggestions(true)}
+              onFocus={() => setShowPortModal(true)}
             />
             {portSearch.length > 0 && (
               <TouchableOpacity
@@ -328,53 +379,17 @@ export default function NewBoatScreen() {
                 onPress={() => {
                   setPortSearch('');
                   setForm(prev => ({ ...prev, portId: '', homePort: '' }));
-                  setShowPortSuggestions(true);
+                  setSelectedBoatManagerDetails(null);
                 }}
               >
                 <Text style={styles.clearButtonText}>×</Text>
               </TouchableOpacity>
             )}
           </View>
-          {showPortSuggestions && portSearch.length > 0 && (
-            <View style={styles.suggestionsContainer}>
-              <View style={styles.suggestionsHeader}>
-                <Search size={16} color="#666" />
-                <Text style={styles.suggestionsTitle}>
-                  {filteredPorts.length > 0 
-                    ? `${filteredPorts.length} port${filteredPorts.length > 1 ? 's' : ''} trouvé${filteredPorts.length > 1 ? 's' : ''}`
-                    : 'Aucun port trouvé'
-                  }
-                </Text>
-              </View>
-              <ScrollView style={styles.suggestionsList}>
-                {filteredPorts.map((port) => (
-                  <TouchableOpacity
-                    key={port.id}
-                    style={[
-                      styles.suggestionItem,
-                      port.id === form.portId && styles.selectedSuggestionItem
-                    ]}
-                    onPress={() => handleSelectPort(port)}
-                  >
-                    <MapPin 
-                      size={16} 
-                      color={port.id === form.portId ? '#0066CC' : '#666'} 
-                    />
-                    <Text style={[
-                      styles.suggestionText,
-                      port.id === form.portId && styles.selectedSuggestionText
-                    ]}>
-                      {port.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
           {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
         </View>
 
-        {selectedBoatManager && (
+        {selectedBoatManagerDetails && (
           <View style={styles.boatManagerInfo}>
             <View style={styles.boatManagerHeader}>
               <Info size={20} color="#0066CC" />
@@ -383,15 +398,15 @@ export default function NewBoatScreen() {
             <View style={styles.boatManagerDetails}>
               <View style={styles.boatManagerRow}>
                 <User size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManager.name}</Text>
+                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.firstName} {selectedBoatManagerDetails.lastName}</Text>
               </View>
               <View style={styles.boatManagerRow}>
                 <Phone size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManager.phone}</Text>
+                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.phone}</Text>
               </View>
               <View style={styles.boatManagerRow}>
                 <Mail size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManager.email}</Text>
+                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.email}</Text>
               </View>
             </View>
           </View>
@@ -424,10 +439,18 @@ export default function NewBoatScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity 
-          style={styles.submitButton}
+          style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
           onPress={handleSubmit}
+          disabled={isLoading}
         >
-          <Text style={styles.submitButtonText}>Enregistrer</Text>
+          {isLoading ? (
+            <ActivityIndicator color="white" size="small" />
+          ) : (
+            <>
+              <Check size={20} color="white" />
+              <Text style={styles.submitButtonText}>Enregistrer</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -437,6 +460,15 @@ export default function NewBoatScreen() {
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
         hasPhoto={!!form.photo}
+      />
+      <PortSelectionModal
+        visible={showPortModal}
+        onClose={() => setShowPortModal(false)}
+        onSelectPort={handleSelectPort}
+        selectedPortId={form.portId}
+        portsData={availablePorts}
+        searchQuery={portSearch}
+        onSearchQueryChange={setPortSearch}
       />
     </ScrollView>
   );
@@ -550,6 +582,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  submitButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
   submitButtonText: {
     color: 'white',
     fontSize: 16,
@@ -657,59 +692,6 @@ const styles = StyleSheet.create({
     color: '#666',
     fontWeight: 'bold',
   },
-  suggestionsContainer: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    marginTop: 4,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-      web: {
-        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-      },
-    }),
-  },
-  suggestionsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  suggestionsTitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  suggestionsList: {
-    maxHeight: 200,
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  selectedSuggestionItem: {
-    backgroundColor: '#f0f7ff',
-  },
-  suggestionText: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
-  selectedSuggestionText: {
-    color: '#0066CC',
-    fontWeight: '500',
-  },
   boatManagerInfo: {
     backgroundColor: '#f0f7ff',
     borderRadius: 12,
@@ -739,4 +721,3 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
   },
 });
-

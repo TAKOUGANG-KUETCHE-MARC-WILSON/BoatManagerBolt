@@ -1,14 +1,8 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView } from 'react-native';
-import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, Apple, LogIn } from 'lucide-react-native';
+import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, LogIn } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-
-// Required for Google Auth on web
-WebBrowser.maybeCompleteAuthSession();
 
 interface LoginForm {
   email: string;
@@ -25,7 +19,7 @@ const roleOptions = [
 ];
 
 export default function LoginScreen() {
-  const { login, loginWithSocial, loginAsBoatManager, loginAsNauticalCompany, loginAsCorporate } = useAuth();
+  const { login, loginAsBoatManager, loginAsNauticalCompany, loginAsCorporate } = useAuth();
   const [selectedRole, setSelectedRole] = useState<UserRole>('pleasure_boater');
   const [showRoleSelector, setShowRoleSelector] = useState(false);
   const [form, setForm] = useState<LoginForm>({
@@ -34,26 +28,7 @@ export default function LoginScreen() {
   });
   const [errors, setErrors] = useState<Partial<LoginForm>>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
-  const [portId, setPortId] = useState('p1'); // Default port for social login
-
-  // Google Auth setup
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    expoClientId: 'YOUR_EXPO_CLIENT_ID',
-    iosClientId: 'YOUR_IOS_CLIENT_ID',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID',
-    webClientId: 'YOUR_WEB_CLIENT_ID',
-  });
-
-  // Check if Apple Authentication is available on this device
-  useState(() => {
-    const checkAppleAuthAvailability = async () => {
-      const isAvailable = await AppleAuthentication.isAvailableAsync();
-      setIsAppleAuthAvailable(isAvailable);
-    };
-    
-    checkAppleAuthAvailability();
-  });
+  const [portId, setPortId] = useState('1'); // Changed from 'p1' to '1'
 
   const validateForm = () => {
     const newErrors: Partial<LoginForm> = {};
@@ -73,6 +48,7 @@ export default function LoginScreen() {
     if (validateForm()) {
       try {
         setIsLoading(true);
+        setErrors({}); // Clear previous errors
         switch (selectedRole) {
           case 'boat_manager':
             await loginAsBoatManager(form.email, form.password);
@@ -83,68 +59,21 @@ export default function LoginScreen() {
           case 'corporate':
             await loginAsCorporate(form.email, form.password);
             break;
-          default:
-            router.push('/signup');
+          default: // pleasure_boater
+            await login(form.email, form.password, portId); // Pass portId for pleasure_boater
             break;
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to login:', error);
+        setErrors(prev => ({ ...prev, general: error.message || 'Échec de la connexion.' }));
       } finally {
         setIsLoading(false);
       }
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    if (selectedRole !== 'pleasure_boater') {
-      alert('La connexion avec Google est uniquement disponible pour les plaisanciers.');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const result = await promptAsync();
-      
-      if (result.type === 'success') {
-        // The user has been successfully authenticated
-        const { authentication } = result;
-        
-        // In a real app, you would send this token to your backend
-        await loginWithSocial('google', authentication?.accessToken || '', portId);
-      }
-    } catch (error) {
-      console.error('Google sign in error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleAppleSignIn = async () => {
-    if (selectedRole !== 'pleasure_boater') {
-      alert('La connexion avec Apple est uniquement disponible pour les plaisanciers.');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [
-          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-          AppleAuthentication.AppleAuthenticationScope.EMAIL,
-        ],
-      });
-      
-      // In a real app, you would send this credential to your backend
-      await loginWithSocial('apple', credential.identityToken || '', portId);
-    } catch (error) {
-      console.error('Apple sign in error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
@@ -155,8 +84,8 @@ export default function LoginScreen() {
           style={styles.heroBackground}
         >
           <View style={styles.overlay} />
-          <TouchableOpacity 
-            style={styles.backButton} 
+          <TouchableOpacity
+            style={styles.backButton}
             onPress={() => router.back()}
           >
             <ArrowLeft size={24} color="white" />
@@ -171,7 +100,7 @@ export default function LoginScreen() {
         </ImageBackground>
 
         <View style={styles.formContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.roleSelector}
             onPress={() => setShowRoleSelector(!showRoleSelector)}
           >
@@ -206,50 +135,8 @@ export default function LoginScreen() {
             </View>
           )}
 
-          {selectedRole === 'pleasure_boater' && (
-            <View style={styles.socialLoginContainer}>
-              <Text style={styles.socialLoginTitle}>Connexion rapide</Text>
-              
-              <View style={styles.socialButtonsContainer}>
-                <TouchableOpacity 
-                  style={styles.googleButton}
-                  onPress={handleGoogleSignIn}
-                  disabled={isLoading || !request}
-                >
-                  <View style={styles.googleIconContainer}>
-                    <Text style={styles.googleIcon}>G</Text>
-                  </View>
-                  <Text style={styles.socialButtonText}>Continuer avec Google</Text>
-                </TouchableOpacity>
-                
-                {isAppleAuthAvailable ? (
-                  <AppleAuthentication.AppleAuthenticationButton
-                    buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-                    buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-                    cornerRadius={12}
-                    style={styles.appleButton}
-                    onPress={handleAppleSignIn}
-                  />
-                ) : Platform.OS === 'web' ? (
-                  <TouchableOpacity 
-                    style={styles.appleButtonWeb}
-                    onPress={handleAppleSignIn}
-                  >
-                    <Apple size={20} color="white" />
-                    <Text style={styles.appleButtonText}>Continuer avec Apple</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-              
-              <View style={styles.divider}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>ou</Text>
-                <View style={styles.dividerLine} />
-              </View>
-            </View>
-          )}
-
           <View style={styles.form}>
+            {errors.general && <Text style={styles.errorText}>{errors.general}</Text>}
             <View style={styles.inputContainer}>
               <View style={[styles.inputWrapper, errors.email && styles.inputWrapperError]}>
                 <Mail size={20} color={errors.email ? '#ff4444' : '#666'} />
@@ -287,7 +174,7 @@ export default function LoginScreen() {
               {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
             </View>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
               onPress={handleSubmit}
               disabled={isLoading}
@@ -296,13 +183,13 @@ export default function LoginScreen() {
                 <ActivityIndicator color="white" size="small" />
               ) : (
                 <Text style={styles.submitButtonText}>
-                  {selectedRole === 'pleasure_boater' ? 'Continuer' : 'Se connecter'}
+                  Se connecter
                 </Text>
               )}
             </TouchableOpacity>
 
             {selectedRole === 'pleasure_boater' && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.signupLink}
                 onPress={() => router.push('/signup')}
               >
@@ -596,3 +483,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
+

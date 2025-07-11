@@ -1,18 +1,22 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Platform, TextInput } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Mail, Phone, Bot as Boat, ChevronRight, Search } from 'lucide-react-native';
+import { supabase } from '@/src/lib/supabase'; // Importation du client Supabase
 
+// Interface pour les données client, incluant les bateaux via un JOIN
 interface Client {
   id: string;
-  name: string;
+  first_name: string;
+  last_name: string;
   avatar: string;
-  email: string;
+  e_mail: string;
   phone: string;
-  status: 'active' | 'pending' | 'inactive';
-  lastContact?: string;
-  hasNewRequests?: boolean;
-  hasNewMessages?: boolean;
+  status: 'active' | 'pending' | 'inactive'; // Corresponds to 'status' in DB
+  last_contact?: string; // Corresponds to 'last_contact' in DB
+  has_new_requests?: boolean; // Corresponds to 'has_new_requests' in DB
+  has_new_messages?: boolean; // Corresponds to 'has_new_messages' in DB
+  // Les bateaux sont maintenant un tableau d'objets Boat, rempli par le JOIN
   boats: Array<{
     id: string;
     name: string;
@@ -20,120 +24,56 @@ interface Client {
   }>;
 }
 
-const mockClients: Client[] = [
-  {
-    id: '1',
-    name: 'Jean Dupont',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    status: 'active',
-    lastContact: '2024-02-15',
-    hasNewRequests: true,
-    hasNewMessages: true,
-    boats: [
-      {
-        id: '1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '2',
-    name: 'Sophie Martin',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    status: 'active',
-    lastContact: '2024-02-18',
-    hasNewRequests: false,
-    hasNewMessages: false,
-    boats: [
-      {
-        id: '2',
-        name: 'Le Petit Prince',
-        type: 'Yacht',
-      },
-      {
-        id: '3',
-        name: 'L\'Aventurier',
-        type: 'Catamaran',
-      },
-    ],
-  },
-  {
-    id: '3',
-    name: 'Pierre Dubois',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    email: 'pierre.dubois@example.com',
-    phone: '+33 6 34 56 78 90',
-    status: 'pending',
-    hasNewRequests: false,
-    hasNewMessages: false,
-    boats: [
-      {
-        id: '4',
-        name: 'Le Navigateur',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '4',
-    name: 'Alice Durand',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734b0a4?q=80&w=2070&auto=format&fit=crop',
-    email: 'alice.durand@example.com',
-    phone: '+33 6 45 67 89 01',
-    status: 'active',
-    lastContact: '2024-02-20',
-    hasNewRequests: false,
-    hasNewMessages: true,
-    boats: [
-      {
-        id: '5',
-        name: 'L\'Étoile de Mer',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '5',
-    name: 'Marc Lefevre',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-e69fe1c5a392?q=80&w=2070&auto=format&fit=crop',
-    email: 'marc.lefevre@example.com',
-    phone: '+33 6 56 78 90 12',
-    status: 'inactive',
-    lastContact: '2023-11-01',
-    hasNewRequests: false,
-    hasNewMessages: false,
-    boats: [
-      {
-        id: '6',
-        name: 'Le Corsaire',
-        type: 'Yacht',
-      },
-    ],
-  },
-];
-
 export default function ClientsListScreen() {
   const [clientSearchQuery, setClientSearchQuery] = useState('');
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchClients = async () => {
+      setLoading(true);
+      setError(null);
+      // Utilisation de select('*, boats(*)') pour joindre les données des bateaux
+      // Supabase va automatiquement chercher les bateaux liés via la clé étrangère id_user
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boats(id, name, type)')
+        .eq('profile', 'pleasure_boater'); // Filtrer uniquement les plaisanciers
+
+      if (error) {
+        console.error('Error fetching clients:', error);
+        setError('Failed to load clients.');
+        setClients([]);
+      } else {
+        // Assurez-vous que les données des bateaux sont bien un tableau, même si vide
+        const formattedData = data.map(client => ({
+          ...client,
+          boats: client.boats || [] // S'assurer que 'boats' est toujours un tableau
+        }));
+        setClients(formattedData as Client[]);
+      }
+      setLoading(false);
+    };
+
+    fetchClients();
+  }, []);
 
   const filteredClients = useMemo(() => {
     if (!clientSearchQuery) {
-      return mockClients;
+      return clients;
     }
     const query = clientSearchQuery.toLowerCase();
-    return mockClients.filter(client => {
+    return clients.filter(client => {
+      const fullName = `${client.first_name} ${client.last_name}`.toLowerCase();
       return (
-        client.name.toLowerCase().includes(query) ||
-        client.email.toLowerCase().includes(query) ||
+        fullName.includes(query) ||
+        client.e_mail.toLowerCase().includes(query) ||
         client.phone.toLowerCase().includes(query) ||
-        client.boats.some(boat => boat.name.toLowerCase().includes(query))
+        client.boats?.some(boat => boat.name.toLowerCase().includes(query))
       );
     });
-  }, [clientSearchQuery]);
+  }, [clientSearchQuery, clients]);
 
   const handleClientDetails = (clientId: string) => {
     router.push(`/client/${clientId}`);
@@ -164,6 +104,22 @@ export default function ClientsListScreen() {
         return status;
     }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des clients...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -199,7 +155,7 @@ export default function ClientsListScreen() {
                 <Image source={{ uri: client.avatar }} style={styles.clientAvatar} />
                 <View style={styles.clientInfo}>
                   <View style={styles.clientNameRow}>
-                    <Text style={styles.clientName}>{client.name}</Text>
+                    <Text style={styles.clientName}>{client.first_name} {client.last_name}</Text>
                     <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(client.status)}15` }]}>
                       <View style={[styles.statusDot, { backgroundColor: getStatusColor(client.status) }]} />
                       <Text style={[styles.statusText, { color: getStatusColor(client.status) }]}>
@@ -210,7 +166,7 @@ export default function ClientsListScreen() {
                   <View style={styles.contactInfo}>
                     <View style={styles.contactRow}>
                       <Mail size={16} color="#666" />
-                      <Text style={styles.contactText}>{client.email}</Text>
+                      <Text style={styles.contactText}>{client.e_mail}</Text>
                     </View>
                     <View style={styles.contactRow}>
                       <Phone size={16} color="#666" />
@@ -220,17 +176,19 @@ export default function ClientsListScreen() {
                 </View>
               </View>
 
-              <View style={styles.boatsList}>
-                {client.boats.map((boat) => (
-                  <View key={boat.id} style={styles.boatItem}>
-                    <View style={styles.boatInfo}>
-                      <Boat size={16} color="#0066CC" />
-                      <Text style={styles.boatName}>{boat.name}</Text>
-                      <Text style={styles.boatType}>{boat.type}</Text>
+              {client.boats && client.boats.length > 0 && (
+                <View style={styles.boatsList}>
+                  {client.boats.map((boat) => (
+                    <View key={boat.id} style={styles.boatItem}>
+                      <View style={styles.boatInfo}>
+                        <Boat size={16} color="#0066CC" />
+                        <Text style={styles.boatName}>{boat.name}</Text>
+                        <Text style={styles.boatType}>{boat.type}</Text>
+                      </View>
                     </View>
-                  </View>
-                ))}
-              </View>
+                  ))}
+                </View>
+              )}
 
               <View style={styles.actions}>
                 <TouchableOpacity
@@ -259,6 +217,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   header: {
     flexDirection: 'row',

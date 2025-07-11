@@ -5,6 +5,7 @@ import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase'; // Importation du client Supabase
 
 export default function BoatManagerTabLayout() {
   const { user } = useAuth();
@@ -15,10 +16,41 @@ export default function BoatManagerTabLayout() {
     if (user?.role !== 'boat_manager') {
       router.replace('/(tabs)');
     }
-    
-    // Simulate fetching unread counts
-    setUnreadMessages(3);
-    setUnreadRequests(2);
+
+    const fetchUnreadCounts = async () => {
+      if (!user?.id) {
+        return;
+      }
+
+      // Simulation de la récupération des messages non lus depuis Supabase
+      // Dans une implémentation réelle, vous feriez une requête à votre table 'messages'
+      // pour compter les messages où 'receiver_id' est l'ID de l'utilisateur actuel et 'is_read' est faux.
+      try {
+        const { count: messagesCount, error: messagesError } = await supabase
+          .from('messages')
+          .select('id', { count: 'exact' })
+          .eq('receiver_id', user.id.toString())
+          .eq('is_read', false);
+
+        if (messagesError) {
+          console.error('Erreur lors de la récupération des messages non lus:', messagesError);
+          setUnreadMessages(0);
+        } else {
+          setUnreadMessages(messagesCount || 0);
+        }
+      } catch (e) {
+        console.error('Erreur inattendue lors de la récupération des messages non lus:', e);
+        setUnreadMessages(0);
+      }
+
+      // Simulation de la récupération des requêtes non lues
+      // Remplacez ceci par une logique de requête réelle pour vos demandes
+      setTimeout(() => {
+        setUnreadRequests(2); // Exemple de valeur simulée
+      }, 500);
+    };
+
+    fetchUnreadCounts();
   }, [user]);
 
   if (user?.role !== 'boat_manager') {
