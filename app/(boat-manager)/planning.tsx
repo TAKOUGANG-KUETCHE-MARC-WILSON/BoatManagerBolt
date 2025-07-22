@@ -1,35 +1,39 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Modal, TextInput, Alert } from 'react-native';
-import { Calendar as CalendarIcon, Clock, Bot as Boat, MapPin, User, ChevronRight, ChevronLeft, MessageSquare, FileText, Plus, X, Check, Building } from 'lucide-react-native';
-import { router } from 'expo-router';
+import { Calendar as CalendarIcon, Clock, Bot as Boat, MapPin, User, ChevronRight, ChevronLeft, MessageSquare, FileText, Plus, X, Check, Building, Search } from 'lucide-react-native';
+import { router, useLocalSearchParams, useFocusEffect } from 'expo-router'; // Import useLocalSearchParams and useFocusEffect
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import { supabase } from '@/src/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 
 interface Appointment {
-  id: string;
+  id: string; // Keep as string for consistency in UI, but DB is integer
   date: string;
   time: string;
-  duration: number; // in minutes
-  type: 'maintenance' | 'repair' | 'control' | 'installation' | 'improvement' | 'access' | 'security' | 'administrative' | 'sell' | 'buy';
+  duration: number | null; // Can be null if not set
+  type: string;
   status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
   client: {
     id: string;
     name: string;
-    avatar: string;
+    avatar: string | null; // Avatar can be null
   };
   boat: {
+    id: string;
     name: string;
     type: string;
+    place_de_port?: string | null; // Can be null
   };
-  location: string;
-  description: string;
+  location: string | null; // Can be null
+  description: string | null; // Can be null
   boatManager?: {
     id: string;
     name: string;
   };
-  nauticalCompany?: { // Added nauticalCompany to Appointment interface
+  nauticalCompany?: {
     id: string;
     name: string;
-  };
+  } | null; // Can be null
 }
 
 interface Client {
@@ -40,6 +44,7 @@ interface Client {
     id: string;
     name: string;
     type: string;
+    place_de_port?: string;
   }>;
 }
 
@@ -55,255 +60,102 @@ interface NauticalCompany {
   logo: string;
   location: string;
   rating?: number;
-  services: string[];
-  contactName: string;
-  contactEmail: string;
-  contactPhone: string;
+  categories: Array<{ id: number; description1: string; }>; // Changed from services: string[]
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
   hasNewRequests?: boolean;
+  ports: Array<{ id: number; name: string; }>; // All ports the company operates in
 }
 
-// Mock data
-const mockAppointments: Appointment[] = [
-  {
-    id: '1',
-    date: '2024-07-01', // Monday
-    time: '09:00',
-    duration: 120,
-    type: 'maintenance',
-    status: 'scheduled',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop'
-    },
-    boat: {
-      name: 'Le Grand Bleu',
-      type: 'Voilier'
-    },
-    location: 'Port de Marseille - Quai A',
-    description: 'Révision complète du moteur',
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin'
-    }
-  },
-  {
-    id: '2',
-    date: '2024-07-01', // Monday
-    time: '14:00',
-    duration: 90,
-    type: 'control',
-    status: 'scheduled',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop'
-    },
-    boat: {
-      name: 'Le Petit Prince',
-      type: 'Yacht'
-    },
-    location: 'Port de Marseille - Quai B',
-    description: 'Contrôle technique annuel'
-  },
-  {
-    id: '3',
-    date: '2024-07-03', // Wednesday
-    time: '10:00',
-    duration: 180,
-    type: 'installation',
-    status: 'scheduled',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop'
-    },
-    boat: {
-      name: 'Le Navigateur',
-      type: 'Voilier'
-    },
-    location: 'Port de Marseille - Quai C',
-    description: 'Installation système GPS',
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois'
-    }
-  },
-  {
-    id: '4',
-    date: '2024-07-05', // Friday
-    time: '11:00',
-    duration: 60,
-    type: 'repair',
-    status: 'scheduled',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop'
-    },
-    boat: {
-      name: 'Le Grand Bleu',
-      type: 'Voilier'
-    },
-    location: 'Port de Marseille - Quai A',
-    description: 'Réparation mineure coque'
-  },
-  {
-    id: '5',
-    date: '2024-07-08', // Next Monday
-    time: '09:30',
-    duration: 150,
-    type: 'improvement',
-    status: 'scheduled',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop'
-    },
-    boat: {
-      name: 'Le Petit Prince',
-      type: 'Yacht'
-    },
-    location: 'Port de Nice - Quai D',
-    description: 'Installation nouveau système audio'
-  }
-];
+// Helper function to convert minutes to HH:MM:SS format
+function convertMinutesToTimeFormat(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:00`;
+}
 
-// Mock clients data
-const mockClients: Client[] = [
-  {
-    id: '1',
-    name: 'Jean Dupont',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    boats: [
-      {
-        id: '1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '2',
-    name: 'Sophie Martin',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    boats: [
-      {
-        id: '2',
-        name: 'Le Petit Prince',
-        type: 'Yacht',
-      },
-      {
-        id: '3',
-        name: "L'Aventurier",
-        type: 'Catamaran',
-      },
-    ],
-  },
-  {
-    id: '3',
-    name: 'Pierre Dubois',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    boats: [
-      {
-        id: '4',
-        name: 'Le Navigateur',
-        type: 'Voilier',
-      },
-    ],
-  },
-];
+// Helper to convert HH:MM or HH:MM:SS to minutes from midnight
+function timeToMinutes(timeStr: string): number {
+  const parts = timeStr.split(':');
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  return hours * 60 + minutes;
+}
 
-// Mock boat managers
-const mockBoatManagers: BoatManager[] = [
-  { 
-    id: 'bm1', 
-    name: 'Marie Martin',
-    ports: ['Port de Marseille', 'Port de Cassis']
-  },
-  { 
-    id: 'bm2', 
-    name: 'Pierre Dubois',
-    ports: ['Port de Nice', 'Port de Cannes']
-  },
-  { 
-    id: 'bm3', 
-    name: 'Sophie Laurent',
-    ports: ['Port de Saint-Tropez']
-  },
-];
+// Helper to convert duration string (HH:MM:SS) to minutes
+function durationToMinutes(durationStr: string): number {
+  const parts = durationStr.split(':');
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  // Seconds part is ignored for minute conversion, but could be parsed if needed
+  return hours * 60 + minutes;
+}
 
-// Mock nautical companies
-const mockNauticalCompanies: NauticalCompany[] = [
-  {
-    id: 'nc1',
-    name: 'Nautisme Pro',
-    logo: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    location: 'Port de Marseille',
-    services: ['Maintenance', 'Réparation', 'Installation'],
-    contactName: 'Thomas Leroy',
-    contactEmail: 'contact@nautismepro.com',
-    contactPhone: '+33 4 91 12 34 56',
-  },
-  {
-    id: 'nc2',
-    name: 'Marine Services',
-    logo: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop',
-    location: 'Port de Nice',
-    services: ['Maintenance', 'Contrôle', 'Amélioration'],
-    contactName: 'Julie Moreau',
-    contactEmail: 'contact@marineservices.com',
-    contactPhone: '+33 4 93 23 45 67',
-  }
-];
+// Client selection modal (Now defined inside AddAppointmentModal)
+const ClientSelectionModal = ({ visible, onClose, onSelectClient, clients }) => {
+  const [clientSearchQuery, setClientSearchQuery] = useState('');
+  const filteredClients = clients.filter(client => 
+    client.name.toLowerCase().includes(clientSearchQuery.toLowerCase())
+  );
 
-// Client selection modal (Moved outside AddAppointmentModal)
-const ClientSelectionModal = ({ visible, onClose, onSelectClient, clients }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Sélectionner un client</Text>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={onClose}
-          >
-            <X size={24} color="#666" />
-          </TouchableOpacity>
-        </View>
-        
-        <ScrollView style={styles.modalList}>
-          {clients.map(client => (
-            <TouchableOpacity
-              key={client.id}
-              style={styles.modalItem}
-              onPress={() => onSelectClient(client)}
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un client</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={onClose}
             >
-              <View style={styles.modalItemContent}>
-                <User size={20} color="#0066CC" />
-                <Text style={styles.modalItemText}>{client.name}</Text>
-              </View>
-              <ChevronRight size={20} color="#666" />
+              <X size={24} color="#666" />
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    </View>
-  </Modal>
-);
+          </View>
+          
+          <View style={styles.searchContainer}>
+            <Search size={20} color="#666" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Rechercher un client..."
+              value={clientSearchQuery}
+              onChangeText={setClientSearchQuery}
+            />
+          </View>
 
-// Boat selection modal (Moved outside AddAppointmentModal)
+          <ScrollView style={styles.modalList}>
+            {filteredClients.map(client => (
+              <TouchableOpacity
+                key={client.id}
+                style={styles.modalItem}
+                onPress={() => onSelectClient(client)}
+              >
+                <View style={styles.modalItemContent}>
+                  <User size={20} color="#0066CC" />
+                  <Text style={styles.modalItemText}>{client.name}</Text>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// Boat selection modal (Now defined inside AddAppointmentModal)
 const BoatSelectionModal = ({ visible, onClose, onSelectBoat, selectedClient }) => (
   <Modal
     visible={visible}
     transparent
     animationType="slide"
-    onRequestClose={onClose}
+    onRequestRequestClose={onClose}
   >
     <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
@@ -317,7 +169,7 @@ const BoatSelectionModal = ({ visible, onClose, onSelectBoat, selectedClient }) 
           </TouchableOpacity>
         </View>
         
-        {selectedClient ? (
+        {selectedClient && selectedClient.boats && selectedClient.boats.length > 0 ? ( // MODIFIED LINE
           <ScrollView style={styles.modalList}>
             {selectedClient.boats.map(boat => (
               <TouchableOpacity
@@ -338,7 +190,9 @@ const BoatSelectionModal = ({ visible, onClose, onSelectBoat, selectedClient }) 
           </ScrollView>
         ) : (
           <View style={styles.emptyModalState}>
-            <Text style={styles.emptyModalText}>Veuillez d'abord sélectionner un client</Text>
+            <Text style={styles.emptyModalText}>
+              {selectedClient ? "Cet utilisateur n'a pas de bateau enregistré." : "Veuillez d'abord sélectionner un client."}
+            </Text>
           </View>
         )}
       </View>
@@ -346,13 +200,13 @@ const BoatSelectionModal = ({ visible, onClose, onSelectBoat, selectedClient }) 
   </Modal>
 );
 
-// Boat Manager selection modal (Moved outside AddAppointmentModal)
+// Boat Manager selection modal (Now defined inside AddAppointmentModal)
 const BoatManagerSelectionModal = ({ visible, onClose, onSelectBoatManager, boatManagers }) => (
   <Modal
     visible={visible}
     transparent
     animationType="slide"
-    onRequestClose={onClose}
+    onRequestRequestClose={onClose}
   >
     <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
@@ -391,50 +245,118 @@ const BoatManagerSelectionModal = ({ visible, onClose, onSelectBoatManager, boat
   </Modal>
 );
 
-// Nautical Company selection modal
-const NauticalCompanySelectionModal = ({ visible, onClose, onSelectNauticalCompany, nauticalCompanies }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Sélectionner une entreprise du nautisme</Text>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={onClose}
-          >
-            <X size={24} color="#666" />
-          </TouchableOpacity>
-        </View>
-        
-        <ScrollView style={styles.modalList}>
-          {nauticalCompanies.map(company => (
-            <TouchableOpacity
-              key={company.id}
-              style={styles.modalItem}
-              onPress={() => onSelectNauticalCompany(company)}
+// Nautical Company selection modal (Now defined inside AddAppointmentModal)
+const NauticalCompanySelectionModal = ({ visible, onClose, onSelectNauticalCompany, nauticalCompanies }) => {
+  const [companySearchQuery, setCompanySearchQuery] = useState('');
+  const filteredCompanies = nauticalCompanies.filter(company => 
+    company.name.toLowerCase().includes(companySearchQuery.toLowerCase())
+  );
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner une entreprise du nautisme</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={onClose}
             >
-              <View style={styles.modalItemContent}>
-                <Building size={20} color="#0066CC" />
-                <View>
-                  <Text style={styles.modalItemText}>{company.name}</Text>
-                  <Text style={styles.modalItemSubtext}>
-                    {company.location}
-                  </Text>
-                </View>
-              </View>
-              <ChevronRight size={20} color="#666" />
+              <X size={24} color="#666" />
             </TouchableOpacity>
-          ))}
-        </ScrollView>
+          </View>
+          
+          <View style={styles.searchContainer}>
+            <Search size={20} color="#666" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Rechercher une entreprise..."
+              value={companySearchQuery}
+              onChangeText={setCompanySearchQuery}
+            />
+          </View>
+
+          <ScrollView style={styles.modalList}>
+            {filteredCompanies.length > 0 ? (
+              filteredCompanies.map(company => (
+                <TouchableOpacity
+                  key={company.id}
+                  style={styles.modalItem}
+                  onPress={() => onSelectNauticalCompany(company)}
+                >
+                  <View style={styles.modalItemContent}>
+                    <Building size={20} color="#0066CC" />
+                    <View>
+                      <Text style={styles.modalItemText}>{company.name}</Text>
+                      <Text style={styles.modalItemSubtext}>
+                        {company.location}
+                      </Text>
+                    </View>
+                  </View>
+                  <ChevronRight size={20} color="#666" />
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyModalState}>
+                <Text style={styles.emptyModalText}>
+                  Aucune entreprise trouvée pour ce service.
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
       </View>
-    </View>
-  </Modal>
-);
+    </Modal>
+  );
+};
+
+// Service Type selection modal
+const ServiceTypeSelectionModal = ({ visible, onClose, onSelectServiceType, serviceCategories }) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un type d'intervention</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalList}>
+            {serviceCategories.map(category => (
+              <TouchableOpacity
+                key={category.id}
+                style={styles.modalItem}
+                onPress={() => onSelectServiceType(category.description1)}
+              >
+                <View style={styles.modalItemContent}>
+                  <FileText size={20} color="#1a1a1a" />
+                  <Text style={styles.modalItemText}>{category.description1}</Text>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 
 // Add appointment modal
 const AddAppointmentModal = ({
@@ -449,74 +371,229 @@ const AddAppointmentModal = ({
   withNauticalCompany, // New prop
   setWithBoatManager,
   setWithNauticalCompany, // New prop
-  setShowClientModal,
-  setShowBoatModal,
-  setShowBoatManagerModal,
-  setShowNauticalCompanyModal, // New prop
-  isScheduleDatePickerVisible,
-  setIsScheduleDatePickerVisible,
   onSaveAppointment, // Renamed prop
   getAppointmentColor,
   getAppointmentLabel,
-  handleSelectClient,
-  handleSelectBoat,
-  handleSelectBoatManager,
-  handleSelectNauticalCompany, // New prop
+  handleSelectClient: parentHandleSelectClient, // Renamed to avoid conflict
+  handleSelectBoat: parentHandleSelectBoat, // Renamed to avoid conflict
+  handleSelectBoatManager: parentHandleSelectBoatManager, // Renamed to avoid conflict
+  handleSelectNauticalCompany: parentHandleSelectNauticalCompany, // Renamed to avoid conflict
+  allClients, // All clients for selection
+  allBoatManagers, // All boat managers for selection
+  allNauticalCompanies, // All nautical companies for selection
+  allServiceCategories, // All service categories for selection
 }) => {
+  const { user } = useAuth();
   // Local state for the form fields
   const [localAppointment, setLocalAppointment] = useState(initialAppointment);
+  const [initialBoatPlaceDePort, setInitialBoatPlaceDePort] = useState<string | undefined>(undefined);
+
+  // Local states for nested modals visibility
+  const [showClientModal, setShowClientModal] = useState(false);
+  const [showBoatModal, setShowBoatModal] = useState(false);
+  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false);
+  const [showNauticalCompanyModal, setShowNauticalCompanyModal] = useState(false);
+  const [showServiceTypeModal, setShowServiceTypeModal] = useState(false); // New state for service type modal
+  const [isScheduleDatePickerVisible, setIsScheduleDatePickerVisible] = useState(false);
+
 
   // Sync local state with prop when initialAppointment changes (e.g., modal opens)
   useEffect(() => {
     setLocalAppointment(initialAppointment);
-  }, [initialAppointment]);
+    // Ensure initialBoatPlaceDePort is set correctly, handling null/undefined
+    setInitialBoatPlaceDePort(initialAppointment.boat?.place_de_port ?? undefined);
+
+    // Pre-fill selectedClient and selectedBoat if initialAppointment has them
+    if (initialAppointment.id) { // Only if it's an existing appointment being edited
+      const client = allClients.find(c => c.id === initialAppointment.client?.id);
+      if (client) {
+        parentHandleSelectClient(client);
+      }
+      const boat = client?.boats.find(b => b.id === initialAppointment.boat?.id);
+      if (boat) {
+        parentHandleSelectBoat(boat);
+      }
+      // Pre-fill nautical company if exists
+      if (initialAppointment.nauticalCompany?.id) {
+        const nc = allNauticalCompanies.find(c => c.id === initialAppointment.nauticalCompany?.id);
+        if (nc) {
+          parentHandleSelectNauticalCompany(nc);
+          setWithNauticalCompany(true);
+        }
+      } else {
+        setWithNauticalCompany(false);
+      }
+    }
+  }, [initialAppointment, allClients, allNauticalCompanies]); // Add allClients and allNauticalCompanies to dependencies
+
 
   const handleLocalDateConfirm = (date: Date) => {
     setLocalAppointment(prev => ({ ...prev, date: date.toISOString().split('T')[0] }));
     setIsScheduleDatePickerVisible(false);
   };
 
-  const handleLocalSave = useCallback(() => { // Renamed local function
+  const handleLocalSave = useCallback(async () => { // Renamed local function
     if (!validateAppointmentForm(localAppointment)) return;
     
-    const newAppointmentComplete: Appointment = {
-      id: Date.now().toString(),
-      date: localAppointment.date!,
-      time: localAppointment.time!,
-      duration: localAppointment.duration || 60,
-      type: localAppointment.type as Appointment['type'],
-      status: 'scheduled',
-      client: {
-        id: selectedClient!.id,
-        name: selectedClient!.name,
-        avatar: selectedClient!.avatar
-      },
-      boat: {
-        name: selectedBoat!.name,
-        type: selectedBoat!.type
-      },
-      location: localAppointment.location || 'Port de Marseille',
-      description: localAppointment.description || '',
-    };
-    
-    // Add boat manager if selected
-    if (withBoatManager && selectedBoatManager) {
-      newAppointmentComplete.boatManager = {
-        id: selectedBoatManager.id,
-        name: selectedBoatManager.name
-      };
+    // 1. Update place_de_port in 'boat' table if changed
+    if (selectedBoat?.id && localAppointment.location !== initialBoatPlaceDePort) {
+      try {
+        const { error: updateBoatError } = await supabase
+          .from('boat')
+          .update({ place_de_port: localAppointment.location })
+          .eq('id', Number(selectedBoat.id)); // Ensure ID is Number
+
+        if (updateBoatError) {
+          console.error('Error updating boat place_de_port:', updateBoatError);
+          Alert.alert('Erreur', `Impossible de mettre à jour la place de port du bateau: ${updateBoatError.message}`);
+          return;
+        }
+      } catch (e) {
+        console.error('Unexpected error updating boat place_de_port:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la mise à jour de la place de port.');
+        return;
+      }
     }
 
-    // Add nautical company if selected
-    if (withNauticalCompany && selectedNauticalCompany) {
-      newAppointmentComplete.nauticalCompany = {
-        id: selectedNauticalCompany.id,
-        name: selectedNauticalCompany.name
-      };
+    // Conflict check: Check for existing appointments at the same date and overlapping time
+    try {
+      const newAppointmentStartMinutes = timeToMinutes(localAppointment.time);
+      const newAppointmentEndMinutes = newAppointmentStartMinutes + (localAppointment.duration || 0);
+
+      const { data: existingAppointments, error: fetchError } = await supabase
+        .from('rendez_vous')
+        .select('id, heure, duree') // Select id to exclude current appointment from conflict check
+        .eq('date_rdv', localAppointment.date)
+        .eq('id_boat_manager', Number(user?.id)); // Ensure ID is Number
+
+      if (fetchError) {
+        console.error('Error fetching existing appointments:', fetchError);
+        Alert.alert('Erreur', 'Impossible de vérifier les conflits d\'horaire.');
+        return;
+      }
+
+      const conflictFound = existingAppointments.some(existingAppt => {
+        // Exclude the current appointment if editing
+        if (localAppointment.id && existingAppt.id.toString() === localAppointment.id) { // Convert existingAppt.id to string for comparison
+          return false;
+        }
+
+        const existingApptStartMinutes = timeToMinutes(existingAppt.heure);
+        const existingApptEndMinutes = existingApptStartMinutes + durationToMinutes(existingAppt.duree);
+
+        // Check for overlap: (start1 < end2) AND (end1 > start2)
+        return (newAppointmentStartMinutes < existingApptEndMinutes) &&
+               (newAppointmentEndMinutes > existingApptStartMinutes);
+      });
+
+      if (conflictFound) {
+        Alert.alert('Conflit d\'horaire', 'Un rendez-vous existe déjà sur ce créneau horaire.');
+        return;
+      }
+
+    } catch (e) {
+      console.error('Unexpected error during conflict check:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la vérification des conflits.');
+      return;
     }
-    
-    onSaveAppointment(newAppointmentComplete); // Call the prop function
-  }, [localAppointment, selectedClient, selectedBoat, withBoatManager, selectedBoatManager, withNauticalCompany, selectedNauticalCompany, onSaveAppointment]);
+
+    // 2. Lookup service_id from categorie_service table
+    const { data: serviceCategory, error: serviceCategoryError } = await supabase
+      .from('categorie_service')
+      .select('id')
+      .eq('description1', localAppointment.type)
+      .single();
+
+    if (serviceCategoryError || !serviceCategory) {
+      console.error('Error fetching service category ID:', serviceCategoryError);
+      Alert.alert('Erreur', 'Impossible de trouver l\'ID du service sélectionné.');
+      return;
+    }
+
+    const serviceId = serviceCategory.id;
+
+    // Convert duration from minutes to HH:MM:SS format
+    const durationInTimeFormat = convertMinutesToTimeFormat(localAppointment.duration || 0);
+
+    // Prepare data for insertion/update
+    const rendezVousData = {
+      id_client: Number(selectedClient!.id), // Ensure ID is Number
+      id_boat_manager: Number(user?.id), // Ensure ID is Number
+      id_boat: Number(selectedBoat!.id), // Ensure ID is Number
+      id_companie: withNauticalCompany ? Number(selectedNauticalCompany?.id) : null, // Ensure ID is Number
+      id_categorie_service: serviceId,
+      description: localAppointment.description,
+      date_rdv: localAppointment.date,
+      heure: localAppointment.time,
+      duree: durationInTimeFormat, // Use the converted duration
+      statut: 'en_attente',
+    };
+
+    let result;
+    if (localAppointment.id) {
+      // Update existing appointment
+      result = await supabase
+        .from('rendez_vous')
+        .update(rendezVousData)
+        .eq('id', Number(localAppointment.id)) // Ensure ID is Number
+        .select('id') // Select id to return the updated row's id
+        .single();
+    } else {
+      // Insert new appointment
+      result = await supabase
+        .from('rendez_vous')
+        .insert([rendezVousData])
+        .select('id') // Select id to return the new row's id
+        .single();
+    }
+
+    if (result.error) {
+      console.error('Error saving rendez_vous:', result.error);
+      Alert.alert('Erreur', `Échec de l'enregistrement du rendez-vous: ${result.error.message}`);
+    } else {
+      Alert.alert(
+        'Succès',
+        'Le rendez-vous a été enregistré avec succès.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              onSaveAppointment({ // Pass a complete Appointment object for local state update
+                id: result.data.id.toString(), // Convert to string for Appointment interface
+                date: localAppointment.date!,
+                time: localAppointment.time!,
+                duration: localAppointment.duration || 60,
+                type: localAppointment.type,
+                status: 'scheduled',
+                client: {
+                  id: selectedClient!.id,
+                  name: selectedClient!.name,
+                  avatar: selectedClient!.avatar,
+                },
+                boat: {
+                  id: selectedBoat!.id,
+                  name: selectedBoat!.name,
+                  type: selectedBoat!.type,
+                  place_de_port: localAppointment.location,
+                },
+                location: localAppointment.location || null, // Use null if empty
+                description: localAppointment.description || null, // Use null if empty
+                boatManager: {
+                  id: user?.id || '',
+                  name: `${user?.firstName} ${user?.lastName}` || '',
+                },
+                nauticalCompany: withNauticalCompany ? {
+                  id: selectedNauticalCompany!.id,
+                  name: selectedNauticalCompany!.name,
+                } : null, // Ensure it's null if id_companie is null
+              }, !!localAppointment.id); // Pass true if editing
+              onClose(); // Close the modal
+            }
+          }
+        ]
+      );
+    }
+  }, [localAppointment, selectedClient, selectedBoat, withNauticalCompany, selectedNauticalCompany, initialBoatPlaceDePort, user, onSaveAppointment, onClose]);
 
   const validateAppointmentForm = (appointmentData: Partial<Appointment>) => {
     if (!selectedClient) {
@@ -529,11 +606,6 @@ const AddAppointmentModal = ({
       return false;
     }
     
-    if (withBoatManager && !selectedBoatManager) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un boat manager');
-      return false;
-    }
-
     if (withNauticalCompany && !selectedNauticalCompany) { // New validation
       Alert.alert('Erreur', 'Veuillez sélectionner une entreprise du nautisme');
       return false;
@@ -557,17 +629,25 @@ const AddAppointmentModal = ({
     return true;
   };
 
+  const filteredNauticalCompanies = useMemo(() => {
+    if (!localAppointment.type) return []; // No service type selected, no companies
+
+    return allNauticalCompanies.filter(company => 
+      company.categories.some(cat => cat.description1 === localAppointment.type)
+    );
+  }, [localAppointment.type, allNauticalCompanies]);
+
   return (
     <Modal
       visible={visible}
       transparent
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestRequestClose={onClose}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Nouveau rendez-vous</Text>
+            <Text style={styles.modalTitle}>{localAppointment.id ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</Text>
             <TouchableOpacity 
               style={styles.closeButton}
               onPress={onClose}
@@ -610,46 +690,12 @@ const AddAppointmentModal = ({
                   <Boat size={20} color="#0066CC" />
                 </View>
                 <View style={styles.formFieldContent}>
-                  <Text style={styles.formFieldLabel}>Bateau</Text>
                   <Text style={selectedBoat ? styles.formFieldValue : styles.formFieldPlaceholder}>
                     {selectedBoat ? `${selectedBoat.name} (${selectedBoat.type})` : 'Sélectionner un bateau'}
                   </Text>
                 </View>
                 <ChevronRight size={20} color="#666" />
               </TouchableOpacity>
-
-              <View style={styles.companyToggleContainer}>
-                <Text style={styles.companyToggleLabel}>Avec une entreprise du nautisme</Text>
-                <TouchableOpacity 
-                  style={[
-                    styles.toggleButton, 
-                    withNauticalCompany ? styles.toggleButtonActive : styles.toggleButtonInactive
-                  ]}
-                  onPress={() => setWithNauticalCompany(!withNauticalCompany)}
-                >
-                  <View style={[
-                    styles.toggleIndicator, 
-                    withNauticalCompany ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
-                  ]} />
-                </TouchableOpacity>
-              </View>
-
-              {withNauticalCompany && (
-                <TouchableOpacity 
-                  style={styles.formField}
-                  onPress={() => setShowNauticalCompanyModal(true)}
-                >
-                  <View style={styles.formFieldIcon}>
-                    <Building size={20} color="#0066CC" />
-                  </View>
-                  <View style={styles.formFieldContent}>
-                    <Text style={selectedNauticalCompany ? styles.formFieldValue : styles.formFieldPlaceholder}>
-                      {selectedNauticalCompany ? selectedNauticalCompany.name : 'Sélectionner une entreprise du nautisme'}
-                    </Text>
-                  </View>
-                  <ChevronRight size={20} color="#666" />
-                </TouchableOpacity>
-              )}
             </View>
             
             <View style={styles.formSection}>
@@ -695,11 +741,14 @@ const AddAppointmentModal = ({
                   <Text style={styles.formFieldLabel}>Durée (minutes)</Text>
                   <TextInput
                     style={styles.formInput}
-                    value={localAppointment.duration?.toString()}
-                    onChangeText={(text) => setLocalAppointment(prev => ({ 
-                      ...prev, 
-                      duration: parseInt(text) || 60 
-                    }))}
+                    value={localAppointment.duration != null ? localAppointment.duration.toString() : ''} // Handle null duration
+                    onChangeText={(text) => {
+                      const parsedValue = parseInt(text, 10);
+                      setLocalAppointment(prev => ({
+                        ...prev,
+                        duration: isNaN(parsedValue) ? null : parsedValue // Set to null if cleared or invalid
+                      }));
+                    }}
                     keyboardType="numeric"
                     placeholder="60"
                   />
@@ -712,30 +761,14 @@ const AddAppointmentModal = ({
                 </View>
                 <View style={styles.formFieldContent}>
                   <Text style={styles.formFieldLabel}>Type d'intervention</Text>
-                  <View style={styles.typeSelector}>
-                    {(['maintenance', 'repair', 'control', 'installation', 'improvement', 'access', 'security', 'administrative', 'sell', 'buy'] as Appointment['type'][]).map(type => (
-                      <TouchableOpacity
-                        key={type}
-                        style={[
-                          styles.typeOption,
-                          localAppointment.type === type && {
-                            backgroundColor: `${getAppointmentColor(type)}15`,
-                            borderColor: getAppointmentColor(type),
-                          }
-                        ]}
-                        onPress={() => setLocalAppointment(prev => ({ ...prev, type }))}
-                      >
-                        <Text 
-                          style={[
-                            styles.typeOptionText,
-                            localAppointment.type === type && { color: getAppointmentColor(type) }
-                          ]}
-                        >
-                          {getAppointmentLabel(type)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                  <TouchableOpacity 
+                    style={styles.formInput}
+                    onPress={() => setShowServiceTypeModal(true)} // Open service type picker
+                  >
+                    <Text style={localAppointment.type ? styles.formFieldValue : styles.formFieldPlaceholder}>
+                      {localAppointment.type || 'Sélectionner un type d\'intervention'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
               
@@ -747,7 +780,7 @@ const AddAppointmentModal = ({
                   <Text style={styles.formFieldLabel}>Lieu</Text>
                   <TextInput
                     style={styles.formInput}
-                    value={localAppointment.location}
+                    value={localAppointment.location || ''} // Handle null location
                     onChangeText={(text) => setLocalAppointment(prev => ({ ...prev, location: text }))}
                     placeholder="Lieu du rendez-vous"
                   />
@@ -762,7 +795,7 @@ const AddAppointmentModal = ({
                   <Text style={styles.formFieldLabel}>Description</Text>
                   <TextInput
                     style={[styles.formInput, styles.textArea]}
-                    value={localAppointment.description}
+                    value={localAppointment.description || ''} // Handle null description
                     onChangeText={(text) => setLocalAppointment(prev => ({ ...prev, description: text }))}
                     placeholder="Description de l'intervention"
                     multiline
@@ -771,6 +804,42 @@ const AddAppointmentModal = ({
                   />
                 </View>
               </View>
+            </View>
+
+            <View style={styles.formSection}>
+              <Text style={styles.formSectionTitle}>Avec une entreprise du nautisme</Text>
+              <View style={styles.companyToggleContainer}>
+                <Text style={styles.companyToggleLabel}>Associer une entreprise</Text>
+                <TouchableOpacity 
+                  style={[
+                    styles.toggleButton, 
+                    withNauticalCompany ? styles.toggleButtonActive : styles.toggleButtonInactive
+                  ]}
+                  onPress={() => setWithNauticalCompany(!withNauticalCompany)}
+                >
+                  <View style={[
+                    styles.toggleIndicator, 
+                    withNauticalCompany ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
+                  ]} />
+                </TouchableOpacity>
+              </View>
+
+              {withNauticalCompany && (
+                <TouchableOpacity 
+                  style={styles.formField}
+                  onPress={() => setShowNauticalCompanyModal(true)}
+                >
+                  <View style={styles.formFieldIcon}>
+                    <Building size={20} color="#0066CC" />
+                  </View>
+                  <View style={styles.formFieldContent}>
+                    <Text style={selectedNauticalCompany ? styles.formFieldValue : styles.formFieldPlaceholder}>
+                      {selectedNauticalCompany ? selectedNauticalCompany.name : 'Sélectionner une entreprise du nautisme'}
+                    </Text>
+                  </View>
+                  <ChevronRight size={20} color="#666" />
+                </TouchableOpacity>
+              )}
             </View>
           </ScrollView>
           
@@ -801,128 +870,337 @@ const AddAppointmentModal = ({
           onCancel={() => setIsScheduleDatePickerVisible(false)}
         />
       )}
+
+      {/* Nested Modals */}
+      <ClientSelectionModal 
+        visible={showClientModal} 
+        onClose={() => setShowClientModal(false)} 
+        onSelectClient={(client) => {
+          parentHandleSelectClient(client); // Update parent state
+          setShowClientModal(false); // Close this modal
+        }} 
+        clients={allClients} 
+      />
+      <BoatSelectionModal 
+        visible={showBoatModal} 
+        onClose={() => setShowBoatModal(false)} 
+        onSelectBoat={(boat) => {
+          parentHandleSelectBoat(boat); // Update parent state
+          setShowBoatModal(false); // Close this modal
+        }} 
+        selectedClient={selectedClient} 
+      />
+      <BoatManagerSelectionModal 
+        visible={showBoatManagerModal} 
+        onClose={() => setShowBoatManagerModal(false)} 
+        onSelectBoatManager={(manager) => {
+          parentHandleSelectBoatManager(manager); // Update parent state
+          setShowBoatManagerModal(false); // Close this modal
+        }} 
+        boatManagers={allBoatManagers} 
+      />
+      <NauticalCompanySelectionModal 
+        visible={showNauticalCompanyModal} 
+        onClose={() => setShowNauticalCompanyModal(false)} 
+        onSelectNauticalCompany={(company) => {
+          parentHandleSelectNauticalCompany(company); // Update parent state
+          setShowNauticalCompanyModal(false); // Close this modal
+        }} 
+        nauticalCompanies={filteredNauticalCompanies} 
+      />
+      <ServiceTypeSelectionModal
+        visible={showServiceTypeModal}
+        onClose={() => setShowServiceTypeModal(false)}
+        onSelectServiceType={(type) => {
+          setLocalAppointment(prev => ({ ...prev, type }));
+          setShowServiceTypeModal(false);
+        }}
+        serviceCategories={allServiceCategories}
+      />
     </Modal>
   );
 };
 
-const AppointmentDetailsModal = ({ visible, onClose, appointment, getAppointmentColor, getAppointmentLabel }) => {
-  if (!appointment) return null;
-
-  const formatTime = (time: string) => time.replace(':', 'h');
-  const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Détails du rendez-vous</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView style={styles.modalBody}>
-            <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Informations générales</Text>
-              <View style={styles.detailRow}>
-                <CalendarIcon size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Date: {formatDate(appointment.date)}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Clock size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Heure: {formatTime(appointment.time)}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <FileText size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Type: {getAppointmentLabel(appointment.type)}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <MapPin size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Lieu: {appointment.location}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailText}>Description: {appointment.description}</Text>
-              </View>
-            </View>
-
-            <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Client et Bateau</Text>
-              <View style={styles.detailRow}>
-                <User size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Client: {appointment.client.name}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Boat size={20} color="#0066CC" />
-                <Text style={styles.detailText}>Bateau: {appointment.boat.name} ({appointment.boat.type})</Text>
-              </View>
-            </View>
-
-            {appointment.boatManager && (
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Boat Manager</Text>
-                <View style={styles.detailRow}>
-                  <User size={20} color="#0066CC" />
-                  <Text style={styles.detailText}>{appointment.boatManager.name}</Text>
-                </View>
-              </View>
-            )}
-
-            {appointment.nauticalCompany && (
-              <View style={styles.detailSection}>
-                <Text style={styles.detailSectionTitle}>Entreprise du nautisme</Text>
-                <View style={styles.detailRow}>
-                  <Building size={20} color="#0066CC" />
-                  <Text style={styles.detailText}>{appointment.nauticalCompany.name}</Text>
-                </View>
-              </View>
-            )}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-};
 
 export default function PlanningScreen() {
+  const { user } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [view, setView] = useState<'day' | 'week'>('day');
-  const [appointments, setAppointments] = useState<Appointment[]>(mockAppointments);
+  const [appointments, setAppointments] = useState<Appointment[]>([]); // Initialize as empty
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showClientModal, setShowClientModal] = useState(false);
-  const [showBoatModal, setShowBoatModal] = useState(false);
-  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false);
-  const [showNauticalCompanyModal, setShowNauticalCompanyModal] = useState(false); // New state for nautical company modal
   
-  // New state for date picker visibility
   const [isScheduleDatePickerVisible, setIsScheduleDatePickerVisible] = useState(false);
+
+  // Data for modals
+  const [allClients, setAllClients] = useState<Client[]>([]);
+  const [allBoatManagers, setAllBoatManagers] = useState<BoatManager[]>([]);
+  const [allNauticalCompanies, setAllNauticalCompanies] = useState<NauticalCompany[]>([]);
+  const [allServiceCategories, setAllServiceCategories] = useState<Array<{id: number; description1: string}>>([]);
 
   // New appointment form state
   const [newAppointment, setNewAppointment] = useState<Partial<Appointment>>({
     date: selectedDate.toISOString().split('T')[0],
     time: '09:00',
     duration: 60,
-    type: 'maintenance',
+    type: '', // Default type is now empty
     status: 'scheduled',
-    location: 'Port de Marseille',
-    description: '',
+    location: null, // Set to null
+    description: null, // Set to null
   });
   
   // Selected client and boat for new appointment
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedBoat, setSelectedBoat] = useState<Client['boats'][0] | null>(null);
   const [selectedBoatManager, setSelectedBoatManager] = useState<BoatManager | null>(null);
-  const [selectedNauticalCompany, setSelectedNauticalCompany] = useState<NauticalCompany | null>(null); // New state
+  const [selectedNauticalCompany, setSelectedNauticalCompany] = useState<NauticalCompany | null>(null); 
   const [withBoatManager, setWithBoatManager] = useState(false);
-  const [withNauticalCompany, setWithNauticalCompany] = useState(false); // New state
+  const [withNauticalCompany, setWithNauticalCompany] = useState(false); 
 
-  // State for Appointment Details Modal
-  const [selectedAppointmentForDetails, setSelectedAppointmentForDetails] = useState<Appointment | null>(null);
-  const [showAppointmentDetailsModal, setShowAppointmentDetailsModal] = useState(false);
+  // Get editAppointmentId from URL params
+  const { editAppointmentId } = useLocalSearchParams();
+
+  // useFocusEffect to refetch appointments when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      const fetchPlanningData = async () => {
+        if (!user?.id) return;
+
+        // Fetch appointments
+        const { data: rdvData, error: rdvError } = await supabase
+          .from('rendez_vous')
+          .select(`
+            id,
+            date_rdv,
+            heure,
+            duree,
+            description,
+            statut,
+            users!id_client(id, first_name, last_name, avatar),
+            boat(id, name, type, place_de_port),
+            id_companie(id, company_name),
+            categorie_service(description1)
+          `)
+          .eq('id_boat_manager', Number(user.id)); // Filter by current boat manager, ensure ID is Number
+
+        if (rdvError) {
+          console.error('Error fetching appointments:', rdvError);
+        } else {
+          const formattedAppointments: Appointment[] = rdvData.map(rdv => {
+            // Parse duration from "HH:MM:SS" to minutes
+            let durationInMinutes: number | null = null; // Initialize as null
+            if (typeof rdv.duree === 'string') {
+              const parts = rdv.duree.split(':');
+              if (parts.length >= 3) { // Expecting HH:MM:SS or similar
+                const hours = parseInt(parts[0], 10); // Assuming parts[0] is hours
+                const minutes = parseInt(parts[1], 10); // Assuming parts[1] is minutes
+                durationInMinutes = hours * 60 + minutes;
+              } else if (parts.length === 2) { // Fallback for HH:MM
+                const hours = parseInt(parts[0], 10);
+                const minutes = parseInt(parts[1], 10);
+                durationInMinutes = hours * 60 + minutes;
+              }
+            } else if (typeof rdv.duree === 'number') {
+              durationInMinutes = rdv.duree;
+            }
+            
+            return {
+              id: rdv.id.toString(),
+              date: rdv.date_rdv,
+              time: rdv.heure,
+              duration: durationInMinutes,
+              type: rdv.categorie_service?.description1 || 'unknown',
+              status: rdv.statut,
+              client: {
+                id: rdv.users.id.toString(),
+                name: `${rdv.users.first_name} ${rdv.users.last_name}`,
+                avatar: rdv.users.avatar,
+              },
+              boat: {
+                id: rdv.boat.id.toString(),
+                name: rdv.boat.name,
+                type: rdv.boat.type,
+                place_de_port: rdv.boat.place_de_port,
+              },
+              location: rdv.boat.place_de_port || null, // Use null if empty
+              nauticalCompany: rdv.id_companie ? { // Corrected access to id_companie
+                id: rdv.id_companie.id.toString(),
+                name: rdv.id_companie.company_name,
+              } : null, // Ensure it's null if id_companie is null
+              description: rdv.description || null, // Use null if empty
+            };
+          });
+          setAppointments(formattedAppointments);
+        }
+
+        // Fetch clients for the current BM
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', Number(user.id)); // Ensure ID is Number
+
+        if (bmPortsError) {
+          console.error('Error fetching boat manager ports:', bmPortsError);
+          return;
+        }
+        const managedPortIds = bmPorts.map(p => p.port_id);
+
+        if (managedPortIds.length > 0) {
+          const { data: clientPortAssignments, error: clientPortError } = await supabase
+            .from('user_ports')
+            .select('user_id')
+            .in('port_id', managedPortIds);
+
+          if (clientPortError) {
+            console.error('Error fetching client port assignments:', clientPortError);
+            return;
+          }
+          
+          const uniqueClientIds = [...new Set(clientPortAssignments.map(cpa => cpa.user_id))];
+
+          if (uniqueClientIds.length > 0) {
+            const { data: clientsData, error: clientsError } = await supabase
+              .from('users')
+              .select('id, first_name, last_name, avatar, boat(id, name, type, place_de_port)')
+              .in('id', uniqueClientIds)
+              .eq('profile', 'pleasure_boater');
+
+            if (clientsError) {
+              console.error('Error fetching clients:', clientsError);
+            } else {
+              setAllClients(clientsData.map(c => ({
+                id: c.id.toString(), // Ensure ID is string
+                name: `${c.first_name} ${c.last_name}`,
+                avatar: c.avatar,
+                boats: c.boat || []
+              })) as Client[]);
+            }
+          }
+        }
+
+        // Fetch service categories
+        const { data: categoriesData, error: categoriesError } = await supabase
+          .from('categorie_service')
+          .select('id, description1');
+        if (categoriesError) {
+          console.error('Error fetching service categories:', categoriesError);
+        } else {
+          setAllServiceCategories(categoriesData);
+        }
+
+        // Fetch nautical companies for the current BM's ports
+        const { data: companyUsers, error: companyUsersError } = await supabase
+          .from('users')
+          .select('id, company_name, user_categorie_service(categorie_service(id, description1)), user_ports(port_id, ports(name))')
+          .eq('profile', 'nautical_company');
+
+        if (companyUsersError) {
+          console.error('Error fetching nautical companies:', companyUsersError);
+        } else {
+          const companiesForBM: NauticalCompany[] = [];
+          for (const company of companyUsers) {
+            const companyPortIds = company.user_ports.map((up: any) => up.port_id);
+            const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
+
+            if (commonPorts.length > 0) {
+              companiesForBM.push({
+                id: company.id.toString(), // Ensure ID is string
+                name: company.company_name,
+                logo: '', // Not fetching logo here, can be added if needed
+                location: company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '',
+                categories: company.user_categorie_service.map((ucs: any) => ({
+                  id: ucs.categorie_service.id,
+                  description1: ucs.categorie_service.description1
+                })),
+                contactName: '', contactEmail: '', contactPhone: '', // Not fetching contact info here
+                ports: company.user_ports.map((up: any) => ({ id: up.port_id, name: up.ports.name }))
+              });
+            }
+          }
+          setAllNauticalCompanies(companiesForBM);
+        }
+      };
+
+      fetchPlanningData();
+
+      // Handle editAppointmentId from params
+      if (editAppointmentId) {
+        const fetchAppointmentForEdit = async () => {
+          const { data, error: rdvError } = await supabase
+            .from('rendez_vous')
+            .select(`
+              id,
+              date_rdv,
+              heure,
+              duree,
+              description,
+              statut,
+              users!id_client(id, first_name, last_name, avatar),
+              boat(id, name, type, place_de_port),
+              id_companie(id, company_name),
+              categorie_service(description1)
+            `)
+            .eq('id', Number(editAppointmentId)) // Ensure ID is Number
+            .single();
+
+          if (rdvError) {
+            console.error('Error fetching appointment for edit:', rdvError);
+            Alert.alert('Erreur', 'Impossible de charger le rendez-vous pour modification.');
+          } else if (data) {
+            // Parse duration from "HH:MM:SS" to minutes, handling null
+            let durationInMinutes: number | null = null; // Initialize as null
+            if (typeof data.duree === 'string') {
+              const parts = data.duree.split(':');
+              if (parts.length >= 3) {
+                const hours = parseInt(parts[0], 10);
+                const minutes = parseInt(parts[1], 10);
+                durationInMinutes = hours * 60 + minutes;
+              } else if (parts.length === 2) {
+                const hours = parseInt(parts[0], 10);
+                const minutes = parseInt(parts[1], 10);
+                durationInMinutes = hours * 60 + minutes;
+              }
+            } else if (typeof data.duree === 'number') {
+              durationInMinutes = data.duree;
+            }
+
+            const clientData = {
+              id: data.users.id.toString(),
+              name: `${data.users.first_name} ${data.users.last_name}`,
+              avatar: data.users.avatar,
+            };
+            const boatData = {
+              id: data.boat.id.toString(),
+              name: data.boat.name,
+              type: data.boat.type,
+              place_de_port: data.boat.place_de_port,
+            };
+            const nauticalCompanyData = data.id_companie ? {
+              id: data.id_companie.id.toString(),
+              name: data.id_companie.company_name,
+            } : null; // Ensure it's null if id_companie is null
+
+            setSelectedClient(clientData);
+            setSelectedBoat(boatData);
+            setSelectedNauticalCompany(nauticalCompanyData);
+            setWithNauticalCompany(!!nauticalCompanyData);
+
+            setNewAppointment({
+              id: data.id.toString(), // Convert to string for Appointment interface
+              date: data.date_rdv,
+              time: data.heure,
+              duration: durationInMinutes,
+              type: data.categorie_service?.description1 || '',
+              status: data.statut,
+              location: data.boat.place_de_port || null, // Use null if empty
+              description: data.description || null, // Use null if empty
+            });
+            setShowAddModal(true);
+          }
+        };
+        fetchAppointmentForEdit();
+      }
+    }, [user, editAppointmentId])
+  );
 
 
   const formatDate = (date: Date) => {
@@ -935,67 +1213,45 @@ export default function PlanningScreen() {
   };
 
   const formatTime = (time: string) => {
-    return time.replace(':', 'h');
+    return time ? time.substring(0, 5).replace(':', 'h') : '';
   };
 
-  const formatDuration = (duration: number) => {
+  const formatDuration = (duration: number | null) => { // Handle null duration
+    if (duration === null || isNaN(duration) || duration === 0) return '0h';
     const hours = Math.floor(duration / 60);
     const minutes = duration % 60;
     return `${hours}h${minutes ? minutes : ''}`;
   };
 
-  const getAppointmentColor = (type: Appointment['type']) => {
+  const getAppointmentColor = (type: string) => {
     switch (type) {
-      case 'maintenance':
+      case 'Maintenance':
         return '#0066CC';
-      case 'repair':
+      case 'Réparation':
         return '#EF4444';
-      case 'control':
+      case 'Contrôle':
         return '#10B981';
-      case 'installation':
-        return '#F59E0B'; // Purple
-      case 'improvement':
-        return '#8B5CF6'; // Light Blue
-      case 'access':
-        return '#0EA5E9'; // Red
-      case 'security':
-        return '#DC2626'; // Indigo
-      case 'administrative':
-        return '#6366F1'; // Orange
-      case 'sell':
-        return '#F97316'; // Yellow
-      case 'buy':
+      case 'Installation':
+        return '#F59E0B';
+      case 'Amélioration':
+        return '#8B5CF6';
+      case 'Accès':
+        return '#0EA5E9';
+      case 'Sécurité':
+        return '#DC2626';
+      case 'Administratif':
+        return '#6366F1';
+      case 'Vente':
+        return '#F97316';
+      case 'Achat':
         return '#EAB308';
       default:
         return '#666666';
     }
   };
 
-  const getAppointmentLabel = (type: Appointment['type']) => {
-    switch (type) {
-      case 'maintenance':
-        return 'Maintenance';
-      case 'repair':
-        return 'Réparation';
-      case 'control':
-        return 'Contrôle';
-      case 'installation':
-        return 'Installation';
-      case 'improvement':
-        return 'Amélioration';
-      case 'access':
-        return 'Accès';
-      case 'security':
-        return 'Sécurité';
-      case 'administrative':
-        return 'Administratif';
-      case 'sell':
-        return 'Vente';
-      case 'buy':
-        return 'Achat';
-      default:
-        return type;
-    }
+  const getAppointmentLabel = (type: string) => {
+    return type; // Directly use the description1 from categorie_service
   };
 
   const handlePreviousDay = () => {
@@ -1034,26 +1290,27 @@ export default function PlanningScreen() {
     router.push(`/client/${clientId}`);
   };
 
-  const handleAppointmentDetails = (appointment: Appointment) => {
-    setSelectedAppointmentForDetails(appointment);
-    setShowAppointmentDetailsModal(true);
+  const handleAppointmentDetails = (appointmentId: string) => {
+    // Corrected navigation path
+    router.push(`/appointment/${appointmentId}`);
   };
 
   const handleAddAppointment = () => {
     setSelectedClient(null);
     setSelectedBoat(null);
     setSelectedBoatManager(null);
-    setSelectedNauticalCompany(null); // Reset new state
+    setSelectedNauticalCompany(null); 
     setWithBoatManager(false);
-    setWithNauticalCompany(false); // Reset new state
+    setWithNauticalCompany(false); 
     setNewAppointment({
+      id: '', // Clear ID for new appointment
       date: selectedDate.toISOString().split('T')[0],
       time: '09:00',
       duration: 60,
-      type: 'maintenance',
+      type: '', // Default type is now empty
       status: 'scheduled',
-      location: 'Port de Marseille',
-      description: '',
+      location: null, // Set to null
+      description: null, // Set to null
     });
     setShowAddModal(true);
   };
@@ -1061,33 +1318,35 @@ export default function PlanningScreen() {
   const handleSelectClient = useCallback((client: Client) => {
     setSelectedClient(client);
     setSelectedBoat(null);
-    setShowClientModal(false);
+    setNewAppointment(prev => ({ ...prev, location: client.boats[0]?.place_de_port || null })); // Pre-fill location, use null
+    // setShowClientModal(false); // This is now handled inside AddAppointmentModal
   }, []);
 
   const handleSelectBoat = useCallback((boat: Client['boats'][0]) => {
     setSelectedBoat(boat);
-    setShowBoatModal(false);
+    setNewAppointment(prev => ({ ...prev, location: boat.place_de_port || null })); // Pre-fill location, use null
+    // setShowBoatModal(false); // This is now handled inside AddAppointmentModal
   }, []);
 
-  const handleSelectBoatManager = useCallback((boatManager: BoatManager) => {
-    setSelectedBoatManager(boatManager);
-    setShowBoatManagerModal(false);
+  const handleSelectBoatManager = useCallback((manager: BoatManager) => {
+    setSelectedBoatManager(manager);
+    // setShowBoatManagerModal(false); // This is now handled inside AddAppointmentModal
   }, []);
 
-  const handleSelectNauticalCompany = useCallback((company: NauticalCompany) => { // New handler
+  const handleSelectNauticalCompany = useCallback((company: NauticalCompany) => { 
     setSelectedNauticalCompany(company);
-    setShowNauticalCompanyModal(false);
+    // setShowNauticalCompanyModal(false); // This is now handled inside AddAppointmentModal
   }, []);
 
-  const handleSaveAppointment = useCallback((appointmentData: Appointment) => { // Changed parameter type to Appointment
-    setAppointments(prev => [...prev, appointmentData]); // Directly use appointmentData
+  const handleSaveAppointment = useCallback(async (newAppt: Appointment, isEditing: boolean) => { 
+    if (isEditing) {
+      setAppointments(prev => prev.map(appt => appt.id === newAppt.id ? newAppt : appt));
+    } else {
+      setAppointments(prev => [...prev, newAppt]);
+    }
     setShowAddModal(false);
     
-    Alert.alert(
-      'Succès',
-      'Le rendez-vous a été créé avec succès',
-      [{ text: 'OK' }]
-    );
+    // No need for Alert here, it's handled in the modal's save function
   }, []);
 
   const filteredAppointments = useMemo(() => {
@@ -1134,7 +1393,7 @@ export default function PlanningScreen() {
     <TouchableOpacity
       key={appointment.id}
       style={styles.appointmentCard}
-      onPress={() => handleAppointmentDetails(appointment)}
+      onPress={() => handleAppointmentDetails(appointment.id)}
     >
       <View style={styles.appointmentHeader}>
         <View style={styles.timeContainer}>
@@ -1158,12 +1417,12 @@ export default function PlanningScreen() {
 
       <View style={styles.appointmentContent}>
         <Text style={styles.appointmentDescription}>
-          {appointment.description}
+          {appointment.description ?? ''}
         </Text>
 
         <View style={styles.locationContainer}>
           <MapPin size={16} color="#666" />
-          <Text style={styles.locationText}>{appointment.location}</Text>
+          <Text style={styles.locationText}>{appointment.location ?? ''}</Text>
         </View>
 
         <View style={styles.boatInfo}>
@@ -1216,20 +1475,6 @@ export default function PlanningScreen() {
     </TouchableOpacity>
   );
 
-  const renderWeeklyAppointmentSquare = (appointment: Appointment) => (
-    <TouchableOpacity
-      key={appointment.id}
-      style={[
-        styles.weeklyAppointmentSquare,
-        { backgroundColor: getAppointmentColor(appointment.type) }
-      ]}
-      onPress={() => handleAppointmentDetails(appointment)}
-    >
-      <Text style={styles.weeklyAppointmentTime}>{formatTime(appointment.time)}</Text>
-      <Text style={styles.weeklyAppointmentText} numberOfLines={1}>{appointment.client.name}</Text>
-    </TouchableOpacity>
-  );
-
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -1242,7 +1487,7 @@ export default function PlanningScreen() {
             <ChevronLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
           <Text style={styles.currentDate}>
-            {view === 'day' ? formatDate(selectedDate) : `Semaine du ${getWeekDays[0].toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`}
+            {view === 'day' ? formatDate(selectedDate) : `Semaine du ${formatDate(getWeekDays[0])}`}
           </Text>
           <TouchableOpacity 
             style={styles.navigationButton}
@@ -1303,10 +1548,19 @@ export default function PlanningScreen() {
           )
         ) : ( // Week View
           <View style={styles.weekViewContainer}>
-            <View style={styles.weekDaysHeader}>
-              <View style={styles.timeColumnHeader} /> {/* Empty corner for hours */}
-              {getWeekDays.map((day, index) => (
-                <View key={index} style={styles.weekDayHeader}>
+            {/* Time Axis (00h-23h) */}
+            <View style={styles.timeAxis}>
+              {Array.from({ length: 24 }).map((_, hour) => (
+                <View key={hour} style={styles.timeAxisHour}>
+                  <Text style={styles.timeAxisText}>{`${hour.toString().padStart(2, '0')}h`}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Day Columns with Appointments */}
+            {getWeekDays.map((day, index) => (
+              <View key={index} style={styles.weekDayColumn}>
+                <View style={styles.weekDayHeader}>
                   <Text style={styles.weekDayName}>
                     {day.toLocaleDateString('fr-FR', { weekday: 'short' })}
                   </Text>
@@ -1314,35 +1568,42 @@ export default function PlanningScreen() {
                     {day.getDate()}
                   </Text>
                 </View>
-              ))}
-            </View>
-            <ScrollView style={styles.weekCalendarScroll}>
-              <View style={styles.weekCalendarGrid}>
-                <View style={styles.hoursColumn}>
-                  {Array.from({ length: 24 }).map((_, hour) => (
-                    <View key={hour} style={styles.hourSlot}>
-                      <Text style={styles.hourText}>{`${hour.toString().padStart(2, '0')}:00`}</Text>
-                    </View>
-                  ))}
-                </View>
-                {getWeekDays.map((day, dayIndex) => (
-                  <View key={dayIndex} style={styles.weekDayColumn}>
-                    {Array.from({ length: 24 }).map((_, hour) => {
-                      const appointmentsInHour = filteredAppointments.filter(app => {
-                        const appDate = new Date(app.date);
-                        const appHour = parseInt(app.time.split(':')[0]);
-                        return appDate.toDateString() === day.toDateString() && appHour === hour;
-                      });
-                      return (
-                        <View key={hour} style={styles.hourSlot}>
-                          {appointmentsInHour.map(renderWeeklyAppointmentSquare)}
-                        </View>
-                      );
-                    })}
-                  </View>
-                ))}
+                <ScrollView style={styles.dayAppointmentsList}>
+                  {Array.from({ length: 24 }).map((_, hour) => {
+                    const appointmentsInHour = filteredAppointments.filter(app => {
+                      const appDate = new Date(app.date);
+                      const appHour = parseInt(app.time.split(':')[0]);
+                      return appDate.toDateString() === day.toDateString() && appHour === hour;
+                    });
+
+                    return (
+                      <View key={hour} style={styles.hourSlot}>
+                        {appointmentsInHour.length > 0 ? (
+                          appointmentsInHour.map(app => (
+                            <TouchableOpacity
+                              key={app.id}
+                              style={[
+                                styles.appointmentBlock,
+                                { backgroundColor: getAppointmentColor(app.type) },
+                                { height: (app.duration / 60) * 60 }, // Scale duration to minutes for height
+                                { top: (parseInt(app.time.split(':')[1]) / 60) * 60 }, // Position based on minutes
+                              ]}
+                              onPress={() => handleAppointmentDetails(app.id)}
+                            >
+                              <Text style={styles.appointmentBlockText} numberOfLines={1}>
+                                {formatTime(app.time)} {app.client.name} - {app.type}
+                              </Text>
+                            </TouchableOpacity>
+                          ))
+                        ) : (
+                          <View style={styles.emptyHourSlot} />
+                        )}
+                      </View>
+                    );
+                  })}
+                </ScrollView>
               </View>
-            </ScrollView>
+            ))}
           </View>
         )}
       </ScrollView>
@@ -1354,56 +1615,24 @@ export default function PlanningScreen() {
         selectedClient={selectedClient}
         selectedBoat={selectedBoat}
         selectedBoatManager={selectedBoatManager}
-        selectedNauticalCompany={selectedNauticalCompany} // Pass new state
+        selectedNauticalCompany={selectedNauticalCompany} 
         withBoatManager={withBoatManager}
-        withNauticalCompany={withNauticalCompany} // Pass new state
+        withNauticalCompany={withNauticalCompany} 
         setWithBoatManager={setWithBoatManager}
-        setWithNauticalCompany={setWithNauticalCompany} // Pass new state
-        setShowClientModal={setShowClientModal}
-        setShowBoatModal={setShowBoatModal}
-        setShowBoatManagerModal={setShowBoatManagerModal}
-        setShowNauticalCompanyModal={setShowNauticalCompanyModal} // Pass new state
+        setWithNauticalCompany={setWithNauticalCompany} 
         isScheduleDatePickerVisible={isScheduleDatePickerVisible}
         setIsScheduleDatePickerVisible={setIsScheduleDatePickerVisible}
-        onSaveAppointment={handleSaveAppointment} // Pass the handler
+        onSaveAppointment={handleSaveAppointment} 
         getAppointmentColor={getAppointmentColor}
         getAppointmentLabel={getAppointmentLabel}
         handleSelectClient={handleSelectClient}
         handleSelectBoat={handleSelectBoat}
         handleSelectBoatManager={handleSelectBoatManager}
-        handleSelectNauticalCompany={handleSelectNauticalCompany} // Pass new handler
-      />
-
-      <ClientSelectionModal 
-        visible={showClientModal} 
-        onClose={() => setShowClientModal(false)} 
-        onSelectClient={handleSelectClient} 
-        clients={mockClients} 
-      />
-      <BoatSelectionModal 
-        visible={showBoatModal} 
-        onClose={() => setShowBoatModal(false)} 
-        onSelectBoat={handleSelectBoat} 
-        selectedClient={selectedClient} 
-      />
-      <BoatManagerSelectionModal 
-        visible={showBoatManagerModal} 
-        onClose={() => setShowBoatManagerModal(false)} 
-        onSelectBoatManager={handleSelectBoatManager} 
-        boatManagers={mockBoatManagers} 
-      />
-      <NauticalCompanySelectionModal // Render new modal
-        visible={showNauticalCompanyModal} 
-        onClose={() => setShowNauticalCompanyModal(false)} 
-        onSelectNauticalCompany={handleSelectNauticalCompany} 
-        nauticalCompanies={mockNauticalCompanies} 
-      />
-      <AppointmentDetailsModal
-        visible={showAppointmentDetailsModal}
-        onClose={() => setShowAppointmentDetailsModal(false)}
-        appointment={selectedAppointmentForDetails}
-        getAppointmentColor={getAppointmentColor}
-        getAppointmentLabel={getAppointmentLabel}
+        handleSelectNauticalCompany={handleSelectNauticalCompany} 
+        allClients={allClients} 
+        allBoatManagers={[]} // Not used in this modal, but keeping for consistency if needed later
+        allNauticalCompanies={allNauticalCompanies} 
+        allServiceCategories={allServiceCategories} 
       />
     </View>
   );
@@ -1896,22 +2125,36 @@ const styles = StyleSheet.create({
   },
   weekViewContainer: {
     flex: 1,
+    flexDirection: 'row', // Arrange columns horizontally
     paddingHorizontal: 0, // Remove horizontal padding for full width
   },
-  weekDaysHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+  timeAxis: {
+    width: 60, // Fixed width for time axis
+    borderRightWidth: 1,
+    borderRightColor: '#e0e0e0',
     paddingVertical: 10,
   },
-  timeColumnHeader: {
-    width: 60, // Width for the hours column
+  timeAxisHour: {
+    height: 60, // Height of each hour slot
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#f0f0f0',
+  },
+  timeAxisText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  weekDayColumn: {
+    flex: 1, // Each day column takes equal width
+    borderRightWidth: 0.5,
+    borderRightColor: '#e0e0e0',
   },
   weekDayHeader: {
-    flex: 1,
     alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   weekDayName: {
     fontSize: 14,
@@ -1924,78 +2167,41 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
-  weekCalendarScroll: {
-    flex: 1,
-  },
-  weekCalendarGrid: {
-    flexDirection: 'row',
-  },
-  hoursColumn: {
-    width: 60, // Fixed width for hours column
-    borderRightWidth: 1,
-    borderColor: '#e0e0e0',
+  dayAppointmentsList: {
+    flex: 1, // Allow scrolling within the day column
   },
   hourSlot: {
-    height: 80, // Height for each hour slot
-    justifyContent: 'center',
+    height: 60, // Height of each hour slot
     borderBottomWidth: 0.5,
-    borderColor: '#e0e0e0',
-    paddingHorizontal: 5,
+    borderBottomColor: '#f0f0f0',
+    position: 'relative', // For absolute positioning of appointment blocks
   },
-  hourText: {
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'right',
-  },
-  weekDayColumn: {
-    flex: 1,
-    borderRightWidth: 0.5,
-    borderColor: '#e0e0e0',
-  },
-  weeklyAppointmentSquare: {
+  appointmentBlock: {
     position: 'absolute',
     left: 2,
     right: 2,
     borderRadius: 4,
-    padding: 5,
+    padding: 4,
     justifyContent: 'center',
     alignItems: 'center',
-    minHeight: 30, // Minimum height for visibility
-    zIndex: 1,
+    zIndex: 1, // Ensure blocks are above grid lines
   },
-  weeklyAppointmentTime: {
+  appointmentBlockText: {
     fontSize: 10,
+    color: 'white',
     fontWeight: 'bold',
-    color: 'white',
   },
-  weeklyAppointmentText: {
-    fontSize: 10,
-    color: 'white',
-    textAlign: 'center',
+  emptyHourSlot: {
+    flex: 1,
   },
-  modalBody: {
-    padding: 20,
-  },
-  detailSection: {
-    marginBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-    paddingBottom: 15,
-  },
-  detailSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 10,
-  },
-  detailRow: {
-    flexDirection: 'row',
+  emptyDayState: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 5,
-    gap: 10,
   },
-  detailText: {
-    fontSize: 14,
-    color: '#1a1a1a',
+  emptyDayText: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: 'center',
   },
 });

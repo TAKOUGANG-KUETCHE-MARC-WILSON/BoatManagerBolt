@@ -1,210 +1,42 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput, Modal } from 'react-native';
-import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, X, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native'; // Changed XCircle to X
+import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, X, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth, User as AuthUser, PleasureBoater, BoatManagerUser, NauticalCompany, CorporateUser } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
 
-interface Client {
-  id: string;
-  name: string;
-  avatar: string;
-  email: string;
-  phone: string;
+// Interfaces mises à jour pour correspondre aux données Supabase
+interface Client extends PleasureBoater {
   boats: Array<{
     id: string;
     name: string;
     type: string;
   }>;
-  lastContact?: string;
-  status: 'active' | 'pending' | 'inactive';
+  status: 'active' | 'pending' | 'inactive'; // Assuming status is directly on user profile
+  last_contact?: string;
+  has_new_requests?: boolean;
+  has_new_messages?: boolean;
+}
+
+interface Company extends NauticalCompany {
+  logo: string; // Assuming logo is part of NauticalCompany profile
+  commonPortName?: string; // New field for the common port name
+  fullAddress?: string; // New field for the full address
   hasNewRequests?: boolean;
+  contactEmail: string; // Ensure these are always present for display
+  contactPhone: string; // Ensure these are always present for display
+}
+
+interface HeadquartersContact extends CorporateUser {
+  department?: string; // Assuming department is part of CorporateUser profile
   hasNewMessages?: boolean;
 }
 
-interface Company {
-  id: string;
-  name: string;
-  logo: string;
-  location: string;
-  services: string[];
-  contactName: string;
-  contactEmail: string;
-  contactPhone: string;
-  hasNewRequests?: boolean;
-}
-
-interface HeadquartersContact {
-  id: string;
-  name: string;
-  avatar: string;
-  role: string;
-  department: string;
-  email: string;
-  phone: string;
+interface OtherBoatManager extends BoatManagerUser {
+  location?: string; // Assuming location can be derived from ports or added to profile
+  specialties?: string[]; // Assuming skills from BoatManagerUser can be used as specialties
   hasNewMessages?: boolean;
 }
-
-interface OtherBoatManager {
-  id: string;
-  name: string;
-  avatar: string;
-  location: string;
-  email: string;
-  phone: string;
-  specialties: string[];
-  hasNewMessages?: boolean;
-}
-
-const mockClients: Client[] = [
-  {
-    id: '1',
-    name: 'Jean Dupont',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    status: 'active',
-    lastContact: '2024-02-15',
-    hasNewRequests: true,
-    hasNewMessages: true,
-    boats: [
-      {
-        id: '1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '2',
-    name: 'Sophie Martin',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    status: 'active',
-    lastContact: '2024-02-18',
-    hasNewRequests: false,
-    hasNewMessages: false,
-    boats: [
-      {
-        id: '2',
-        name: 'Le Petit Prince',
-        type: 'Yacht',
-      },
-      {
-        id: '3',
-        name: 'L\'Aventurier',
-        type: 'Catamaran',
-      },
-    ],
-  },
-  {
-    id: '3',
-    name: 'Pierre Dubois',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    email: 'pierre.dubois@example.com',
-    phone: '+33 6 34 56 78 90',
-    status: 'pending',
-    hasNewRequests: false,
-    hasNewMessages: false,
-    boats: [
-      {
-        id: '4',
-        name: 'Le Navigateur',
-        type: 'Voilier',
-      },
-    ],
-  },
-];
-
-const mockCompanies: Company[] = [
-  {
-    id: 'nc1',
-    name: 'Nautisme Pro',
-    logo: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    location: 'Port de Marseille',
-    services: ['Maintenance', 'Réparation', 'Installation'],
-    contactName: 'Thomas Leroy',
-    contactEmail: 'contact@nautismepro.com',
-    contactPhone: '+33 4 91 12 34 56',
-    hasNewRequests: true
-  },
-  {
-    id: 'nc2',
-    name: 'Marine Services',
-    logo: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop',
-    location: 'Port de Nice',
-    services: ['Maintenance', 'Contrôle', 'Amélioration'],
-    contactName: 'Julie Moreau',
-    contactEmail: 'contact@marineservices.com',
-    contactPhone: '+33 4 93 23 45 67',
-  }
-];
-
-const mockHeadquartersContacts: HeadquartersContact[] = [
-  {
-    id: 'hq1',
-    name: 'Alexandre Dupont',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=2070&auto=format&fit=crop',
-    role: 'Directeur Général',
-    department: 'Direction',
-    email: 'alexandre.dupont@ybm.com',
-    phone: '+33 1 23 45 67 89',
-    hasNewMessages: true
-  },
-  {
-    id: 'hq2',
-    name: 'Émilie Laurent',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    role: 'Responsable RH',
-    department: 'Ressources Humaines',
-    email: 'emilie.laurent@ybm.com',
-    phone: '+33 1 23 45 67 90',
-    hasNewMessages: false
-  },
-  {
-    id: 'hq3',
-    name: 'Nicolas Martin',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    role: 'Support Technique',
-    department: 'IT',
-    email: 'nicolas.martin@ybm.com',
-    phone: '+33 1 23 45 67 91',
-    hasNewMessages: false
-  }
-];
-
-const mockOtherBoatManagers: OtherBoatManager[] = [
-  {
-    id: 'bm1',
-    name: 'Pierre Dubois',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    location: 'Port de Nice',
-    email: 'pierre.dubois@ybm.com',
-    phone: '+33 6 23 45 67 89',
-    specialties: ['Voiliers', 'Yachts'],
-    hasNewMessages: true
-  },
-  {
-    id: 'bm2',
-    name: 'Sophie Laurent',
-    avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=2070&auto=format&fit=crop',
-    location: 'Port de Saint-Tropez',
-    email: 'sophie.laurent@ybm.com',
-    phone: '+33 6 34 56 78 90',
-    specialties: ['Catamarans', 'Motoryachts'],
-    hasNewMessages: false
-  },
-  {
-    id: 'bm3',
-    name: 'Lucas Bernard',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=2070&auto=format&fit=crop',
-    location: 'Port de Cannes',
-    email: 'lucas.bernard@ybm.com',
-    phone: '+33 6 45 67 89 01',
-    specialties: ['Voiliers', 'Semi-rigides'],
-    hasNewMessages: false
-  }
-];
 
 export default function HomeScreen() {
   const { user } = useAuth();
@@ -212,6 +44,18 @@ export default function HomeScreen() {
   const [companySearchQuery, setCompanySearchQuery] = useState('');
   const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [boatManagerSearchQuery, setBoatManagerSearchQuery] = useState('');
+
+  // États pour les données réelles
+  const [clients, setClients] = useState<Client[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [headquartersContacts, setHeadquartersContacts] = useState<HeadquartersContact[]>([]);
+  const [otherBoatManagers, setOtherBoatManagers] = useState<OtherBoatManager[]>([]);
+
+  // États de chargement
+  const [clientsLoading, setClientsLoading] = useState(true);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
+  const [contactsLoading, setContactsLoading] = useState(true);
+  const [otherBMLoading, setOtherBMLoading] = useState(true);
 
   // New state for company details modal
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
@@ -224,7 +68,7 @@ export default function HomeScreen() {
     year: 'numeric'
   });
 
-  // Stats for dashboard
+  // Stats for dashboard (still mocked for now)
   const stats = {
     urgentRequests: 2,
     upcomingAppointments: 8,
@@ -234,49 +78,244 @@ export default function HomeScreen() {
     reviewCount: 42
   };
 
-  // Filtrer les clients en fonction de la recherche
-  const filteredClients = mockClients.filter(client => {
+  // --- Data Fetching ---
+  useEffect(() => {
+    const fetchClients = async () => {
+      setClientsLoading(true);
+      if (!user || user.role !== 'boat_manager') {
+        setClientsLoading(false);
+        return;
+      }
+      try {
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', user.id);
+
+        if (bmPortsError) throw bmPortsError;
+        const managedPortIds = bmPorts.map(p => p.port_id);
+
+        if (managedPortIds.length === 0) {
+          setClients([]);
+          setClientsLoading(false);
+          return;
+        }
+
+        const { data: clientPortAssignments, error: clientPortError } = await supabase
+          .from('user_ports')
+          .select('user_id')
+          .in('port_id', managedPortIds);
+
+        if (clientPortError) throw clientPortError;
+        const uniqueClientIds = [...new Set(clientPortAssignments.map(cpa => cpa.user_id))];
+
+        if (uniqueClientIds.length === 0) {
+          setClients([]);
+          setClientsLoading(false);
+          return;
+        }
+
+        const { data, error: clientsError } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boat(id, name, type)')
+          .in('id', uniqueClientIds)
+          .eq('profile', 'pleasure_boater');
+
+        if (clientsError) throw clientsError;
+        setClients(data.map(c => ({ ...c, name: `${c.first_name} ${c.last_name}`, boats: c.boat || [] })) as Client[]);
+      } catch (e) {
+        console.error('Error fetching clients:', e);
+      } finally {
+        setClientsLoading(false);
+      }
+    };
+
+    const fetchCompanies = async () => {
+      setCompaniesLoading(true);
+      if (!user || user.role !== 'boat_manager') {
+        setCompaniesLoading(false);
+        return;
+      }
+      try {
+        // 1. Get ports managed by the current Boat Manager
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id, ports(name)') // Also fetch port names
+          .eq('user_id', user.id);
+
+        if (bmPortsError) throw bmPortsError;
+        const managedPortIds = bmPorts.map(p => p.port_id);
+        const managedPortNames = bmPorts.map(p => p.ports?.name).filter(Boolean) as string[]; // Get names for display
+
+        if (managedPortIds.length === 0) {
+          setCompanies([]);
+          setCompaniesLoading(false);
+          return;
+        }
+
+        // 2. Get companies that share at least one port with the current BM
+        const { data: companyUsers, error: companyUsersError } = await supabase
+          .from('users')
+          .select('id, company_name, avatar, address, e_mail, phone, user_categorie_service(categorie_service(description1)), user_ports(port_id, ports(name))')
+          .eq('profile', 'nautical_company');
+
+        if (companyUsersError) throw companyUsersError;
+
+        const formattedCompanies: Company[] = [];
+
+        for (const company of companyUsers) {
+          const companyPortIds = company.user_ports.map((up: any) => up.port_id);
+          const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
+
+          if (commonPorts.length > 0) {
+            // Pick the first common port for display on the compact card
+            const commonPortName = company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '';
+
+            // Get all port names for the detailed view
+            const allCompanyPortNames = company.user_ports.map((up: any) => up.ports?.name).filter(Boolean) as string[];
+
+            formattedCompanies.push({
+              id: company.id,
+              name: company.company_name,
+              logo: company.avatar,
+              fullAddress: company.address,
+              contactEmail: company.e_mail,
+              contactPhone: company.phone,
+              categories: company.user_categorie_service.map((ucs: any) => ({
+                id: ucs.categorie_service.id,
+                description1: ucs.categorie_service.description1
+              })),
+              ports: allCompanyPortNames, // All ports for modal's "Ports d'intervention"
+              commonPortName: commonPortName, // The common port for compact view
+              // Add other NauticalCompany fields as needed
+              role: 'nautical_company', // Explicitly set role
+              siret: '', // Placeholder
+              certifications: [], // Placeholder
+              permissions: { // Placeholder
+                canManageServices: false, canManageBookings: false,
+                canAccessFinancials: false, canManageStaff: false
+              }
+            });
+          }
+        }
+        setCompanies(formattedCompanies);
+      } catch (e) {
+        console.error('Error fetching companies:', e);
+      } finally {
+        setCompaniesLoading(false);
+      }
+    };
+
+    const fetchHeadquartersContacts = async () => {
+      setContactsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, e_mail, phone, department, has_new_messages')
+          .eq('profile', 'corporate');
+        if (error) throw error;
+        setHeadquartersContacts(data.map(c => ({
+          ...c,
+          name: `${c.first_name} ${c.last_name}`,
+          role: 'corporate', // Explicitly set role
+        })) as HeadquartersContact[]);
+      } catch (e) {
+        console.error('Error fetching headquarters contacts:', e);
+      } finally {
+        setContactsLoading(false);
+      }
+    };
+
+    const fetchOtherBoatManagers = async () => {
+      setOtherBMLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, e_mail, phone, user_categorie_service(categorie_service(description1)), user_ports(port_id, ports(name))')
+          .eq('profile', 'boat_manager')
+          .neq('id', user?.id); // Exclude current user
+        if (error) throw error;
+
+        const managersWithPorts = await Promise.all(data.map(async (bm: any) => {
+          let location = 'N/A';
+          if (bm.user_ports && bm.user_ports.length > 0) {
+            const { data: portData, error: portError } = await supabase
+              .from('ports')
+              .select('name')
+              .eq('id', bm.user_ports[0].port_id)
+              .single();
+            if (!portError) {
+              location = portData.name;
+            }
+          }
+          return {
+            ...bm,
+            name: `${bm.first_name} ${bm.last_name}`,
+            location: location,
+            specialties: bm.user_categorie_service.map((ucs: any) => ucs.categorie_service.description1), // Using categories as specialties
+            role: 'boat_manager', // Explicitly set role
+            categories: bm.user_categorie_service.map((ucs: any) => ({ id: ucs.categorie_service.id, description1: ucs.categorie_service.description1 }))
+          };
+        }));
+        setOtherBoatManagers(managersWithPorts as OtherBoatManager[]);
+      } catch (e) {
+        console.error('Error fetching other boat managers:', e);
+      } finally {
+        setOtherBMLoading(false);
+      }
+    };
+
+    if (user) {
+      fetchClients();
+      fetchCompanies();
+      fetchHeadquartersContacts();
+      fetchOtherBoatManagers();
+    }
+  }, [user]);
+
+  // --- Filtering Logic ---
+  const filteredClients = clients.filter(client => {
     if (!clientSearchQuery) return true;
     const query = clientSearchQuery.toLowerCase();
     return (
       client.name.toLowerCase().includes(query) ||
-      client.email.toLowerCase().includes(query) ||
-      client.boats.some(boat => boat.name.toLowerCase().includes(query))
+      client.e_mail.toLowerCase().includes(query) ||
+      client.phone?.toLowerCase().includes(query) ||
+      client.boats?.some(boat => boat.name.toLowerCase().includes(query))
     );
   });
 
-  // Filtrer les entreprises en fonction de la recherche
-  const filteredCompanies = mockCompanies.filter(company => {
+  const filteredCompanies = companies.filter(company => {
     if (!companySearchQuery) return true;
     const query = companySearchQuery.toLowerCase();
     return (
       company.name.toLowerCase().includes(query) ||
-      company.location.toLowerCase().includes(query) ||
-      company.services.some(service => service.toLowerCase().includes(query))
+      company.commonPortName?.toLowerCase().includes(query) || // Filter by common port name
+      company.categories?.some(category => category.description1.toLowerCase().includes(query)) // Filter by categories
     );
   });
 
-  // Filtrer les contacts en fonction de la recherche
-  const filteredContacts = mockHeadquartersContacts.filter(contact => {
+  const filteredContacts = headquartersContacts.filter(contact => {
     if (!contactSearchQuery) return true;
     const query = contactSearchQuery.toLowerCase();
     return (
       contact.name.toLowerCase().includes(query) ||
-      contact.email.toLowerCase().includes(query)
+      contact.e_mail.toLowerCase().includes(query) ||
+      contact.department?.toLowerCase().includes(query)
     );
   });
 
-  // Filtrer les autres boat managers en fonction de la recherche
-  const filteredBoatManagers = mockOtherBoatManagers.filter(manager => {
+  const filteredBoatManagers = otherBoatManagers.filter(manager => {
     if (!boatManagerSearchQuery) return true;
     const query = boatManagerSearchQuery.toLowerCase();
     return (
       manager.name.toLowerCase().includes(query) ||
-      manager.location.toLowerCase().includes(query) ||
-      manager.specialties.some(specialty => specialty.toLowerCase().includes(query))
+      manager.location?.toLowerCase().includes(query) ||
+      manager.specialties?.some(specialty => specialty.toLowerCase().includes(query))
     );
   });
 
+  // --- Handlers ---
   const handleMessage = (clientId: string) => {
     router.push(`/(boat-manager)/messages?client=${clientId}`);
   };
@@ -289,7 +328,6 @@ export default function HomeScreen() {
     router.push(`/client/${clientId}`);
   };
 
-  // Modified handleCompanyDetails to open modal
   const handleCompanyDetails = (company: Company) => {
     setSelectedCompanyDetails(company);
     setShowCompanyDetailsModal(true);
@@ -351,8 +389,12 @@ export default function HomeScreen() {
           onPress={() => router.push('/(boat-manager)/requests?urgency=urgent')}
         >
           <AlertTriangle size={24} color="#DC2626" />
-          <Text style={[styles.statNumber, { color: '#DC2626' }]}>{stats.urgentRequests}</Text>
-          <Text style={[styles.statLabel, { color: '#DC2626' }]}>Demandes urgentes</Text>
+          <Text style={[styles.statNumber, { color: '#DC2626' }]}>
+            {stats.urgentRequests}
+          </Text>
+          <Text style={[styles.statLabel, { color: '#DC2626' }]}>
+            Demandes urgentes
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -424,10 +466,10 @@ export default function HomeScreen() {
           <View style={styles.sectionTitleContainer}>
             <Users size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Clients</Text>
-            {mockClients.filter(client => client.hasNewRequests || client.hasNewMessages).length > 0 && (
+            {clients.filter(client => client.has_new_requests || client.has_new_messages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {mockClients.filter(client => client.hasNewRequests || client.hasNewMessages).length}
+                  {clients.filter(client => client.has_new_requests || client.has_new_messages).length}
                 </Text>
               </View>
             )}
@@ -452,7 +494,11 @@ export default function HomeScreen() {
           />
         </View>
 
-        {filteredClients.length > 0 ? (
+        {clientsLoading ? (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Chargement des clients...</Text>
+          </View>
+        ) : filteredClients.length > 0 ? (
           <View style={styles.cardGrid}>
             {filteredClients.map((client) => (
               <TouchableOpacity 
@@ -470,7 +516,7 @@ export default function HomeScreen() {
                   </View>
                 </View>
                 
-                <Text style={styles.clientNameCompact}>{client.name}</Text>
+                <Text style={styles.clientNameCompact}>{client.first_name} {client.last_name}</Text>
                 
                 <View style={styles.boatsCountContainer}>
                   <Boat size={16} color="#0066CC" />
@@ -485,7 +531,7 @@ export default function HomeScreen() {
                     onPress={() => handleMessage(client.id)}
                   >
                     <MessageSquare size={18} color="#0066CC" />
-                    {client.hasNewMessages && (
+                    {client.has_new_messages && (
                       <View style={styles.actionNotificationDot} />
                     )}
                   </TouchableOpacity>
@@ -494,7 +540,7 @@ export default function HomeScreen() {
                     onPress={() => handleRequests(client.id)}
                   >
                     <FileText size={18} color="#0066CC" />
-                    {client.hasNewRequests && (
+                    {client.has_new_requests && (
                       <View style={styles.actionNotificationDot} />
                     )}
                   </TouchableOpacity>
@@ -544,10 +590,10 @@ export default function HomeScreen() {
           <View style={styles.sectionTitleContainer}>
             <Building size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Entreprises Partenaires</Text>
-            {mockCompanies.filter(company => company.hasNewRequests).length > 0 && (
+            {companies.filter(company => company.hasNewRequests).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {mockCompanies.filter(company => company.hasNewRequests).length}
+                  {companies.filter(company => company.hasNewRequests).length}
                 </Text>
               </View>
             )}
@@ -565,31 +611,37 @@ export default function HomeScreen() {
           />
         </View>
 
-        {filteredCompanies.length > 0 ? (
+        {companiesLoading ? (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Chargement des entreprises...</Text>
+          </View>
+        ) : filteredCompanies.length > 0 ? (
           <View style={styles.cardGrid}>
             {filteredCompanies.map((company) => (
               <TouchableOpacity 
                 key={company.id} 
                 style={styles.companyCardCompact}
-                onPress={() => handleCompanyDetails(company)} // Pass the full company object
+                onPress={() => handleCompanyDetails(company)}
               >
                 <Image source={{ uri: company.logo }} style={styles.companyLogoCompact} />
                 <Text style={styles.companyNameCompact}>{company.name}</Text>
                 
-                <View style={styles.companyLocationCompact}>
-                  <MapPin size={14} color="#666" />
-                  <Text style={styles.locationTextCompact}>{company.location}</Text>
-                </View>
+                {company.commonPortName && ( // Display common port name
+                  <View style={styles.companyLocationCompact}>
+                    <MapPin size={14} color="#666" />
+                    <Text style={styles.locationTextCompact}>{company.commonPortName}</Text>
+                  </View>
+                )}
                 
                 <View style={styles.servicesTagsCompact}>
-                  {company.services.slice(0, 2).map((service, index) => (
+                  {company.categories?.slice(0, 2).map((category, index) => ( // Use categories
                     <View key={index} style={styles.serviceTagCompact}>
-                      <Text style={styles.serviceTagTextCompact}>{service}</Text>
+                      <Text style={styles.serviceTagTextCompact}>{category.description1}</Text>
                     </View>
                   ))}
-                  {company.services.length > 2 && (
-                    <View style={styles.serviceTagCompact}>
-                      <Text style={styles.serviceTagTextCompact}>+{company.services.length - 2}</Text>
+                  {company.categories && company.categories.length > 2 && ( // Use categories
+                    <View key="more-services" style={styles.serviceTagCompact}>
+                      <Text style={styles.serviceTagTextCompact}>+{company.categories.length - 2}</Text>
                     </View>
                   )}
                 </View>
@@ -600,6 +652,9 @@ export default function HomeScreen() {
                     onPress={() => handleCompanyMessage(company.id)}
                   >
                     <MessageSquare size={18} color="#0066CC" />
+                    {company.hasNewRequests && (
+                      <View style={styles.actionNotificationDot} />
+                    )}
                   </TouchableOpacity>
                   <TouchableOpacity 
                     style={styles.companyActionCompact}
@@ -612,7 +667,7 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity 
                     style={styles.companyActionCompact}
-                    onPress={() => handleCompanyDetails(company)} // Pass the full company object
+                    onPress={() => handleCompanyDetails(company)}
                   >
                     <ChevronRight size={18} color="#0066CC" />
                   </TouchableOpacity>
@@ -633,10 +688,10 @@ export default function HomeScreen() {
           <View style={styles.sectionTitleContainer}>
             <Briefcase size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Contacts au siège</Text>
-            {mockHeadquartersContacts.filter(contact => contact.hasNewMessages).length > 0 && (
+            {headquartersContacts.filter(contact => contact.hasNewMessages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {mockHeadquartersContacts.filter(contact => contact.hasNewMessages).length}
+                  {headquartersContacts.filter(contact => contact.hasNewMessages).length}
                 </Text>
               </View>
             )}
@@ -654,7 +709,11 @@ export default function HomeScreen() {
           />
         </View>
 
-        {filteredContacts.length > 0 ? (
+        {contactsLoading ? (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Chargement des contacts...</Text>
+          </View>
+        ) : filteredContacts.length > 0 ? (
           <View style={styles.cardGrid}>
             {filteredContacts.map((contact) => (
               <TouchableOpacity 
@@ -664,7 +723,7 @@ export default function HomeScreen() {
               >
                 <Image source={{ uri: contact.avatar }} style={styles.contactAvatarCompact} />
                 <Text style={styles.contactNameCompact}>{contact.name}</Text>
-                <Text style={styles.contactRoleCompact}>{contact.role}</Text>
+                <Text style={styles.contactRoleCompact}>{contact.role || 'Corporate User'}</Text>
                 <Text style={styles.contactDepartmentCompact}>{contact.department}</Text>
                 
                 <TouchableOpacity 
@@ -693,10 +752,10 @@ export default function HomeScreen() {
           <View style={styles.sectionTitleContainer}>
             <Users size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Les autres Boat Managers</Text>
-            {mockOtherBoatManagers.filter(manager => manager.hasNewMessages).length > 0 && (
+            {otherBoatManagers.filter(manager => manager.hasNewMessages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {mockOtherBoatManagers.filter(manager => manager.hasNewMessages).length}
+                  {otherBoatManagers.filter(manager => manager.hasNewMessages).length}
                 </Text>
               </View>
             )}
@@ -714,7 +773,11 @@ export default function HomeScreen() {
           />
         </View>
 
-        {filteredBoatManagers.length > 0 ? (
+        {otherBMLoading ? (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Chargement des Boat Managers...</Text>
+          </View>
+        ) : filteredBoatManagers.length > 0 ? (
           <View style={styles.cardGrid}>
             {filteredBoatManagers.map((manager) => (
               <TouchableOpacity 
@@ -725,15 +788,20 @@ export default function HomeScreen() {
                 <Image source={{ uri: manager.avatar }} style={styles.contactAvatarCompact} />
                 <Text style={styles.contactNameCompact}>{manager.name}</Text>
                 <View style={styles.boatManagerLocationContainer}>
-                  <MapPin size={14} color="#0066CC" />
+                  <MapPin size={14} color="#666" />
                   <Text style={styles.boatManagerLocationText}>{manager.location}</Text>
                 </View>
                 <View style={styles.boatManagerSpecialtiesContainer}>
-                  {manager.specialties.map((specialty, index) => (
+                  {manager.specialties?.slice(0, 2).map((specialty, index) => (
                     <View key={index} style={styles.boatManagerSpecialtyTag}>
                       <Text style={styles.boatManagerSpecialtyText}>{specialty}</Text>
                     </View>
                   ))}
+                  {manager.specialties && manager.specialties.length > 2 && (
+                    <View key="more-specialties" style={styles.boatManagerSpecialtyTag}>
+                      <Text style={styles.boatManagerSpecialtyText}>+{manager.specialties.length - 2}</Text>
+                    </View>
+                  )}
                 </View>
                 
                 <TouchableOpacity 
@@ -781,10 +849,23 @@ export default function HomeScreen() {
                   <Image source={{ uri: selectedCompanyDetails.logo }} style={styles.companyDetailsLogo} />
                   <Text style={styles.companyDetailsName}>{selectedCompanyDetails.name}</Text>
                   
-                  <View style={styles.companyDetailsRow}>
-                    <MapPin size={20} color="#666" />
-                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.location}</Text>
-                  </View>
+                  {selectedCompanyDetails.commonPortName && ( // Display common port name
+                    <View style={styles.companyDetailsRow}>
+                      <MapPin size={20} color="#666" />
+                      <Text style={styles.companyDetailsText}>
+                        {selectedCompanyDetails.commonPortName}
+                      </Text>
+                    </View>
+                  )}
+
+                  {selectedCompanyDetails.fullAddress && ( // Display full address if available
+                    <View style={styles.companyDetailsRow}>
+                      <MapPin size={20} color="#666" />
+                      <Text style={styles.companyDetailsText}>
+                        {selectedCompanyDetails.fullAddress}
+                      </Text>
+                    </View>
+                  )}
                   
                   <View style={styles.companyDetailsRow}>
                     <Mail size={20} color="#666" />
@@ -799,13 +880,26 @@ export default function HomeScreen() {
                   <View style={styles.companyDetailsServices}>
                     <Text style={styles.companyDetailsServicesTitle}>Services proposés :</Text>
                     <View style={styles.servicesTagsCompact}>
-                      {selectedCompanyDetails.services.map((service, index) => (
+                      {selectedCompanyDetails.categories?.map((category, index) => ( // Use categories
                         <View key={index} style={styles.serviceTagCompact}>
-                          <Text style={styles.serviceTagTextCompact}>{service}</Text>
+                          <Text style={styles.serviceTagTextCompact}>{category.description1}</Text>
                         </View>
                       ))}
                     </View>
                   </View>
+
+                  {selectedCompanyDetails.ports && selectedCompanyDetails.ports.length > 0 && (
+                    <View style={styles.companyDetailsServices}>
+                      <Text style={styles.companyDetailsServicesTitle}>Ports d'intervention :</Text>
+                      <View style={styles.servicesTagsCompact}>
+                        {selectedCompanyDetails.ports.map((port, index) => (
+                          <View key={index} style={styles.serviceTagCompact}>
+                            <Text style={styles.serviceTagTextCompact}>{port}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
                 </View>
               </ScrollView>
             )}
@@ -1317,11 +1411,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
   },
+  loadingState: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
   clientCard: {
     backgroundColor: 'white',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 16,
     gap: 16,
     ...Platform.select({
       ios: {
@@ -1361,14 +1465,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1a1a1a',
   },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 6,
-  },
   statusText: {
     fontSize: 12,
     fontWeight: '500',
@@ -1397,7 +1493,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f7ff',
     padding: 12,
     borderRadius: 8,
-    gap: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   boatInfo: {
     flexDirection: 'row',
@@ -1505,6 +1603,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
+    marginBottom: 16,
+    padding: 16,
   },
   closeButton: {
     padding: 4,

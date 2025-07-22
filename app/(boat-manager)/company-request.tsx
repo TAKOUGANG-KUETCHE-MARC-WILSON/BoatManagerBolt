@@ -1,20 +1,37 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Modal, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image, Modal, TextInput, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Search, Building, MapPin, FileText, Calendar, Clock, TriangleAlert as AlertTriangle, Bot as Boat, User, Send, ChevronRight, X } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Assurez-vous que supabase est importé
+
+// Interfaces mises à jour pour correspondre aux données Supabase
+interface Client {
+  id: string;
+  name: string;
+  avatar: string;
+  email: string;
+  phone: string;
+  boats: Array<{
+    id: string;
+    name: string;
+    type: string;
+    place_de_port?: string; // Added place_de_port to boat interface
+  }>;
+}
 
 interface NauticalCompany {
   id: string;
   name: string;
   logo: string;
-  location: string;
-  rating: number;
-  services: string[];
-  contactName: string;
-  contactEmail: string;
-  contactPhone: string;
+  location: string; // This will be the common port name for display
+  rating?: number; // Optional as it might not always be available
+  categories: Array<{ id: number; description1: string; }>; // Changed from services: string[]
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
   hasNewRequests?: boolean;
+  ports: Array<{ id: number; name: string; }>; // All ports the company operates in
 }
 
 interface RequestForm {
@@ -31,7 +48,7 @@ interface RequestForm {
   location?: string;
   notes?: string;
   urgency: 'normal' | 'urgent';
-  type: string;
+  type: string; // description1 of the service category
   description: string;
   category: string;
   date: string;
@@ -44,106 +61,6 @@ interface Service {
   description: string;
   amount: number;
 }
-
-interface Client {
-  id: string;
-  name: string;
-  avatar: string;
-  email: string;
-  phone: string;
-  boats: Array<{
-    id: string;
-    name: string;
-    type: string;
-  }>;
-}
-
-// Mock clients data
-const mockClients: Client[] = [
-  {
-    id: '1',
-    name: 'Jean Dupont',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    boats: [
-      {
-        id: '1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier',
-      },
-    ],
-  },
-  {
-    id: '2',
-    name: 'Sophie Martin',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    boats: [
-      {
-        id: '2',
-        name: 'Le Petit Prince',
-        type: 'Yacht',
-      },
-      {
-        id: '3',
-        name: 'L\'Aventurier',
-        type: 'Catamaran',
-      },
-    ],
-  },
-  {
-    id: '3',
-    name: 'Pierre Dubois',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    email: 'pierre.dubois@example.com',
-    phone: '+33 6 34 56 78 90',
-    boats: [
-      {
-        id: '4',
-        name: 'Le Navigateur',
-        type: 'Voilier',
-      },
-    ],
-  },
-];
-
-// Mock companies data
-const mockCompanies: NauticalCompany[] = [
-  {
-    id: 'nc1',
-    name: 'Nautisme Pro',
-    logo: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    location: 'Port de Marseille',
-    services: ['Maintenance', 'Réparation', 'Installation'],
-    contactName: 'Thomas Leroy',
-    contactEmail: 'contact@nautismepro.com',
-    contactPhone: '+33 4 91 12 34 56',
-  },
-  {
-    id: 'nc2',
-    name: 'Marine Services',
-    logo: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop',
-    location: 'Port de Nice',
-    services: ['Maintenance', 'Contrôle', 'Amélioration'],
-    contactName: 'Julie Moreau',
-    contactEmail: 'contact@marineservices.com',
-    contactPhone: '+33 4 93 23 45 67',
-  }
-];
-
-const serviceTypes = [
-  'Entretien',
-  'Amélioration',
-  'Réparation / Panne',
-  'Contrôle',
-  'Gestion des accès',
-  'Sécurité',
-  'Représentation',
-  'Achat/Vente',
-  'Autre'
-];
 
 export default function CompanyRequestScreen() {
   const { company: initialCompanyId, clientId: initialClientId, boatId: initialBoatId } = useLocalSearchParams<{
@@ -159,7 +76,7 @@ export default function CompanyRequestScreen() {
   defaultValidUntil.setDate(defaultValidUntil.getDate() + 30);
   const defaultValidUntilStr = defaultValidUntil.toISOString().split('T')[0];
   
-  const [form, setForm] = useState<RequestForm>({
+  const initialFormState: RequestForm = {
     title: '',
     clientId: initialClientId || '',
     clientName: '',
@@ -183,7 +100,9 @@ export default function CompanyRequestScreen() {
     category: 'Services',
     date: new Date().toISOString().split('T')[0],
     forClient: true
-  });
+  };
+
+  const [form, setForm] = useState<RequestForm>(initialFormState);
   
   const [errors, setErrors] = useState<Partial<Record<keyof RequestForm | 'services', string>>>({});
   const [showClientModal, setShowClientModal] = useState(false);
@@ -193,58 +112,207 @@ export default function CompanyRequestScreen() {
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   const [companySearchQuery, setCompanySearchQuery] = useState('');
 
+  // New state for fetched service types (from current BM's categories)
+  const [fetchedServiceTypes, setFetchedServiceTypes] = useState<string[]>([]);
+  // New state for all nautical companies (fetched once)
+  const [allNauticalCompanies, setAllNauticalCompanies] = useState<NauticalCompany[]>([]);
+  // State for actual clients fetched from DB
+  const [allClients, setAllClients] = useState<Client[]>([]);
+
   // State to hold the selected client for the boat selection modal
   const [selectedClientForBoat, setSelectedClientForBoat] = useState<Client | null>(null);
 
+  // Store initial boat place_de_port to check for changes
+  const [initialBoatPlaceDePort, setInitialBoatPlaceDePort] = useState<string | undefined>(undefined);
+
   // Effet pour charger les données initiales
   useEffect(() => {
-    if (initialClientId) {
-      const client = mockClients.find(c => c.id === initialClientId);
-      if (client) {
-        setForm(prev => ({
-          ...prev,
-          clientId: client.id,
-          clientName: client.name
-        }));
-        setSelectedClientForBoat(client); // Set selected client for boat modal
+    const fetchAllClients = async () => {
+      if (!user || user.role !== 'boat_manager') return;
+
+      try {
+        // 1. Get ports managed by the current Boat Manager
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', user.id);
+
+        if (bmPortsError) throw bmPortsError;
+        const managedPortIds = bmPorts.map(p => p.port_id);
+
+        if (managedPortIds.length === 0) {
+          setAllClients([]);
+          return;
+        }
+
+        // 2. Get client IDs associated with these ports
+        const { data: clientPortAssignments, error: clientPortError } = await supabase
+          .from('user_ports')
+          .select('user_id')
+          .in('port_id', managedPortIds);
+
+        if (clientPortError) throw clientPortError;
+        const uniqueClientIds = [...new Set(clientPortAssignments.map(cpa => cpa.user_id))];
+
+        if (uniqueClientIds.length === 0) {
+          setAllClients([]);
+          return;
+        }
+
+        // 3. Fetch client details and their boats
+        const { data: clientsData, error: clientsError } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, e_mail, phone, boat(id, name, type, place_de_port)')
+          .in('id', uniqueClientIds)
+          .eq('profile', 'pleasure_boater');
+
+        if (clientsError) throw clientsError;
+
+        setAllClients(clientsData.map(c => ({
+          id: c.id,
+          name: `${c.first_name} ${c.last_name}`,
+          avatar: c.avatar,
+          email: c.e_mail,
+          phone: c.phone,
+          boats: c.boat || []
+        })) as Client[]);
+
+      } catch (e) {
+        console.error('Error fetching all clients:', e);
       }
+    };
+
+    // Fetch service types from the database (for current BM's categories)
+    const fetchServiceTypes = async () => {
+      // Fetch ALL categories from categorie_service
+      const { data, error } = await supabase
+        .from('categorie_service')
+        .select('description1');
+      if (error) {
+        console.error('Error fetching all service categories:', error);
+      } else {
+        setFetchedServiceTypes(data.map(cat => cat.description1));
+      }
+    };
+
+    // Fetch all nautical companies
+    const fetchNauticalCompanies = async () => {
+      if (!user) return;
+
+      try {
+        // 1. Get ports managed by the current Boat Manager
+        const { data: bmPorts, error: bmPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', user.id);
+
+        if (bmPortsError) throw bmPortsError;
+        const managedPortIds = bmPorts.map(p => p.port_id);
+
+        if (managedPortIds.length === 0) {
+          setAllNauticalCompanies([]);
+          return;
+        }
+
+        // 2. Get companies that share at least one port with the current BM
+        const { data: companyUsers, error: companyUsersError } = await supabase
+          .from('users')
+          .select('id, company_name, avatar, address, e_mail, phone, user_categorie_service(categorie_service(id, description1)), user_ports(port_id, ports(name))')
+          .eq('profile', 'nautical_company');
+
+        if (companyUsersError) throw companyUsersError;
+
+        const companiesForBM: NauticalCompany[] = [];
+
+        for (const company of companyUsers) {
+          const companyPortIds = company.user_ports.map((up: any) => up.port_id);
+          const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
+
+          if (commonPorts.length > 0) {
+            // Pick the first common port for display on the compact card
+            const commonPortName = company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '';
+
+            companiesForBM.push({
+              id: company.id,
+              name: company.company_name,
+              logo: company.avatar,
+              location: commonPortName, // Common port name for display in modal list
+              categories: company.user_categorie_service.map((ucs: any) => ({
+                id: ucs.categorie_service.id,
+                description1: ucs.categorie_service.description1
+              })),
+              contactEmail: company.e_mail,
+              contactPhone: company.phone,
+              ports: company.user_ports.map((up: any) => ({ id: up.port_id, name: up.ports.name })) // All ports for company
+            });
+          }
+        }
+        setAllNauticalCompanies(companiesForBM);
+
+      } catch (e) {
+        console.error('Error fetching nautical companies:', e);
+      }
+    };
+
+    fetchAllClients();
+    fetchServiceTypes();
+    fetchNauticalCompanies();
+
+    // Default to Boat Manager as provider if no initial company is set
+    if (user && !initialCompanyId) {
+      setForm(prev => ({
+        ...prev,
+        companyId: user.id, // Assuming user.id is the BM's ID
+        companyName: `${user.firstName} ${user.lastName}`, // BM's name
+        type: '', // Default service type should be empty
+        description: '', // Default description should be empty
+      }));
     }
-    
-    if (initialBoatId) {
-      const client = mockClients.find(c => 
-        c.boats.some(b => b.id === initialBoatId)
-      );
-      
-      if (client) {
-        const boat = client.boats.find(b => b.id === initialBoatId);
-        if (boat) {
+  }, [initialClientId, initialBoatId, initialCompanyId, user]);
+
+  // Effect to pre-fill client and boat if initial IDs are present and allClients is loaded
+  useEffect(() => {
+    if (allClients.length > 0) {
+      if (initialClientId) {
+        const client = allClients.find(c => c.id === initialClientId);
+        if (client) {
           setForm(prev => ({
             ...prev,
             clientId: client.id,
-            clientName: client.name,
-            boatId: boat.id,
-            boatName: boat.name,
-            boatType: boat.type
+            clientName: client.name
           }));
-          setSelectedClientForBoat(client); // Set selected client for boat modal
+          setSelectedClientForBoat(client);
+        }
+      }
+      
+      if (initialBoatId) {
+        const client = allClients.find(c => 
+          c.boats.some(b => b.id === initialBoatId)
+        );
+        
+        if (client) {
+          const boat = client.boats.find(b => b.id === initialBoatId);
+          if (boat) {
+            setForm(prev => ({
+              ...prev,
+              clientId: client.id,
+              clientName: client.name,
+              boatId: boat.id,
+              boatName: boat.name,
+              boatType: boat.type,
+              location: boat.place_de_port || ''
+            }));
+            setSelectedClientForBoat(client);
+            setInitialBoatPlaceDePort(boat.place_de_port); // Store initial value
+          }
         }
       }
     }
-    
-    if (initialCompanyId) {
-      const company = mockCompanies.find(c => c.id === initialCompanyId);
-      if (company) {
-        setForm(prev => ({
-          ...prev,
-          companyId: company.id,
-          companyName: company.name
-        }));
-      }
-    }
-  }, [initialClientId, initialBoatId, initialCompanyId]);
+  }, [allClients, initialClientId, initialBoatId]);
+
 
   // Filtrer les clients en fonction de la recherche
-  const filteredClients = mockClients.filter(client => {
+  const filteredClients = allClients.filter(client => {
     if (!clientSearchQuery) return true;
     const query = clientSearchQuery.toLowerCase();
     return (
@@ -254,15 +322,16 @@ export default function CompanyRequestScreen() {
     );
   });
 
-  // Filtrer les entreprises en fonction de la recherche
-  const filteredCompanies = mockCompanies.filter(company => {
-    if (!companySearchQuery) return true;
+  // Filtrer les entreprises en fonction de la recherche ET du type de service sélectionné
+  const filteredCompanies = allNauticalCompanies.filter(company => {
     const query = companySearchQuery.toLowerCase();
-    return (
-      company.name.toLowerCase().includes(query) ||
-      company.location.toLowerCase().includes(query) ||
-      company.services.some(service => service.toLowerCase().includes(query))
-    );
+    const matchesSearch = !query || company.name.toLowerCase().includes(query) ||
+                          company.location.toLowerCase().includes(query);
+    
+    // Filter by selected service type (form.type)
+    const matchesServiceType = !form.type || company.categories.some(category => category.description1 === form.type);
+
+    return matchesSearch && matchesServiceType;
   });
 
   const handleSelectClient = (client: Client) => {
@@ -272,7 +341,8 @@ export default function CompanyRequestScreen() {
       clientName: client.name,
       boatId: '',
       boatName: '',
-      boatType: ''
+      boatType: '',
+      location: '' // Clear location when client changes
     }));
     setSelectedClientForBoat(client); // Update selected client for boat modal
     setShowClientModal(false);
@@ -284,8 +354,10 @@ export default function CompanyRequestScreen() {
         ...prev,
         boatId: boat.id,
         boatName: boat.name,
-        boatType: boat.type
+        boatType: boat.type,
+        location: boat.place_de_port || '' // Pre-fill location with place_de_port
       }));
+      setInitialBoatPlaceDePort(boat.place_de_port); // Store initial value
     } else {
       // Sinon, ouvrir le modal de sélection de bateau
       setShowBoatModal(true);
@@ -297,8 +369,10 @@ export default function CompanyRequestScreen() {
       ...prev,
       boatId: boat.id,
       boatName: boat.name,
-      boatType: boat.type
+      boatType: boat.type,
+      location: boat.place_de_port || '' // Pre-fill location with place_de_port
     }));
+    setInitialBoatPlaceDePort(boat.place_de_port); // Store initial value
     setShowBoatModal(false);
   };
 
@@ -314,6 +388,7 @@ export default function CompanyRequestScreen() {
   const handleSelectServiceType = (type: string) => {
     setForm(prev => ({ ...prev, type }));
     setShowServiceTypeModal(false);
+    setCompanySearchQuery(''); // Reset company search query when service type changes
     if (errors.type) {
       setErrors(prev => ({ ...prev, type: undefined }));
     }
@@ -346,29 +421,89 @@ export default function CompanyRequestScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (validateForm()) {
-      // Ici, vous enverriez normalement les données au serveur
-      // Pour cette démo, nous simulons simplement une réponse réussie
-      
-      const message = form.forClient 
-        ? `La demande a été créée avec succès au nom de ${form.clientName} et apparaîtra dans son suivi.` 
-        : `La demande a été créée avec succès et sera traitée par vous-même.`;
-      
-      const additionalMessage = form.companyId 
-        ? `\n\nLa demande a également été transmise à ${form.companyName}.` 
-        : '';
-      
-      Alert.alert(
-        'Demande envoyée',
-        message + additionalMessage,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
+      // 1. Update place_de_port in 'boat' table if changed
+      if (form.boatId && form.location !== initialBoatPlaceDePort) {
+        const { error: updateBoatError } = await supabase
+          .from('boat')
+          .update({ place_de_port: form.location })
+          .eq('id', form.boatId);
+
+        if (updateBoatError) {
+          console.error('Error updating boat place_de_port:', updateBoatError);
+          Alert.alert('Erreur', `Impossible de mettre à jour la place de port du bateau: ${updateBoatError.message}`);
+          return;
+        }
+      }
+
+      // 2. Lookup service_id from categorie_service table
+      const { data: serviceCategory, error: serviceCategoryError } = await supabase
+        .from('categorie_service')
+        .select('id')
+        .eq('description1', form.type)
+        .single();
+
+      if (serviceCategoryError || !serviceCategory) {
+        console.error('Error fetching service category ID:', serviceCategoryError);
+        Alert.alert('Erreur', 'Impossible de trouver l\'ID du service sélectionné.');
+        return;
+      }
+
+      const serviceId = serviceCategory.id;
+
+      // 3. Prepare data for insertion into service_request
+      const serviceRequestData = {
+        id_client: form.clientId,
+        id_service: serviceId,
+        description: form.description,
+        id_boat: form.boatId,
+        id_companie: form.companyId || null, // Can be null if not transmitted to a company
+        id_boat_manager: user?.id, // Current Boat Manager's ID
+        // duree_estimee, prix, statut, etat, avis_client are not in form, set defaults or null
+        duree_estimee: null,
+        prix: null,
+        statut: 'submitted', // Default status
+        urgence: form.urgency,
+        date: form.date,
+        etat: 'pending', // Default state
+        avis_client: null,
+        note_add: form.notes || null,
+        // place_de_port is NOT inserted into service_request
+      };
+
+      const { data, error } = await supabase
+        .from('service_request')
+        .insert([serviceRequestData]);
+
+      if (error) {
+        console.error('Error inserting service request:', error);
+        Alert.alert('Erreur', `Échec de la création de la demande: ${error.message}`);
+      } else {
+        const message = form.forClient 
+          ? `La demande a été créée avec succès au nom de ${form.clientName} et apparaîtra dans son suivi.` 
+          : `La demande a été créée avec succès et sera traitée par vous-même.`;
+        
+        const additionalMessage = form.companyId 
+          ? `\n\nLa demande a également été transmise à ${form.companyName}.` 
+          : '';
+        
+        Alert.alert(
+          'Demande envoyée',
+          message + additionalMessage,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setForm(initialFormState); // Reset form fields
+                setErrors({}); // Clear errors
+                setSelectedClientForBoat(null); // Clear selected client for boat modal
+                router.back();
+              }
+            }
+          ]
+        );
+      }
     }
   };
 
@@ -393,7 +528,7 @@ const ClientSelectionModal = () => (
         </View>
         
         <ScrollView style={styles.modalList}>
-          {mockClients.map(client => {
+          {filteredClients.map(client => {
             return (
               <TouchableOpacity
                 key={client.id}
@@ -436,7 +571,7 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
           </TouchableOpacity>
         </View>
         
-        {client ? (
+        {client && client.boats.length > 0 ? (
           <ScrollView style={styles.modalList}>
             {client.boats.map(boat => {
               return (
@@ -463,7 +598,9 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
           </ScrollView>
         ) : (
           <View style={styles.emptyModalState}>
-            <Text style={styles.emptyModalText}>Veuillez d'abord sélectionner un client</Text>
+            <Text style={styles.emptyModalText}>
+              {client ? "Cet utilisateur n'a pas de bateau enregistré." : "Veuillez d'abord sélectionner un client."}
+            </Text>
           </View>
         )}
       </View>
@@ -503,22 +640,30 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
           </View>
           
           <ScrollView style={styles.modalList}>
-            {filteredCompanies.map((company) => (
-              <TouchableOpacity
-                key={company.id}
-                style={styles.modalItem}
-                onPress={() => handleSelectCompany(company)}
-              >
-                <View style={styles.modalItemContent}>
-                  <Building size={20} color="#0066CC" />
-                  <View>
-                    <Text style={styles.modalItemText}>{company.name}</Text>
-                    <Text style={styles.modalItemSubtext}>{company.location}</Text>
+            {filteredCompanies.length > 0 ? (
+              filteredCompanies.map((company) => (
+                <TouchableOpacity
+                  key={company.id}
+                  style={styles.modalItem}
+                  onPress={() => handleSelectCompany(company)}
+                >
+                  <View style={styles.modalItemContent}>
+                    <Building size={20} color="#0066CC" />
+                    <View>
+                      <Text style={styles.modalItemText}>{company.name}</Text>
+                      <Text style={styles.modalItemSubtext}>{company.location}</Text>
+                    </View>
                   </View>
-                </View>
-                <ChevronRight size={20} color="#666" />
-              </TouchableOpacity>
-            ))}
+                  <ChevronRight size={20} color="#666" />
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyModalState}>
+                <Text style={styles.emptyModalText}>
+                  {form.type ? `Aucune entreprise ne propose le service "${form.type}" sur ce port.` : 'Aucune entreprise trouvée.'}
+                </Text>
+              </View>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -546,7 +691,7 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
           </View>
           
           <ScrollView style={styles.modalList}>
-            {serviceTypes.map((type) => (
+            {fetchedServiceTypes.map((type) => ( // Utilisation de fetchedServiceTypes
               <TouchableOpacity
                 key={type}
                 style={styles.modalItem}
@@ -616,69 +761,6 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
             </View>
           </View>
 
-          {/* Options de la demande */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Options de la demande</Text>
-            
-            <View style={styles.optionsCard}>
-              <View style={styles.optionRow}>
-                <Text style={styles.optionLabel}>Créer au nom du client</Text>
-                <TouchableOpacity 
-                  style={[
-                    styles.toggleButton, 
-                    form.forClient ? styles.toggleButtonActive : styles.toggleButtonInactive
-                  ]}
-                  onPress={toggleForClient}
-                >
-                  <View style={[
-                    styles.toggleIndicator, 
-                    form.forClient ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
-                  ]} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.optionDescription}>
-                {form.forClient 
-                  ? "La demande apparaîtra dans le suivi du client comme s'il l'avait créée lui-même." 
-                  : "La demande sera traitée par vous-même et n'apparaîtra pas dans le suivi du client."}
-              </Text>
-              
-              <View style={styles.optionRow}>
-                <Text style={styles.optionLabel}>Transmettre à une entreprise</Text>
-                <TouchableOpacity 
-                  style={[
-                    styles.toggleButton, 
-                    form.companyId ? styles.toggleButtonActive : styles.toggleButtonInactive
-                  ]}
-                  onPress={() => {
-                    if (form.companyId) {
-                      setForm(prev => ({ ...prev, companyId: '', companyName: '' }));
-                    } else {
-                      setShowCompanyModal(true);
-                    }
-                  }}
-                >
-                  <View style={[
-                    styles.toggleIndicator, 
-                    form.companyId ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
-                  ]} />
-                </TouchableOpacity>
-              </View>
-              
-              {form.companyId && (
-                <View style={styles.selectedCompanyContainer}>
-                  <Building size={16} color="#0066CC" />
-                  <Text style={styles.selectedCompanyText}>{form.companyName}</Text>
-                  <TouchableOpacity 
-                    style={styles.changeCompanyButton}
-                    onPress={() => setShowCompanyModal(true)}
-                  >
-                    <Text style={styles.changeCompanyText}>Changer</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          </View>
-
           {/* Détails de la demande */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Détails de la demande</Text>
@@ -734,14 +816,14 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
             </View>
             
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Lieu</Text>
+              <Text style={styles.label}>Lieu (place de port)</Text>
               <View style={styles.inputWrapper}>
                 <MapPin size={20} color="#666" />
                 <TextInput
                   style={styles.input}
                   value={form.location}
                   onChangeText={(text) => setForm(prev => ({ ...prev, location: text }))}
-                  placeholder="Lieu de l'intervention (optionnel)"
+                  placeholder="Place de port"
                 />
               </View>
             </View>
@@ -805,6 +887,69 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
                   <Text style={styles.urgencyNoteText}>
                     En sélectionnant "Urgent", la demande sera traitée en priorité.
                   </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Options de la demande */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Options de la demande</Text>
+            
+            <View style={styles.optionsCard}>
+              <View style={styles.optionRow}>
+                <Text style={styles.optionLabel}>Créer au nom du client</Text>
+                <TouchableOpacity 
+                  style={[
+                    styles.toggleButton, 
+                    form.forClient ? styles.toggleButtonActive : styles.toggleButtonInactive
+                  ]}
+                  onPress={toggleForClient}
+                >
+                  <View style={[
+                    styles.toggleIndicator, 
+                    form.forClient ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
+                  ]} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.optionDescription}>
+                {form.forClient 
+                  ? "La demande apparaîtra dans le suivi du client comme s'il l'avait créée lui-même." 
+                  : "La demande sera traitée par vous-même et n'apparaîtra pas dans le suivi du client."}
+              </Text>
+              
+              <View style={styles.optionRow}>
+                <Text style={styles.optionLabel}>Transmettre à une entreprise</Text>
+                <TouchableOpacity 
+                  style={[
+                    styles.toggleButton, 
+                    form.companyId ? styles.toggleButtonActive : styles.toggleButtonInactive
+                  ]}
+                  onPress={() => {
+                    if (form.companyId) {
+                      setForm(prev => ({ ...prev, companyId: '', companyName: '' }));
+                    } else {
+                      setShowCompanyModal(true);
+                    }
+                  }}
+                >
+                  <View style={[
+                    styles.toggleIndicator, 
+                    form.companyId ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
+                  ]} />
+                </TouchableOpacity>
+              </View>
+              
+              {form.companyId && (
+                <View style={styles.selectedCompanyContainer}>
+                  <Building size={16} color="#0066CC" />
+                  <Text style={styles.selectedCompanyText}>{form.companyName}</Text>
+                  <TouchableOpacity 
+                    style={styles.changeCompanyButton}
+                    onPress={() => setShowCompanyModal(true)}
+                  >
+                    <Text style={styles.changeCompanyText}>Changer</Text>
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
@@ -1150,12 +1295,14 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center', // Changed from 'flex-end' to 'center'
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 24, // Changed from borderTopLeftRadius/borderTopRightRadius
+    width: '90%', // Added width
+    maxWidth: 500, // Added maxWidth
     maxHeight: '80%',
   },
   modalHeader: {
@@ -1183,23 +1330,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     gap: 12,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 1,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   searchInput: {
     flex: 1,
+    marginLeft: 8,
     fontSize: 16,
     color: '#1a1a1a',
     ...Platform.select({

@@ -5,7 +5,8 @@ import { ArrowLeft, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as
 import { useAuth } from '@/context/AuthContext';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { X } from 'lucide-react-native';
-import ReminderDateTimePicker from './ReminderDateTimePicker'; 
+import ReminderDateTimePicker from './ReminderDateTimePicker';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 type RequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
@@ -55,240 +56,6 @@ interface ServiceRequest {
   isNew?: boolean;
   hasStatusUpdate?: boolean;
 }
-
-const mockServiceRequests: Record<string, ServiceRequest> = {
-  '1': {
-    id: '1',
-    title: 'Entretien moteur',
-    type: 'Maintenance',
-    status: 'in_progress',
-    urgency: 'normal',
-    date: '2024-02-19',
-    description: 'Révision complète du moteur et changement des filtres',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company'
-  },
-  '2': {
-    id: '2',
-    title: 'Réparation voile',
-    type: 'Réparation',
-    status: 'quote_sent',
-    urgency: 'urgent',
-    date: '2024-02-24',
-    description: 'Déchirure importante sur la grand-voile, besoin d\'une réparation rapide',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    quoteIds: ['q1']
-  },
-  '3': {
-    id: '3',
-    title: 'Installation GPS',
-    type: 'Amélioration',
-    status: 'quote_accepted',
-    urgency: 'normal',
-    date: '2024-02-23',
-    description: 'Installation d\'un nouveau système GPS pour navigation côtière',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    quoteIds: ['q2']
-  },
-  '4': {
-    id: '4',
-    title: 'Contrôle annuel',
-    type: 'Contrôle',
-    status: 'scheduled',
-    urgency: 'normal',
-    date: '2024-02-22',
-    description: 'Contrôle technique annuel obligatoire',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    scheduledDate: '2024-03-15'
-  },
-  '5': {
-    id: '5',
-    title: 'Nettoyage coque',
-    type: 'Maintenance',
-    status: 'completed',
-    urgency: 'normal',
-    date: '2024-02-21',
-    description: 'Nettoyage complet de la coque et traitement antifouling',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  '6': {
-    id: '6',
-    title: 'Vérification amarrage',
-    type: 'Sécurité',
-    status: 'to_pay',
-    urgency: 'urgent',
-    date: '2024-02-20',
-    description: 'Vérification de l\'amarrage avant tempête annoncée',
-    category: 'Sécurité',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    invoiceReference: 'FAC-2024-001',
-    invoiceAmount: 150,
-    invoiceDate: '2024-02-25',
-    paymentDueDate: '2024-03-25'
-  },
-  '7': {
-    id: '7',
-    title: 'Renouvellement assurance',
-    type: 'Administratif',
-    status: 'paid',
-    urgency: 'normal',
-    date: '2024-02-18',
-    description: 'Assistance pour le renouvellement de l\'assurance du bateau',
-    category: 'Administratif',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm4',
-      name: 'Lucas Bernard',
-      port: 'Port de Saint-Tropez'
-    },
-    invoiceReference: 'FAC-2024-002',
-    invoiceAmount: 75,
-    invoiceDate: '2024-02-20'
-  },
-  '8': {
-    id: '8',
-    title: 'Mise en vente',
-    type: 'Vente',
-    status: 'cancelled',
-    urgency: 'normal',
-    date: '2024-02-15',
-    description: 'Publication de l\'annonce de vente du bateau',
-    category: 'Vente/Achat',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-      email: 'pierre.dubois@example.com',
-      phone: '+33 6 34 56 78 90',
-      boat: {
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    }
-  }
-};
 
 const statusConfig = {
   submitted: {
@@ -374,6 +141,8 @@ export default function RequestDetailsScreen() {
   const { id } = useLocalSearchParams();
   const { user } = useAuth();
   const [request, setRequest] = useState<ServiceRequest | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showForwardModal, setShowForwardModal] = useState(false);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
@@ -384,34 +153,146 @@ export default function RequestDetailsScreen() {
   const [scheduledLocation, setScheduledLocation] = useState('');
   const [scheduledNotes, setScheduledNotes] = useState('');
   const [isScheduleDatePickerVisible, setIsScheduleDatePickerVisible] = useState(false); // Specific for scheduling
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderTime, setReminderTime] = useState('');
+  const [isReminderDatePickerVisible, setIsReminderDatePickerVisible] = useState(false);
+  const [isReminderTimePickerVisible, setIsReminderTimePickerVisible] = useState(false); // New state for time picker
 
-  
-  if (!request) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <ArrowLeft size={24} color="#1a1a1a" />
-          </TouchableOpacity>
-          <Text style={styles.title}>Demande non trouvée</Text>
-        </View>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Cette demande n'existe pas.</Text>
-          <TouchableOpacity 
-            style={styles.errorButton}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.errorButtonText}>Retour</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
 
-  const currentStatusConfig = statusConfig[request.status];
+  useEffect(() => {
+    const fetchRequestDetails = async () => {
+      setLoading(true);
+      setError(null);
+      if (!id) {
+        setError("ID de la demande manquant.");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error: reqError } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            statut,
+            urgence,
+            date,
+            prix,
+            note_add,
+            id_client,
+            id_boat_manager,
+            id_companie,
+            categorie_service(description1),
+            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
+            boat(name, type, place_de_port)
+          `)
+          .eq('id', parseInt(id as string))
+          .single();
+
+        if (reqError) {
+          console.error('Error fetching request details:', reqError);
+          setError("Erreur lors du chargement des détails de la demande.");
+          setLoading(false);
+          return;
+        }
+
+        if (data) {
+          let boatManagerDetails: ServiceRequest['boatManager'] | undefined;
+          if (data.id_boat_manager) {
+            const { data: bmData, error: bmError } = await supabase
+              .from('users')
+              .select('id, first_name, last_name, port')
+              .eq('id', data.id_boat_manager)
+              .single();
+            if (!bmError && bmData) {
+              boatManagerDetails = {
+                id: bmData.id.toString(),
+                name: `${bmData.first_name} ${bmData.last_name}`,
+                port: bmData.port || 'N/A'
+              };
+            }
+          }
+
+          let companyDetails: ServiceRequest['company'] | undefined;
+          if (data.id_companie) {
+            const { data: companyData, error: companyError } = await supabase
+              .from('users')
+              .select('id, company_name')
+              .eq('id', data.id_companie)
+              .single();
+            if (!companyError && companyData) {
+              companyDetails = {
+                id: companyData.id.toString(),
+                name: companyData.company_name || 'N/A'
+              };
+            }
+          }
+
+          let invoiceReference: string | undefined;
+          let invoiceDate: string | undefined;
+          if (data.note_add && (data.statut === 'to_pay' || data.statut === 'paid')) {
+            const invoiceMatch = data.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
+            if (invoiceMatch) {
+              invoiceReference = invoiceMatch[1];
+              invoiceDate = invoiceMatch[2];
+            }
+          }
+
+          let scheduledDateFromNotes: string | undefined;
+          if (data.statut === 'scheduled' && data.note_add) {
+            const scheduledMatch = data.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+            if (scheduledMatch) {
+              scheduledDateFromNotes = scheduledMatch[1];
+            }
+          }
+
+          setRequest({
+            id: data.id.toString(),
+            title: data.description,
+            type: data.categorie_service?.description1 || 'N/A',
+            status: data.statut as RequestStatus,
+            urgency: data.urgence as UrgencyLevel,
+            date: data.date,
+            description: data.description,
+            category: 'Services',
+            client: {
+              id: data.users.id.toString(),
+              name: `${data.users.first_name} ${data.users.last_name}`,
+              avatar: data.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+              email: data.users.e_mail,
+              phone: data.users.phone,
+              boat: {
+                name: data.boat.name,
+                type: data.boat.type
+              }
+            },
+            boatManager: boatManagerDetails,
+            company: companyDetails,
+            notes: data.note_add,
+            scheduledDate: scheduledDateFromNotes,
+            invoiceReference: invoiceReference,
+            invoiceAmount: data.prix,
+            invoiceDate: invoiceDate,
+            isNew: false,
+            hasStatusUpdate: false
+          });
+        } else {
+          setError("Demande non trouvée.");
+        }
+      } catch (e) {
+        console.error('Unexpected error fetching request details:', e);
+        setError("Une erreur inattendue est survenue lors du chargement des détails de la demande.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRequestDetails();
+  }, [id]);
+
+  const currentStatusConfig = request ? statusConfig[request.status] : null;
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -429,14 +310,15 @@ export default function RequestDetailsScreen() {
   };
 
   const handleMessage = () => {
-    router.push(`/(boat-manager)/messages?client=${request.client.id}`);
+    router.push(`/(boat-manager)/messages?client=${request?.client.id}`);
   };
 
   const handleClientDetails = () => {
-    router.push(`/client/${request.client.id}`);
+    router.push(`/client/${request?.client.id}`);
   };
 
   const handleNextAction = () => {
+    if (!request) return;
     switch (request.status) {
       case 'submitted':
         handleTakeCharge();
@@ -467,7 +349,8 @@ export default function RequestDetailsScreen() {
     }
   };
 
-  const handleTakeCharge = () => {
+  const handleTakeCharge = async () => {
+    if (!request) return;
     Alert.alert(
       'Prendre en charge',
       'Voulez-vous prendre en charge cette demande ?',
@@ -475,16 +358,26 @@ export default function RequestDetailsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'in_progress' } : null);
-            Alert.alert('Succès', 'La demande a été prise en charge.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'in_progress' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible de mettre à jour le statut: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'in_progress' } : null);
+              Alert.alert('Succès', 'La demande a été prise en charge.');
+            }
           }
         }
       ]
     );
   };
 
-  const handleForward = (companyId: string, companyName: string) => {
+  const handleForward = async (companyId: string, companyName: string) => {
+    if (!request) return;
     Alert.alert(
       'Transmettre la demande',
       `Voulez-vous transmettre cette demande à ${companyName} ?`,
@@ -492,10 +385,19 @@ export default function RequestDetailsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'forwarded', company: { id: companyId, name: companyName }, currentHandler: 'company' } : null);
-            setShowForwardModal(false);
-            Alert.alert('Succès', 'La demande a été transmise.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'forwarded', id_companie: parseInt(companyId) })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible de transmettre la demande: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'forwarded', company: { id: companyId, name: companyName }, currentHandler: 'company' } : null);
+              setShowForwardModal(false);
+              Alert.alert('Succès', 'La demande a été transmise.');
+            }
           }
         }
       ]
@@ -503,6 +405,7 @@ export default function RequestDetailsScreen() {
   };
 
   const handleGenerateQuote = () => {
+    if (!request) return;
     setShowQuoteModal(false);
     router.push({
       pathname: user?.role === 'boat_manager' ? '/(boat-manager)/quote-upload' : '/(nautical-company)/quote-upload',
@@ -510,14 +413,15 @@ export default function RequestDetailsScreen() {
         requestId: request.id,
         clientId: request.client.id,
         clientName: request.client.name,
-        boatId: request.client.boat.name, // Using boat name as ID for simplicity in mock
+        boatId: request.client.boat.id, // Use actual boat ID
         boatName: request.client.boat.name,
         boatType: request.client.boat.type,
       }
     });
   };
 
-  const handleAcceptQuote = () => {
+  const handleAcceptQuote = async () => {
+    if (!request) return;
     Alert.alert(
       'Accepter le devis',
       'Voulez-vous accepter ce devis ?',
@@ -525,26 +429,49 @@ export default function RequestDetailsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'quote_accepted' } : null);
-            Alert.alert('Succès', 'Le devis a été accepté.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'quote_accepted' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible d\'accepter le devis: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'quote_accepted' } : null);
+              Alert.alert('Succès', 'Le devis a été accepté.');
+            }
           }
         }
       ]
     );
   };
 
-  const handleSchedule = () => {
+  const handleSchedule = async () => {
+    if (!request) return;
     if (!scheduledDate || !scheduledTime) {
       Alert.alert('Erreur', 'Veuillez renseigner la date et l\'heure.');
       return;
     }
-    setRequest(prev => prev ? { ...prev, status: 'scheduled', scheduledDate: scheduledDate, scheduledTime: scheduledTime, scheduledLocation: scheduledLocation, scheduledNotes: scheduledNotes } : null);
-    setShowScheduleModal(false);
-    Alert.alert('Succès', 'L\'intervention a été planifiée.');
+    const { error } = await supabase
+      .from('service_request')
+      .update({
+        statut: 'scheduled',
+        note_add: `Planifiée le ${scheduledDate} à ${scheduledTime}. Lieu: ${scheduledLocation}. Notes: ${scheduledNotes}`
+      })
+      .eq('id', parseInt(request.id));
+    if (error) {
+      console.error('Error updating status:', error);
+      Alert.alert('Erreur', `Impossible de planifier l\'intervention: ${error.message}`);
+    } else {
+      setRequest(prev => prev ? { ...prev, status: 'scheduled', scheduledDate: scheduledDate, scheduledTime: scheduledTime, scheduledLocation: scheduledLocation, scheduledNotes: scheduledNotes } : null);
+      setShowScheduleModal(false);
+      Alert.alert('Succès', 'L\'intervention a été planifiée.');
+    }
   };
 
-  const handleMarkAsCompleted = () => {
+  const handleMarkAsCompleted = async () => {
+    if (!request) return;
     Alert.alert(
       'Marquer comme terminée',
       'Voulez-vous marquer cette demande comme terminée ?',
@@ -552,16 +479,26 @@ export default function RequestDetailsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'completed' } : null);
-            Alert.alert('Succès', 'La demande a été marquée comme terminée.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'completed' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible de marquer comme terminée: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'completed' } : null);
+              Alert.alert('Succès', 'La demande a été marquée comme terminée.');
+            }
           }
         }
       ]
     );
   };
 
-  const handleMarkAsReadyToBill = () => {
+  const handleMarkAsReadyToBill = async () => {
+    if (!request) return;
     Alert.alert(
       'Marquer comme bon à facturer',
       'Voulez-vous marquer cette demande comme prête à être facturée ?',
@@ -569,16 +506,26 @@ export default function RequestDetailsScreen() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'ready_to_bill' } : null);
-            Alert.alert('Succès', 'La demande a été marquée comme prête à être facturée.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'ready_to_bill' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible de marquer comme prête à être facturée: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'ready_to_bill' } : null);
+              Alert.alert('Succès', 'La demande a été marquée comme prête à être facturée.');
+            }
           }
         }
       ]
     );
   };
 
-  const handleGenerateInvoice = () => {
+  const handleGenerateInvoice = async () => {
+    if (!request) return;
     setShowInvoiceModal(false);
     // In a real app, this would generate a real invoice
     const invoiceRef = `FAC-${Math.floor(Math.random() * 10000)}`;
@@ -586,25 +533,77 @@ export default function RequestDetailsScreen() {
     const paymentDueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 30 days from now
     const deposit = request.invoiceAmount ? Math.round(request.invoiceAmount * 0.3) : 0;
 
-    setRequest(prev => prev ? {
-      ...prev,
-      status: 'to_pay',
-      invoiceReference: invoiceRef,
-      invoiceDate: invoiceDate,
-      depositAmount: deposit,
-      paymentDueDate: paymentDueDate
-    } : null);
-    Alert.alert('Succès', `Facture ${invoiceRef} générée et envoyée au client.`);
+    const { error } = await supabase
+      .from('service_request')
+      .update({
+        statut: 'to_pay',
+        note_add: `Facture ${invoiceRef} • ${invoiceDate}`, // Store invoice ref and date in note_add
+        prix: request.invoiceAmount, // Ensure price is set
+      })
+      .eq('id', parseInt(request.id));
+
+    if (error) {
+      console.error('Error generating invoice:', error);
+      Alert.alert('Erreur', `Impossible de générer la facture: ${error.message}`);
+    } else {
+      setRequest(prev => prev ? {
+        ...prev,
+        status: 'to_pay',
+        invoiceReference: invoiceRef,
+        invoiceDate: invoiceDate,
+        depositAmount: deposit,
+        paymentDueDate: paymentDueDate
+      } : null);
+      Alert.alert('Succès', `Facture ${invoiceRef} générée et envoyée au client.`);
+    }
   };
 
-  const handlePayInvoice = () => {
+  const handleProcessPayment = async () => { // Defined here
+    if (!request) return;
     setShowPaymentModal(false);
     // In a real app, this would integrate with a payment gateway
-    Alert.alert('Succès', 'Paiement effectué.');
-    setRequest(prev => prev ? { ...prev, status: 'paid' } : null);
+    const { error } = await supabase
+      .from('service_request')
+      .update({ statut: 'paid' })
+      .eq('id', parseInt(request.id));
+    if (error) {
+      console.error('Error updating status:', error);
+      Alert.alert('Erreur', `Impossible de marquer comme payée: ${error.message}`);
+    } else {
+      Alert.alert('Succès', 'Paiement effectué.');
+      setRequest(prev => prev ? { ...prev, status: 'paid' } : null);
+    }
   };
 
-  const handleCancelRequest = () => {
+  const handleMarkAsPaid = async () => {
+    if (!request) return;
+    Alert.alert(
+      'Marquer comme payé',
+      'Êtes-vous sûr de vouloir marquer cette facture comme payée ?',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Confirmer',
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'paid' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible de marquer comme payée: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'paid' } : null);
+              Alert.alert('Succès', 'La facture a été marquée comme payée.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleCancelRequest = async () => {
+    if (!request) return;
     Alert.alert(
       'Annuler la demande',
       'Voulez-vous annuler cette demande ?',
@@ -613,37 +612,65 @@ export default function RequestDetailsScreen() {
         {
           text: 'Oui',
           style: 'destructive',
-          onPress: () => {
-            setRequest(prev => prev ? { ...prev, status: 'cancelled' } : null);
-            Alert.alert('Succès', 'La demande a été annulée.');
+          onPress: async () => {
+            const { error } = await supabase
+              .from('service_request')
+              .update({ statut: 'cancelled' })
+              .eq('id', parseInt(request.id));
+            if (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Erreur', `Impossible d\'annuler la demande: ${error.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'cancelled' } : null);
+              Alert.alert('Succès', 'La demande a été annulée.');
+            }
           }
         }
       ]
     );
   };
 
-  // Reminder functions
-const handleSetReminder = async () => {
-  if (!reminderDate || !reminderTime) {
-    Alert.alert("Erreur", "Merci de définir une date et une heure.");
-    return;
-  }
+  const handleDateConfirm = (date: Date, type: 'schedule' | 'reminder') => {
+    const formattedDate = date.toISOString().split('T')[0];
+    if (type === 'schedule') {
+      setScheduledDate(formattedDate);
+      setIsScheduleDatePickerVisible(false);
+    } else {
+      setReminderDate(formattedDate);
+      setIsReminderDatePickerVisible(false);
+    }
+  };
 
-  const fullReminder = new Date(`${reminderDate}T${reminderTime}:00`);
+  const handleTimeConfirm = (time: Date) => {
+    const formattedTime = time.toTimeString().slice(0, 5); // HH:MM
+    setReminderTime(formattedTime);
+    setIsReminderTimePickerVisible(false);
+  };
 
-  const { error } = await supabase
-    .from('requests')
-    .update({ reminder_at: fullReminder.toISOString() })
-    .eq('id', request.id); // ou autre identifiant
+  const handleSetReminder = async () => {
+    if (!request) return;
+    if (!reminderDate || !reminderTime) {
+      Alert.alert("Erreur", "Merci de définir une date et une heure.");
+      return;
+    }
 
-  if (error) {
-    console.error(error);
-    Alert.alert("Erreur", "La sauvegarde du rappel a échoué.");
-  } else {
-    Alert.alert("Succès", "Rappel défini et enregistré.");
-    setShowReminderModal(false);
-  }
-};
+    // Store reminder in service_reminders table
+    const { error: insertReminderError } = await supabase
+      .from('service_reminders')
+      .insert({
+        id_service_request: parseInt(request.id),
+        date: reminderDate, // Store only the date part
+        time: reminderTime, // Store the time part
+      });
+
+    if (insertReminderError) {
+      console.error('Error setting reminder:', insertReminderError);
+      Alert.alert("Erreur", "La sauvegarde du rappel a échoué.");
+    } else {
+      Alert.alert("Succès", "Rappel défini et enregistré.");
+      setShowReminderModal(false);
+    }
+  };
 
 
  const ScheduleModal = () => (
@@ -769,9 +796,10 @@ const handleSetReminder = async () => {
         </View>
         
         <View style={styles.modalBody}>
+          {/* Mock companies - In a real app, fetch from Supabase */}
           {[
-            { id: 'nc1', name: 'Nautisme Pro' },
-            { id: 'nc2', name: 'Marine Services' }
+            { id: '1', name: 'Nautisme Pro' },
+            { id: '2', name: 'Marine Services' }
           ].map(company => (
             <TouchableOpacity
               key={company.id}
@@ -816,7 +844,7 @@ const QuoteModal = () => (
             <Text style={styles.quoteOptionText}>Générer un devis</Text>
           </TouchableOpacity>
           
-          {request.quoteIds && request.quoteIds.length > 0 && (
+          {request?.quoteIds && request.quoteIds.length > 0 && (
             <TouchableOpacity
               style={styles.quoteOption}
               onPress={() => router.push(`/quote/${request.quoteIds[0]}`)}
@@ -889,23 +917,64 @@ const InvoiceModal = () => (
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Payer la facture</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowPaymentModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.modalTitle}>Paiement de la facture</Text>
           
           <View style={styles.modalBody}>
-            <Text style={styles.invoiceModalText}>
-              Vous allez être redirigé vers une page de paiement sécurisée pour régler la facture.
-            </Text>
-            <Text style={styles.invoiceModalText}>
-              Montant à payer : {formatAmount(request.invoiceAmount || 0)}
-            </Text>
+            <View style={styles.invoiceDetail}>
+              <Text style={styles.invoiceLabel}>Référence :</Text>
+              <Text style={styles.invoiceValue}>{request?.invoiceReference}</Text>
+            </View>
+            
+            <View style={styles.invoiceDetail}>
+              <Text style={styles.invoiceLabel}>Montant total :</Text>
+              <Text style={styles.invoiceValue}>{formatAmount(request?.invoiceAmount || 0)}</Text>
+            </View>
+            
+            <View style={styles.invoiceDetail}>
+              <Text style={styles.invoiceLabel}>Acompte à payer :</Text>
+              <Text style={styles.invoiceValue}>{formatAmount(request?.depositAmount || 0)}</Text>
+            </View>
+            
+            <View style={styles.paymentMethodContainer}>
+              <Text style={styles.paymentMethodTitle}>Méthode de paiement</Text>
+              <View style={styles.paymentMethod}>
+                <View style={styles.paymentMethodRadio}>
+                  <View style={styles.paymentMethodRadioInner} />
+                </View>
+                <View style={styles.paymentMethodInfo}>
+                  <Text style={styles.paymentMethodName}>Carte bancaire</Text>
+                  <Text style={styles.paymentMethodDescription}>Paiement sécurisé par Stripe</Text>
+                </View>
+              </View>
+              
+              <View style={styles.cardInputContainer}>
+                <Text style={styles.cardInputLabel}>Numéro de carte</Text>
+                <TextInput
+                  style={styles.cardInput}
+                  placeholder="4242 4242 4242 4242"
+                  keyboardType="numeric"
+                />
+              </View>
+              
+              <View style={styles.cardDetailsRow}>
+                <View style={styles.cardInputContainer}>
+                  <Text style={styles.cardInputLabel}>Date d'expiration</Text>
+                  <TextInput
+                    style={styles.cardInput}
+                    placeholder="MM/AA"
+                  />
+                </View>
+                
+                <View style={styles.cardInputContainer}>
+                  <Text style={styles.cardInputLabel}>CVC</Text>
+                  <TextInput
+                    style={styles.cardInput}
+                    placeholder="123"
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+            </View>
           </View>
 
           <View style={styles.modalActions}>
@@ -918,9 +987,9 @@ const InvoiceModal = () => (
             
             <TouchableOpacity 
               style={styles.modalConfirmButton}
-              onPress={handlePayInvoice}
+              onPress={handleProcessPayment}
             >
-              <Text style={styles.modalConfirmText}>Payer</Text>
+              <Text style={styles.modalConfirmText}>Payer {formatAmount(request?.depositAmount || 0)}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -961,15 +1030,13 @@ const InvoiceModal = () => (
             
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Heure du rappel</Text>
-              <View style={styles.inputWrapper}>
+              <TouchableOpacity // Changed from TextInput to TouchableOpacity
+                style={styles.inputWrapper} // Re-using inputWrapper for consistent styling
+                onPress={() => setIsReminderTimePickerVisible(true)} // Open time picker
+              >
                 <Clock size={20} color="#666" />
-                <TextInput
-                  style={styles.input}
-                  value={reminderTime}
-                  onChangeText={setReminderTime}
-                  placeholder="HH:MM"
-                />
-              </View>
+                <Text style={styles.input}>{reminderTime || 'Sélectionner une heure'}</Text>
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -996,8 +1063,61 @@ const InvoiceModal = () => (
         onConfirm={(date) => handleDateConfirm(date, 'reminder')}
         onCancel={() => setIsReminderDatePickerVisible(false)}
       />
+      <DateTimePickerModal
+        isVisible={isReminderTimePickerVisible}
+        mode="time"
+        onConfirm={handleTimeConfirm}
+        onCancel={() => setIsReminderTimePickerVisible(false)}
+      />
     </Modal>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des détails de la demande...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity 
+          style={styles.errorButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!request) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Demande non trouvée</Text>
+        </View>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Cette demande n'existe pas.</Text>
+          <TouchableOpacity 
+            style={styles.errorButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.errorButtonText}>Retour</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <>
@@ -1025,10 +1145,10 @@ const InvoiceModal = () => (
                   </View>
                 )}
               </View>
-              <View style={[styles.statusBadge, { backgroundColor: `${currentStatusConfig.color}15` }]}>
-                <currentStatusConfig.icon size={16} color={currentStatusConfig.color} />
-                <Text style={[styles.statusText, { color: currentStatusConfig.color }]}>
-                  {currentStatusConfig.label}
+              <View style={[styles.statusBadge, { backgroundColor: `${currentStatusConfig?.color}15` }]}>
+                {currentStatusConfig?.icon && <currentStatusConfig.icon size={16} color={currentStatusConfig.color} />}
+                <Text style={[styles.statusText, { color: currentStatusConfig?.color }]}>
+                  {currentStatusConfig?.label}
                 </Text>
               </View>
             </View>
@@ -1077,7 +1197,7 @@ const InvoiceModal = () => (
 
           {/* Actions */}
           <View style={styles.actionsContainer}>
-            {currentStatusConfig.nextAction && (
+            {currentStatusConfig?.nextAction && (
               <TouchableOpacity 
                 style={styles.nextActionButton}
                 onPress={handleNextAction}
@@ -1153,14 +1273,13 @@ const InvoiceModal = () => (
               <Text style={styles.reminderTitle}>Définir un rappel</Text>
               <TouchableOpacity 
                 style={styles.setReminderButton}
-                onPress={() => setIsReminderDatePickerVisible(true)}
+                onPress={() => setShowReminderModal(true)} // Open reminder modal
               >
                 <Calendar size={20} color="#0066CC" />
                 <Text style={styles.setReminderButtonText}>
                   {reminderDate ? `Rappel le ${formatDate(reminderDate)}` : 'Définir une date de rappel'}
                 </Text>
               </TouchableOpacity>
-             
             </View>
           )}
         </View>
@@ -1171,12 +1290,6 @@ const InvoiceModal = () => (
       <InvoiceModal />
       <PaymentModal />
       <ReminderModal />
-       <DateTimePickerModal
-                isVisible={isReminderDatePickerVisible}
-                mode="date"
-                onConfirm={(date) => handleDateConfirm(date, 'reminder')}
-                onCancel={() => setIsReminderDatePickerVisible(false)}
-              />
     </>
   );
 }
@@ -1236,20 +1349,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 1, // Allow text to shrink
+    flexWrap: 'wrap', // Allow content to wrap to next line
   },
   summaryTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flexShrink: 1, // Allow text to shrink
   },
   urgentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEE2E2',
+    backgroundColor: '#FEE2F2',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     gap: 4,
+    marginLeft: 8, // Add some margin to separate from title
   },
   urgentText: {
     fontSize: 12,
@@ -1263,6 +1380,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 16,
     gap: 4,
+    alignSelf: 'flex-start', // Align to the top
   },
   statusText: {
     fontSize: 12,
@@ -1403,23 +1521,42 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center', // Centered
+    alignItems: 'center', // Centered
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
+    borderRadius: 16, // Unified border radius
+    width: '90%', // Set a width
+    maxWidth: 500, // Max width for larger screens
+    maxHeight: '80%',
+    paddingBottom: 20, // Add padding to the bottom of the modal content
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '600',
     color: '#1a1a1a',
   },
   closeButton: {
@@ -1427,6 +1564,12 @@ const styles = StyleSheet.create({
   },
   modalBody: {
     marginBottom: 24,
+  },
+  modalDescription: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 16,
+    lineHeight: 22,
   },
   inputContainer: {
     marginBottom: 16,
@@ -1542,5 +1685,91 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 12,
     lineHeight: 22,
+  },
+  invoiceDetail: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    paddingVertical: 8,
+  },
+  invoiceLabel: {
+    fontSize: 14,
+    color: '#666',
+  },
+  invoiceValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1a1a1a',
+  },
+  paymentMethodContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    gap: 16,
+    marginTop: 8,
+  },
+  paymentMethodTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 8,
+  },
+  paymentMethod: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'white',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#0066CC',
+  },
+  paymentMethodRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#0066CC',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  paymentMethodRadioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#0066CC',
+  },
+  paymentMethodInfo: {
+    flex: 1,
+  },
+  paymentMethodName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1a1a1a',
+  },
+  paymentMethodDescription: {
+    fontSize: 12,
+    color: '#666',
+  },
+  cardInputContainer: {
+    flex: 1,
+    gap: 4,
+  },
+  cardInputLabel: {
+    fontSize: 14,
+    color: '#666',
+  },
+  cardInput: {
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+  },
+  cardDetailsRow: {
+    flexDirection: 'row',
+    gap: 12,
   },
 });

@@ -27,6 +27,7 @@ interface BaseUser {
   lastName: string;
   role: UserRole;
   avatar?: string;
+  createdAt?: string; // Add createdAt here
 }
 
 interface PleasureBoater extends BaseUser {
@@ -40,6 +41,7 @@ interface PleasureBoater extends BaseUser {
 interface BoatManagerUser extends BaseUser {
   role: 'boat_manager';
   phone?: string;
+  categories: Array<{ id: number; description1: string; }>; // Added for BoatManagerUser
 }
 
 interface NauticalCompany extends BaseUser {
@@ -47,7 +49,7 @@ interface NauticalCompany extends BaseUser {
   companyName: string;
   siret: string;
   address: string;
-  services: string[];
+  categories: Array<{ id: number; description1: string; }>; // Changed from services: string[]
   ports: string[];
   certifications: string[];
   permissions: {
@@ -204,6 +206,7 @@ bcrypt.setRandomFallback((len: number) => {
         lastName: data.last_name,
         avatar: data.avatar,
         role: data.profile as UserRole,
+        createdAt: data.created_at, // Add created_at here
       };
 
       let userProfile: User;
@@ -212,20 +215,35 @@ bcrypt.setRandomFallback((len: number) => {
           userProfile = { ...commonUserData, role: 'pleasure_boater', ports: userPorts } as PleasureBoater;
           break;
         case 'boat_manager':
+          const { data: bmCategories, error: bmCategoriesError } = await supabase
+            .from('user_categorie_service')
+            .select('categorie_service(id, description1)')
+            .eq('user_id', data.id);
+          if (bmCategoriesError) {
+            console.error('Error fetching BM categories:', bmCategoriesError);
+          }
           userProfile = {
             ...commonUserData,
             role: 'boat_manager',
             phone: data.phone || '',
+            categories: bmCategories ? bmCategories.map((bc: any) => ({ id: bc.categorie_service.id, description1: bc.categorie_service.description1 })) : [],
           } as BoatManagerUser;
           break;
         case 'nautical_company':
+          const { data: ncCategories, error: ncCategoriesError } = await supabase
+            .from('user_categorie_service')
+            .select('categorie_service(id, description1)')
+            .eq('user_id', data.id);
+          if (ncCategoriesError) {
+            console.error('Error fetching NC categories:', ncCategoriesError);
+          }
           userProfile = {
             ...commonUserData,
             role: 'nautical_company',
             companyName: data.company_name || '',
             siret: data.siret || '',
             address: data.address || '',
-            services: data.services || [],
+            categories: ncCategories ? ncCategories.map((ncc: any) => ({ id: ncc.categorie_service.id, description1: ncc.categorie_service.description1 })) : [],
             ports: data.ports || [],
             certifications: data.certification || [],
             permissions: {
@@ -287,61 +305,77 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
   const login = async (email: string, password: string, portId?: string) => {
-  const { data: users, error: userError } = await supabase
-    .from('users')
-    .select('id, e_mail, password, profile')
-    .eq('e_mail', email);
+    const { data: users, error: userError } = await supabase
+      .from('users')
+      .select('id, e_mail, password, profile, last_login') // Inclure last_login
+      .eq('e_mail', email);
 
-  if (userError || !users || users.length === 0) {
-    throw new Error('Email ou mot de passe incorrect.');
-  }
+    if (userError || !users || users.length === 0) {
+      throw new Error('Email ou mot de passe incorrect.');
+    }
 
-  const userInDb = users[0];
+    const userInDb = users[0];
 
-  const passwordMatch = await bcrypt.compare(password, userInDb.password);
+    const passwordMatch = await bcrypt.compare(password, userInDb.password);
 
-  if (!passwordMatch) {
-    throw new Error('Email ou mot de passe incorrect.');
-  }
+    if (!passwordMatch) {
+      throw new Error('Email ou mot de passe incorrect.');
+    }
 
-  // ✅ Mise à jour du champ last_login avec la date actuelle
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({ last_login: new Date().toISOString() })
-    .eq('id', userInDb.id);
+    // --- Logique de mise à jour du statut basée sur last_login ---
+    const now = new Date();
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(now.getMonth() - 3);
 
-  if (updateError) {
-    console.error('Erreur lors de la mise à jour de last_login:', updateError);
-  }
+    let newStatus = 'active';
+    if (userInDb.last_login) {
+      const lastLoginDate = new Date(userInDb.last_login);
+      if (lastLoginDate < threeMonthsAgo) {
+        newStatus = 'inactive';
+      }
+    }
 
-  await saveSession(userInDb.id.toString());
-  const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ last_login: now.toISOString(), status: newStatus })
+      .eq('id', userInDb.id);
 
-  // (le reste du code est inchangé)
-  if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
-    const parsedPortId = parseInt(portId);
-    if (!isNaN(parsedPortId)) {
-      const { data: existingPortAssignment, error: existingPortError } = await supabase
-        .from('user_ports')
-        .select('*')
-        .eq('user_id', userProfile.id)
-        .eq('port_id', parsedPortId);
+    if (updateError) {
+      console.error('Erreur lors de la mise à jour de last_login et status:', updateError);
+    }
+    // --- Fin de la logique de mise à jour du statut ---
 
-      if (!existingPortAssignment || existingPortAssignment.length === 0) {
-        const { error: insertPortError } = await supabase
+    await saveSession(userInDb.id.toString());
+    const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+
+    if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
+      const parsedPortId = parseInt(portId);
+      if (isNaN(parsedPortId)) {
+        console.error('Invalid portId provided to login function:', portId);
+      } else {
+        const { data: existingPortAssignment, error: existingPortError } = await supabase
           .from('user_ports')
-          .insert({ user_id: userProfile.id, port_id: parsedPortId });
+          .select('*')
+          .eq('user_id', userProfile.id)
+          .eq('port_id', parsedPortId);
 
-        if (insertPortError) {
-          console.error('Error inserting user port during login:', insertPortError);
+        if (existingPortError) {
+          console.error('Error checking existing port assignment during login:', existingPortError);
+        }
+
+        if (!existingPortAssignment || existingPortAssignment.length === 0) {
+          const { error: insertPortError } = await supabase
+            .from('user_ports')
+            .insert({ user_id: userProfile.id, port_id: parsedPortId });
+
+          if (insertPortError) {
+            console.error('Error inserting user port during login:', insertPortError);
+          }
         }
       }
     }
-  }
-
-  redirectUser(userProfile?.role || 'pleasure_boater');
-};
-
+    redirectUser(userProfile?.role || 'pleasure_boater');
+  };
 
   const signup = async (
   firstName: string,
@@ -376,6 +410,8 @@ bcrypt.setRandomFallback((len: number) => {
       avatar: defaultAvatar,
       profile: 'pleasure_boater',
       phone: '',
+      status: 'active', // New users are active by default
+      last_login: new Date().toISOString(), // Set initial last_login
     })
     .select('id')
     .single();

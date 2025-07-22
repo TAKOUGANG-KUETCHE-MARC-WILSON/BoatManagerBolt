@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch } from 'react-native';
 import { router } from 'expo-router';
 import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User } from 'lucide-react-native';
@@ -10,62 +10,30 @@ interface Service {
   id: string;
   name: string;
   description: string;
-  icon: any;
+  icon: any; // Icons are still hardcoded as they are UI components
 }
 
 interface BoatManagerProfile {
-  id: string;
-  first_name: string;
-  last_name: string;
-  e_mail: string;
-  phone: string;
-  avatar: string;
-  job_title: string; // New field for job title
+  title: string;
   experience: string;
-  certification: string[]; // Changed to 'certification' to match DB
-  bio: string;
-  rating: number;
-  review_count: number;
-  created_at: string;
-  ports: Array<{
+  certifications: string[];
+  ports: {
     id: string;
     name: string;
-    boatCount: number; // This will be fetched separately
-  }>;
+    boatCount: number;
+  }[];
+  bio: string;
 }
 
-const services: Service[] = [
-  {
-    id: '1',
-    name: 'Maintenance',
-    description: 'Entretien régulier et préventif des bateaux',
-    icon: Wrench,
-  },
-  {
-    id: '2',
-    name: 'Amélioration',
-    description: 'Installation et mise à niveau d\'équipements',
-    icon: Tool,
-  },
-  {
-    id: '3',
-    name: 'Contrôle',
-    description: 'Inspection technique et diagnostics',
-    icon: Gauge,
-  },
-  {
-    id: '4',
-    name: 'Accès',
-    description: 'Gestion des accès et sécurité',
-    icon: Key,
-  },
-  {
-    id: '5',
-    name: 'Administratif',
-    description: 'Assistance pour les démarches administratives',
-    icon: FileText,
-  },
-];
+// Hardcoded service icons (map to fetched service names)
+const serviceIconsMap = {
+  'Maintenance': Wrench,
+  'Amélioration': Tool,
+  'Contrôle': Gauge,
+  'Accès': Key,
+  'Administratif': FileText,
+  // Add other service types and their icons as needed
+};
 
 const avatars = {
   male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
@@ -98,8 +66,8 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
             <Text style={styles.formLabel}>Votre fonction</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.job_title} // Changed from title to job_title
-              onChangeText={(text) => setFormData(prev => ({ ...prev, job_title: text }))}
+              value={formData.title}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
               placeholder="Ex: Boat Manager Senior"
             />
           </View>
@@ -118,8 +86,8 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
             <Text style={styles.formLabel}>Certifications</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.certification} // Changed from certifications to certification
-              onChangeText={(text) => setFormData(prev => ({ ...prev, certification: text }))}
+              value={formData.certifications}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, certifications: text }))}
               placeholder="Ex: Certification YBM, Expert Maritime"
             />
             <Text style={styles.helperText}>Séparez les certifications par des virgules</Text>
@@ -171,7 +139,7 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
       </View>
     </View>
   </Modal>
-));
+))
 
 // Extracted PhotoModal component
 const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
@@ -214,7 +182,7 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
       </View>
     </View>
   </Modal>
-));
+))
 
 // Extracted AvatarModal component
 const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
@@ -270,7 +238,7 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
       </View>
     </View>
   </Modal>
-));
+))
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -280,82 +248,127 @@ export default function ProfileScreen() {
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  const [profile, setProfile] = useState<BoatManagerProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral);
 
-  // État pour le formulaire d'édition
-  const [formData, setFormData] = useState({
-    job_title: '',
+  const [profile, setProfile] = useState<BoatManagerProfile>({
+    title: '',
     experience: '',
+    certifications: [],
     bio: '',
-    certification: '', // Changed to certification
+    ports: [],
   });
 
-  // État pour gérer l'ajout de certification
+  const [services, setServices] = useState<Service[]>([]);
+
+  const [formData, setFormData] = useState({
+    title: '',
+    experience: '',
+    bio: '',
+    certifications: '',
+  });
+
   const [newCertification, setNewCertification] = useState('');
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (!user?.id) {
-        setLoading(false);
-        return;
-      }
+    const fetchProfileData = async () => {
+      if (!user?.id) return;
 
-      const { data, error } = await supabase
+      // Fetch user profile details
+      const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('*, user_ports(port_id, ports(id, name))') // Select user and their ports
+        .select('first_name, last_name, e_mail, phone, avatar, job_title, experience, certification, bio, created_at')
         .eq('id', user.id)
         .single();
 
-      if (error) {
-        console.error('Error fetching profile:', error);
-        setLoading(false);
+      if (userError) {
+        console.error('Error fetching user profile:', userError);
         return;
       }
 
-      // Process ports and boat counts
-      const userPorts = data.user_ports || [];
-      const processedPorts = await Promise.all(userPorts.map(async (up: any) => {
-        const { count, error: countError } = await supabase
-          .from('boat')
-          .select('*', { count: 'exact', head: true })
-          .eq('id_port', up.ports.id);
+      if (userData) {
+        setLocalAvatar(userData.avatar || avatars.neutral);
+        setProfile(prev => ({
+          ...prev,
+          title: userData.job_title || '',
+          experience: userData.experience || '',
+          certifications: userData.certification || [],
+          bio: userData.bio || '',
+        }));
+        setFormData({
+          title: userData.job_title || '',
+          experience: userData.experience || '',
+          bio: userData.bio || '',
+          certifications: (userData.certification || []).join(', '),
+        });
+      }
 
-        if (countError) {
-          console.error('Error fetching boat count:', countError);
-          return { id: up.ports.id, name: up.ports.name, boatCount: 0 };
+      // Fetch managed ports and boat counts
+      const { data: userPortsData, error: userPortsError } = await supabase
+        .from('user_ports')
+        .select('port_id')
+        .eq('user_id', user.id);
+
+      if (userPortsError) {
+        console.error('Error fetching user ports:', userPortsError);
+        return;
+      }
+
+      const portIds = userPortsData.map(p => p.port_id);
+      if (portIds.length > 0) {
+        const { data: portsData, error: portsError } = await supabase
+          .from('ports')
+          .select('id, name');
+
+        if (portsError) {
+          console.error('Error fetching ports:', portsError);
+          return;
         }
-        return { id: up.ports.id, name: up.ports.name, boatCount: count || 0 };
-      }));
 
-      setProfile({
-        id: data.id,
-        first_name: data.first_name,
-        last_name: data.last_name,
-        e_mail: data.e_mail,
-        phone: data.phone,
-        avatar: data.avatar,
-        job_title: data.job_title || '',
-        experience: data.experience || '',
-        certification: data.certification || [],
-        bio: data.bio || '',
-        rating: data.rating || 0,
-        review_count: data.review_count || 0,
-        created_at: data.created_at,
-        ports: processedPorts,
-      });
+        const fetchedPorts = await Promise.all(portsData
+          .filter(p => portIds.includes(p.id))
+          .map(async (port) => {
+            const { count: boatCount, error: boatCountError } = await supabase
+              .from('boat')
+              .select('id', { count: 'exact' })
+              .eq('id_port', port.id);
 
-      setFormData({
-        job_title: data.job_title || '',
-        experience: data.experience || '',
-        bio: data.bio || '',
-        certification: (data.certification || []).join(', '),
-      });
+            if (boatCountError) {
+              console.error(`Error fetching boat count for port ${port.name}:`, boatCountError);
+            }
 
-      setLoading(false);
+            return {
+              id: port.id.toString(),
+              name: port.name,
+              boatCount: boatCount || 0,
+            };
+          })
+        );
+        setProfile(prev => ({ ...prev, ports: fetchedPorts }));
+      }
+
+      // Fetch services offered by the boat manager
+      const { data: userCategories, error: userCategoriesError } = await supabase
+        .from('user_categorie_service')
+        .select('categorie_service(id, description1, description2)')
+        .eq('user_id', user.id);
+
+      if (userCategoriesError) {
+        console.error('Error fetching user service categories:', userCategoriesError);
+        return;
+      }
+
+      if (userCategories) {
+        const fetchedServices: Service[] = userCategories.map(uc => ({
+          id: uc.categorie_service.id.toString(),
+          name: uc.categorie_service.description1,
+          description: uc.categorie_service.description2 || '',
+          icon: serviceIconsMap[uc.categorie_service.description1] || Ship, // Default to Ship icon if not found
+        }));
+        setServices(fetchedServices);
+      }
     };
 
-    fetchProfile();
+    fetchProfileData();
   }, [user]);
 
   const handleLogout = () => {
@@ -380,77 +393,42 @@ export default function ProfileScreen() {
     });
 
     if (!result.canceled) {
-      // Update avatar in DB
-      if (user?.id) {
-        const { error } = await supabase
-          .from('users')
-          .update({ avatar: result.assets[0].uri })
-          .eq('id', user.id);
-
-        if (error) {
-          console.error('Error updating avatar:', error);
-          Alert.alert('Erreur', 'Impossible de mettre à jour la photo de profil.');
-        } else {
-          setProfile(prev => prev ? { ...prev, avatar: result.assets[0].uri } : null);
-        }
-      }
+      setLocalAvatar(result.assets[0].uri); // Update local avatar state
+      // In a real app, you would also upload this to Supabase Storage and update the user's avatar URL in the database
     }
     setShowPhotoModal(false);
   };
 
-  const handleDeletePhoto = async () => {
-    // Reset to default neutral avatar in DB
-    if (user?.id) {
-      const { error } = await supabase
-        .from('users')
-        .update({ avatar: avatars.neutral })
-        .eq('id', user.id);
-
-      if (error) {
-        console.error('Error deleting avatar:', error);
-        Alert.alert('Erreur', 'Impossible de supprimer la photo de profil.');
-      } else {
-        setProfile(prev => prev ? { ...prev, avatar: avatars.neutral } : null);
-      }
-    }
+  const handleDeletePhoto = () => {
+    setLocalAvatar(avatars.neutral); // Set to default neutral avatar
+    // In a real app, you would also remove the avatar from Supabase Storage and update the user's avatar URL to null/default in the database
     setShowPhotoModal(false);
   };
 
-  const handleSelectAvatar = async (type: keyof typeof avatars) => {
-    // Update avatar in DB
-    if (user?.id) {
-      const { error } = await supabase
-        .from('users')
-        .update({ avatar: avatars[type] })
-        .eq('id', user.id);
-
-      if (error) {
-        console.error('Error selecting avatar:', error);
-        Alert.alert('Erreur', 'Impossible de sélectionner l\'avatar.');
-      } else {
-        setProfile(prev => prev ? { ...prev, avatar: avatars[type] } : null);
-      }
-    }
+  const handleSelectAvatar = (type: keyof typeof avatars) => {
+    setLocalAvatar(avatars[type]);
+    // In a real app, you would also update the user's avatar URL in the database
     setShowAvatarModal(false);
     setShowPhotoModal(false); // Close PhotoModal after selecting avatar
   };
 
   const handleEditProfile = () => {
-    if (profile) {
-      setFormData({
-        job_title: profile.job_title,
-        experience: profile.experience,
-        bio: profile.bio,
-        certification: (profile.certification || []).join(', '),
-      });
-      setShowEditModal(true);
-    }
+    setFormData({
+      title: profile.title,
+      experience: profile.experience,
+      bio: profile.bio,
+      certifications: profile.certifications.join(', '),
+    });
+    setShowEditModal(true);
   };
 
   const handleSaveProfile = async () => {
-    if (!profile?.id) return;
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      return;
+    }
 
-    const certificationsArray = formData.certification
+    const certificationsArray = formData.certifications
       .split(',')
       .map(cert => cert.trim())
       .filter(cert => cert !== '');
@@ -458,24 +436,25 @@ export default function ProfileScreen() {
     const { error } = await supabase
       .from('users')
       .update({
-        job_title: formData.job_title,
+        job_title: formData.title,
         experience: formData.experience,
         bio: formData.bio,
         certification: certificationsArray,
+        avatar: localAvatar, // Save the selected avatar URL
       })
-      .eq('id', profile.id);
+      .eq('id', user.id);
 
     if (error) {
       console.error('Error updating profile:', error);
-      Alert.alert('Erreur', 'Impossible de mettre à jour votre profil.');
+      Alert.alert('Erreur', `Impossible de mettre à jour le profil: ${error.message}`);
     } else {
-      setProfile(prev => prev ? {
+      setProfile(prev => ({
         ...prev,
-        job_title: formData.job_title,
+        title: formData.title,
         experience: formData.experience,
         bio: formData.bio,
-        certification: certificationsArray,
-      } : null);
+        certifications: certificationsArray,
+      }));
       setShowEditModal(false);
       Alert.alert('Succès', 'Votre profil a été mis à jour avec succès.');
     }
@@ -485,27 +464,11 @@ export default function ProfileScreen() {
     if (newCertification.trim()) {
       setFormData(prev => ({
         ...prev,
-        certification: prev.certification ? `${prev.certification}, ${newCertification}` : newCertification,
+        certifications: prev.certifications ? `${prev.certifications}, ${newCertification}` : newCertification,
       }));
       setNewCertification('');
     }
   };
-
-  if (loading) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text>Chargement du profil...</Text>
-      </View>
-    );
-  }
-
-  if (!profile) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text>Profil non trouvé.</Text>
-      </View>
-    );
-  }
 
   return (
     <ScrollView style={styles.container}>
@@ -513,7 +476,7 @@ export default function ProfileScreen() {
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
           <Image 
-            source={{ uri: profile.avatar }} // Use profile.avatar here
+            source={{ uri: localAvatar }} // Use localAvatar here
             style={styles.avatar}
           />
           <TouchableOpacity 
@@ -524,8 +487,8 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.profileInfo}>
-          <Text style={styles.name}>{profile.first_name} {profile.last_name}</Text>
-          <Text style={styles.title}>{profile.job_title}</Text>
+          <Text style={styles.name}>{user?.firstName} {user?.lastName}</Text>
+          <Text style={styles.title}>{profile.title}</Text>
           <TouchableOpacity 
             style={styles.editProfileButton}
             onPress={handleEditProfile}
@@ -539,22 +502,27 @@ export default function ProfileScreen() {
       <View style={styles.section}>
         <View style={styles.infoRow}>
           <Mail size={20} color="#0066CC" />
-          <Text style={styles.infoText}>{profile.e_mail}</Text>
+          <Text style={styles.infoText}>{user?.email}</Text>
         </View>
         <View style={styles.infoRow}>
           <Phone size={20} color="#0066CC" />
-          <Text style={styles.infoText}>{profile.phone}</Text>
+          <Text style={styles.infoText}>{user?.phone || 'N/A'}</Text>
         </View>
         <View style={styles.infoRow}>
           <Calendar size={20} color="#0066CC" />
-          <Text style={styles.infoText}>Membre depuis {new Date(profile.created_at).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' })}</Text>
+          <Text style={styles.infoText}>
+            Membre depuis{' '}
+            {user?.createdAt && !isNaN(new Date(user.createdAt).getTime())
+              ? new Date(user.createdAt).toISOString().split('T')[0] // Format as YYYY-MM-DD
+              : 'N/A'}
+          </Text>
         </View>
       </View>
 
       {/* Biographie */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>À propos de moi</Text>
-        <Text style={styles.bioText}>{profile.bio}</Text>
+        <Text style={styles.bioText}>{profile.bio || 'Aucune biographie renseignée.'}</Text>
       </View>
 
       {/* Experience & Certifications */}
@@ -563,7 +531,7 @@ export default function ProfileScreen() {
           <Shield size={20} color="#0066CC" />
           <View>
             <Text style={styles.experienceLabel}>Expérience</Text>
-            <Text style={styles.experienceValue}>{profile.experience}</Text>
+            <Text style={styles.experienceValue}>{profile.experience || 'Non renseignée'}</Text>
           </View>
         </View>
         <View style={styles.experienceItem}>
@@ -571,7 +539,7 @@ export default function ProfileScreen() {
           <View>
             <Text style={styles.experienceLabel}>Certifications</Text>
             <Text style={styles.experienceValue}>
-              {(profile.certification || []).join(', ')}
+              {profile.certifications.length > 0 ? profile.certifications.join(', ') : 'Aucune certification'}
             </Text>
           </View>
         </View>
@@ -600,42 +568,55 @@ export default function ProfileScreen() {
       {/* Tab Content */}
       {selectedTab === 'services' ? (
         <View style={styles.servicesContainer}>
-          {services.map((service) => (
-            <View key={service.id} style={styles.serviceCard}>
-              <View style={styles.serviceIcon}>
-                <service.icon size={24} color="#0066CC" />
+          {services.length > 0 ? (
+            services.map((service) => (
+              <View key={service.id} style={styles.serviceCard}>
+                <View style={styles.serviceIcon}>
+                  {/* MODIFIED LINE: Render the icon component using JSX syntax */}
+                  {service.icon && <service.icon size={24} color="#0066CC" />} 
+                </View>
+                <View style={styles.serviceInfo}>
+                  <Text style={styles.serviceName}>{service.name}</Text>
+                  <Text style={styles.serviceDescription}>{service.description}</Text>
+                </View>
               </View>
-              <View style={styles.serviceInfo}>
-                <Text style={styles.serviceName}>{service.name}</Text>
-                <Text style={styles.serviceDescription}>{service.description}</Text>
-              </View>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun service configuré.</Text>
             </View>
-          ))}
+          )}
         </View>
       ) : (
         <View style={styles.portsContainer}>
-          {profile.ports.map((port) => (
-            <View key={port.id} style={styles.portCard}>
-              <View style={styles.portIcon}>
-                <Ship size={24} color="#0066CC" />
-              </View>
-              <View style={styles.portInfo}>
-                <Text style={styles.portName}>{port.name}</Text>
-                <View style={styles.portDetails}>
-                  <View style={styles.portDetailRow}>
-                    <MapPin size={16} color="#666" />
-                    <Text style={styles.portDetailText}>{port.name}</Text>
-                  </View>
-                  <View style={styles.portDetailRow}>
-                    <Ship size={16} color="#666" />
-                    <Text style={styles.portDetailText}>
-                      {port.boatCount} bateau{port.boatCount > 1 ? 'x' : ''}
-                    </Text>
+          {profile.ports.length > 0 ? (
+            profile.ports.map((port) => (
+              <View key={port.id} style={styles.portCard}>
+                <View style={styles.portIcon}>
+                  <Ship size={24} color="#0066CC" />
+                </View>
+                <View style={styles.portInfo}>
+                  <Text style={styles.portName}>{port.name}</Text>
+                  <View style={styles.portDetails}>
+                    <View style={styles.portDetailRow}>
+                      <MapPin size={16} color="#666" />
+                      <Text style={styles.portDetailText}>{port.name}</Text>
+                    </View>
+                    <View style={styles.portDetailRow}>
+                      <Ship size={16} color="#666" />
+                      <Text style={styles.portDetailText}>
+                        {port.boatCount} bateau{port.boatCount > 1 ? 'x' : ''}
+                      </Text>
+                    </View>
                   </View>
                 </View>
               </View>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun port géré.</Text>
             </View>
-          ))}
+          )}
         </View>
       )}
 
@@ -663,7 +644,7 @@ export default function ProfileScreen() {
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
-        hasCustomPhoto={profile.avatar !== avatars.neutral}
+        hasCustomPhoto={localAvatar !== avatars.neutral}
         onSelectAvatar={() => setShowAvatarModal(true)}
       />
       <AvatarModal 
@@ -725,7 +706,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 20,
-    marginBottom: 16,
   },
   editProfileText: {
     color: '#0066CC',
@@ -1103,5 +1083,16 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     flex: 1,
   },
+  emptyState: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
 });
-

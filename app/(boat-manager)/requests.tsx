@@ -1,350 +1,60 @@
 import { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native'; // Ajoutez 'Modal' ici
+// MODIFICATION ICI : Ajoutez 'X' à la liste des imports
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro, X } from 'lucide-react-native';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+
+import { useAuth } from '@/context/AuthContext'; // Import useAuth
 
 // Types de statuts pour les différents rôles
 type BoatManagerRequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
 type SortKey = 'date' | 'type' | 'client' | 'company';
 
+// Updated Request interface to match Supabase data structure
 interface Request {
   id: string;
-  title: string;
-  type: string;
-  status: BoatManagerRequestStatus;
-  urgency: UrgencyLevel;
-  date: string;
-  description: string;
-  category: string;
+  title: string; // Maps to service_request.description (or a new title column if added)
+  type: string; // Maps to categorie_service.description1
+  status: BoatManagerRequestStatus; // Maps to service_request.statut
+  urgency: UrgencyLevel; // Maps to service_request.urgence
+  date: string; // Maps to service_request.date
+  description: string; // Maps to service_request.description
+  category: string; // Not directly in service_request, derived or removed
   client: {
     id: string;
-    name: string;
+    name: string; // Derived from first_name, last_name
     avatar: string;
+    email: string;
+    phone: string;
     boat: {
       name: string;
       type: string;
     };
   };
-  boatManager: {
+  boatManager?: { // Optional, as not all requests have a BM directly involved in creation
     id: string;
-    name: string;
-    port: string;
+    name: string; // Derived from first_name, last_name
+    port: string; // Derived from users.port
   };
-  company?: {
+  company?: { // Optional
     id: string;
-    name: string;
+    name: string; // Derived from company_name
   };
-  currentHandler?: 'boat_manager' | 'company';
-  scheduledDate?: string;
-  invoiceReference?: string;
-  invoiceAmount?: number;
-  invoiceDate?: string;
-  isNew?: boolean;
-  hasStatusUpdate?: boolean;
+  currentHandler?: 'boat_manager' | 'company'; // Derived or managed client-side
+  quoteIds?: string[]; // Not directly from DB, might be derived or removed
+  location?: string; // Not directly from DB, might be derived or removed
+  notes?: string; // Maps to service_request.note_add
+  scheduledDate?: string; // Derived from rendez_vous table or note_add
+  invoiceReference?: string; // Derived from note_add
+  invoiceAmount?: number; // Maps to service_request.prix
+  invoiceDate?: string; // Derived from note_add
+  isNew?: boolean; // Client-side UI flag
+  hasStatusUpdate?: boolean; // Client-side UI flag
 }
 
-// Exemples de demandes avec les 11 statuts possibles chez le Boat Manager
-const mockRequests: Request[] = [
-  {
-    id: '1',
-    title: 'Entretien moteur',
-    type: 'Maintenance',
-    status: 'in_progress',
-    urgency: 'urgent',
-    date: '2024-02-19',
-    description: 'Révision complète du moteur et changement des filtres',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'boat_manager',
-    isNew: true
-  },
-  {
-    id: '2',
-    title: 'Réparation voile',
-    type: 'Réparation',
-    status: 'in_progress',
-    urgency: 'urgent',
-    date: '2024-02-24',
-    description: 'Déchirure importante sur la grand-voile, besoin d\'une réparation rapide',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    currentHandler: 'boat_manager',
-    hasStatusUpdate: true
-  },
-  {
-    id: '3',
-    title: 'Installation GPS',
-    type: 'Amélioration',
-    status: 'forwarded',
-    urgency: 'normal',
-    date: '2024-02-23',
-    description: 'Installation d\'un nouveau système GPS pour navigation côtière',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company'
-  },
-  {
-    id: '4',
-    title: 'Changement batteries',
-    type: 'Maintenance',
-    status: 'quote_sent',
-    urgency: 'normal',
-    date: '2024-02-22',
-    description: 'Remplacement des batteries de service qui ne tiennent plus la charge',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    }
-  },
-  {
-    id: '5',
-    title: 'Nettoyage coque',
-    type: 'Maintenance',
-    status: 'quote_accepted',
-    urgency: 'normal',
-    date: '2024-02-21',
-    description: 'Nettoyage complet de la coque et traitement antifouling',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '6',
-    title: 'Installation panneau solaire',
-    type: 'Amélioration',
-    status: 'scheduled',
-    urgency: 'normal',
-    date: '2024-02-20',
-    description: 'Installation de panneaux solaires pour autonomie énergétique',
-    category: 'Services',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-      boat: {
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company',
-    scheduledDate: '2024-03-10'
-  },
-  {
-    id: '7',
-    title: 'Vérification amarrage',
-    type: 'Sécurité',
-    status: 'completed',
-    urgency: 'urgent',
-    date: '2024-02-19',
-    description: 'Vérification de l\'amarrage avant tempête annoncée',
-    category: 'Sécurité',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    }
-  },
-  {
-    id: '8',
-    title: 'Renouvellement assurance',
-    type: 'Administratif',
-    status: 'ready_to_bill',
-    urgency: 'normal',
-    date: '2024-02-18',
-    description: 'Assistance pour le renouvellement de l\'assurance du bateau',
-    category: 'Administratif',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm4',
-      name: 'Lucas Bernard',
-      port: 'Port de Saint-Tropez'
-    }
-  },
-  {
-    id: '9',
-    title: 'Remplacement hélice',
-    type: 'Réparation',
-    status: 'to_pay',
-    urgency: 'normal',
-    date: '2024-02-17',
-    description: 'Remplacement de l\'hélice endommagée',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    invoiceReference: 'FAC-2024-001',
-    invoiceAmount: 850,
-    invoiceDate: '2024-02-20'
-  },
-  {
-    id: '10',
-    title: 'Contrôle annuel',
-    type: 'Contrôle',
-    status: 'paid',
-    urgency: 'normal',
-    date: '2024-02-16',
-    description: 'Contrôle technique annuel obligatoire',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    invoiceReference: 'FAC-2024-002',
-    invoiceAmount: 450,
-    invoiceDate: '2024-02-18'
-  },
-  {
-    id: '11',
-    title: 'Mise en vente',
-    type: 'Vente',
-    status: 'cancelled',
-    urgency: 'normal',
-    date: '2024-02-15',
-    description: 'Publication de l\'annonce de vente du bateau',
-    category: 'Vente/Achat',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-      boat: {
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    }
-  }
-];
-
+// Configuration des statuts pour le Boat Manager
 const statusConfig = {
   submitted: {
     icon: Clock,
@@ -427,19 +137,172 @@ const statusConfig = {
 
 
 export default function RequestsScreen() {
+  const { user } = useAuth(); // Get the current user from AuthContext
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortAsc, setSortAsc] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<BoatManagerRequestStatus | null>(null);
   const [selectedUrgency, setSelectedUrgency] = useState<UrgencyLevel | null>(null);
-  const [requests, setRequests] = useState<Request[]>(mockRequests);
+  const [requests, setRequests] = useState<Request[]>([]); // Initialize as empty
+  const [loading, setLoading] = useState(true); // Add loading state
 
   // New state for status change modal
   const [showStatusChangeModal, setShowStatusChangeModal] = useState(false);
   const [requestToUpdate, setRequestToUpdate] = useState<Request | null>(null);
 
-  // Statistiques des demandes
+  useEffect(() => {
+    const fetchRequests = async () => {
+      setLoading(true);
+      if (!user?.id) {
+        Alert.alert('Erreur', 'Utilisateur non authentifié.');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            statut,
+            urgence,
+            date,
+            prix,
+            note_add,
+            id_client,
+            id_boat_manager,
+            id_companie,
+            categorie_service(description1),
+            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
+            boat(name, type, place_de_port)
+          `)
+          .eq('id_boat_manager', user.id); // Filter by the connected Boat Manager's ID
+
+        if (error) {
+          console.error('Error fetching requests:', error);
+          Alert.alert('Erreur', 'Impossible de charger les demandes.');
+          return;
+        }
+
+        const formattedRequests: Request[] = await Promise.all(data.map(async (req: any) => {
+          // Fetch boat manager details if id_boat_manager is present
+          let boatManagerDetails: Request['boatManager'] | undefined;
+          if (req.id_boat_manager) {
+            const { data: bmData, error: bmError } = await supabase
+              .from('users')
+              .select('id, first_name, last_name, port') // Assuming 'port' is a column in users table for BM
+              .eq('id', req.id_boat_manager)
+              .single();
+            if (!bmError && bmData) {
+              boatManagerDetails = {
+                id: bmData.id.toString(),
+                name: `${bmData.first_name} ${bmData.last_name}`,
+                port: bmData.port || 'N/A' // Default if port is null
+              };
+            }
+          }
+
+          // Fetch company details if id_companie is present
+          let companyDetails: Request['company'] | undefined;
+          if (req.id_companie) {
+            const { data: companyData, error: companyError } = await supabase
+              .from('users')
+              .select('id, company_name')
+              .eq('id', req.id_companie)
+              .single();
+            if (!companyError && companyData) {
+              companyDetails = {
+                id: companyData.id.toString(),
+                name: companyData.company_name || 'N/A'
+              };
+            }
+          }
+
+          // Parse invoice details from note_add if present
+          let invoiceReference: string | undefined;
+          let invoiceDate: string | undefined;
+          // Correction: Ensure req.note_add is not null before calling .match()
+          // Also, fix operator precedence with parentheses
+          if (req.note_add && (req.statut === 'to_pay' || req.statut === 'paid')) {
+            const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
+            if (invoiceMatch) {
+              invoiceReference = invoiceMatch[1];
+              invoiceDate = invoiceMatch[2];
+            }
+          }
+          
+          // Determine scheduledDate from note_add or rendez_vous if available
+          let scheduledDate: string | undefined;
+          // For now, we'll assume it's part of note_add if status is 'scheduled'
+          if (req.statut === 'scheduled' && req.note_add) {
+            const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+            if (scheduledMatch) {
+              scheduledDate = scheduledMatch[1];
+            }
+          }
+
+
+          return {
+            id: req.id.toString(),
+            title: req.description, // Using description as title for now
+            type: req.categorie_service?.description1 || 'N/A',
+            status: req.statut as BoatManagerRequestStatus,
+            urgency: req.urgence as UrgencyLevel,
+            date: req.date,
+            description: req.description,
+            category: 'Services', // Default category, adjust if needed
+            client: {
+              id: req.users.id.toString(),
+              name: `${req.users.first_name} ${req.users.last_name}`,
+              avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop', // Default avatar
+              email: req.users.e_mail,
+              phone: req.users.phone,
+              boat: {
+                name: req.boat.name,
+                type: req.boat.type
+              }
+            },
+            boatManager: boatManagerDetails,
+            company: companyDetails,
+            notes: req.note_add,
+            scheduledDate: scheduledDate,
+            invoiceReference: invoiceReference,
+            invoiceAmount: req.prix,
+            invoiceDate: invoiceDate,
+            isNew: false, // Managed client-side
+            hasStatusUpdate: false // Managed client-side
+          };
+        }));
+
+        setRequests(formattedRequests);
+      } catch (e) {
+        console.error('Unexpected error:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRequests();
+  }, [user]); // Add user to dependency array to refetch when user changes
+
+  // Marquer les demandes comme vues lorsque l'écran est ouvert
+  useEffect(() => {
+    // This effect runs after initial fetch, so it will update the state
+    // with the fetched requests, marking them as not new/updated.
+    // This is a client-side UI management, not persisting to DB.
+    setRequests(prev =>
+      prev.map(request => ({
+        ...request,
+        isNew: false,
+        hasStatusUpdate: false
+      }))
+    );
+  }, [requests.length]); // Rerun when the number of requests changes (after initial fetch)
+
+
   const requestsSummary = useMemo(() => {
     return {
       total: requests.length,
@@ -502,9 +365,12 @@ export default function RequestsScreen() {
           ? aName.localeCompare(bName)
           : bName.localeCompare(aName);
       } else {
+        // Fallback for 'type' or other string fields
+        const aValue = a[sortKey as keyof Request] as string;
+        const bValue = b[sortKey as keyof Request] as string;
         return sortAsc
-          ? a[sortKey].localeCompare(b[sortKey])
-          : b[sortKey].localeCompare(a[sortKey]);
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
       }
     });
   }, [sortKey, sortAsc, searchQuery, selectedStatus, selectedUrgency, requests]);
@@ -533,11 +399,19 @@ export default function RequestsScreen() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-FR', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
+    // If the date is already in YYYY-MM-DD format, just return it
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    // Otherwise, try to parse and format
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      return 'Invalid Date'; // Handle invalid date strings
+    }
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
   };
 
   const handleFilterByStatus = (status: BoatManagerRequestStatus | null) => {
@@ -555,11 +429,11 @@ export default function RequestsScreen() {
   };
 
   const getCurrentHandlerText = (request: Request) => {
-    if (request.status === 'scheduled') {
-      return `Planifiée le ${formatDate(request.scheduledDate || '')}`;
+    if (request.status === 'scheduled' && request.scheduledDate) {
+      return `Planifiée le ${formatDate(request.scheduledDate)}`;
     }
     
-    if (request.status === 'to_pay') {
+    if (request.status === 'to_pay' && request.invoiceReference) {
       return 'Facture en attente de paiement';
     }
     
@@ -567,17 +441,33 @@ export default function RequestsScreen() {
   };
 
   // Function to handle status update
-  const handleUpdateStatus = (newStatus: BoatManagerRequestStatus) => {
+  const handleUpdateStatus = async (newStatus: BoatManagerRequestStatus) => {
     if (requestToUpdate) {
-      setRequests(prev =>
-        prev.map(req =>
-          req.id === requestToUpdate.id
-            ? { ...req, status: newStatus, isNew: false, hasStatusUpdate: false }
-            : req
-        )
-      );
-      setRequestToUpdate(null);
-      setShowStatusChangeModal(false);
+      try {
+        const { error } = await supabase
+          .from('service_request')
+          .update({ statut: newStatus })
+          .eq('id', parseInt(requestToUpdate.id));
+
+        if (error) {
+          console.error('Error updating status:', error);
+          Alert.alert('Erreur', `Impossible de mettre à jour le statut: ${error.message}`);
+        } else {
+          setRequests(prev =>
+            prev.map(req =>
+              req.id === requestToUpdate.id
+                ? { ...req, status: newStatus, isNew: false, hasStatusUpdate: false }
+                : req
+            )
+          );
+          setRequestToUpdate(null);
+          setShowStatusChangeModal(false);
+          Alert.alert('Succès', 'Statut mis à jour avec succès.');
+        }
+      } catch (e) {
+        console.error('Unexpected error during status update:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la mise à jour du statut.');
+      }
     }
   };
 
@@ -632,6 +522,14 @@ export default function RequestsScreen() {
       </View>
     </Modal>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des demandes...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -915,7 +813,8 @@ export default function RequestsScreen() {
         </View>
 
         <View style={styles.requestsList}>
-          {filteredAndSortedRequests.map((request) => {
+          {filteredAndSortedRequests.length > 0 ? (
+            filteredAndSortedRequests.map((request) => {
               const status = statusConfig[request.status];
               const StatusIcon = status.icon;
               const currentHandlerText = getCurrentHandlerText(request);
@@ -967,9 +866,7 @@ export default function RequestsScreen() {
                   <View style={styles.requestDetails}>
                     <View style={styles.requestMetadata}>
                       <FileText size={16} color="#666" />
-                      <Text style={styles.requestDescription} numberOfLines={2}>
-                        {request.description}
-                      </Text>
+                      {/* Removed duplicate description display */}
                     </View>
                     <View style={styles.requestDate}>
                       <Calendar size={16} color="#666" />
@@ -985,6 +882,13 @@ export default function RequestsScreen() {
                         </Text>
                       </View>
                     </View>
+                    
+                    {request.boatManager && (
+                      <View style={styles.boatManagerInfo}>
+                        <User size={16} color="#0066CC" />
+                        <Text style={styles.boatManagerName}>{request.boatManager.name}</Text>
+                      </View>
+                    )}
                     
                     {request.company && (
                       <View style={styles.companyInfo}>
@@ -1045,7 +949,11 @@ export default function RequestsScreen() {
                   </View>
                 </TouchableOpacity>
               );
-            })}
+            })
+         ) : (
+  <Text style={styles.emptyStateText}>Aucune demande trouvée.</Text>
+)}
+          
         </View>
       </View>
       <StatusChangeModal />
@@ -1057,6 +965,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   summaryContainer: {
     backgroundColor: 'white',
@@ -1273,10 +1185,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sortButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
+    gap: 8,
   },
   sortButtonActive: {
     backgroundColor: '#e0f2fe',
@@ -1359,11 +1274,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 4,
+    flexWrap: 'wrap', // Allow content to wrap
   },
   requestTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1a1a1a',
+    flexShrink: 1, // Allow text to shrink
   },
   requestType: {
     fontSize: 14,
@@ -1384,7 +1301,7 @@ const styles = StyleSheet.create({
   urgentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEE2E2',
+    backgroundColor: '#FEE2F2',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
@@ -1438,6 +1355,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  boatManagerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  boatManagerName: {
+    fontSize: 14,
+    color: '#0066CC',
+    fontWeight: '500',
+  },
   companyInfo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1473,29 +1405,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#F5F3FF',
+    backgroundColor: '#EAB308',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
     alignSelf: 'flex-start',
   },
   invoiceText: {
-    fontSize: 12,
-    color: '#8B5CF6',
+    fontSize: 14,
+    color: '#EAB308',
+    fontWeight: '500',
   },
   paidInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#D1FAE5',
+    backgroundColor: '#a6acaf',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
     alignSelf: 'flex-start',
   },
   paidText: {
-    fontSize: 12,
-    color: '#10B981',
+    fontSize: 14,
+    color: '#a6acaf',
+    fontWeight: '500',
   },
   requestActions: {
     flexDirection: 'row',
@@ -1542,7 +1476,8 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: 'white',
@@ -1593,4 +1528,3 @@ const styles = StyleSheet.create({
     color: '#666',
   },
 });
-

@@ -29,7 +29,7 @@ export default function BoatManagerTabLayout() {
         const { count: messagesCount, error: messagesError } = await supabase
           .from('messages')
           .select('id', { count: 'exact' })
-          .eq('receiver_id', user.id.toString())
+          .eq('receiver_id', user.id)
           .eq('is_read', false);
 
         if (messagesError) {
@@ -43,11 +43,24 @@ export default function BoatManagerTabLayout() {
         setUnreadMessages(0);
       }
 
-      // Simulation de la récupération des requêtes non lues
-      // Remplacez ceci par une logique de requête réelle pour vos demandes
-      setTimeout(() => {
-        setUnreadRequests(2); // Exemple de valeur simulée
-      }, 500);
+      // Récupération des requêtes non lues (par exemple, les demandes soumises)
+      try {
+        const { count: requestsCount, error: requestsError } = await supabase
+          .from('service_request')
+          .select('id', { count: 'exact' })
+          .eq('id_boat_manager', user.id)
+          .eq('statut', 'submitted'); // Count requests with 'submitted' status as unread
+
+        if (requestsError) {
+          console.error('Erreur lors de la récupération des requêtes non lues:', requestsError);
+          setUnreadRequests(0);
+        } else {
+          setUnreadRequests(requestsCount || 0);
+        }
+      } catch (e) {
+        console.error('Erreur inattendue lors de la récupération des requêtes non lues:', e);
+        setUnreadRequests(0);
+      }
     };
 
     fetchUnreadCounts();
@@ -133,3 +146,4 @@ export default function BoatManagerTabLayout() {
     </Tabs>
   );
 }
+
