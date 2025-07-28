@@ -90,6 +90,16 @@ export default function NauticalCompanyTabLayout() {
           href: null, // Masquer cet écran de la barre d'onglets
         }}
       />
+      {/* L'entrée suivante est supprimée car appointment-form.tsx est maintenant un composant */}
+      {/* <Tabs.Screen
+        name="planning/appointment-form.tsx"
+        options={{
+          title: 'Devis',
+          headerShown: true,
+          href: null, // Masquer cet écran de la barre d'onglets
+        }}
+      /> */}
     </Tabs>
+    
   );
 }

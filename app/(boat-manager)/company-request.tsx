@@ -197,62 +197,84 @@ export default function CompanyRequestScreen() {
 
     // Fetch all nautical companies
     const fetchNauticalCompanies = async () => {
-      if (!user) return;
+  if (!user || !localAppointment.type) return;
 
-      try {
-        // 1. Get ports managed by the current Boat Manager
-        const { data: bmPorts, error: bmPortsError } = await supabase
-          .from('user_ports')
-          .select('port_id')
-          .eq('user_id', user.id);
+  try {
+    // 1. Ports du boat manager
+    const { data: bmPorts, error: bmPortsError } = await supabase
+      .from('user_ports')
+      .select('port_id')
+      .eq('user_id', user.id);
 
-        if (bmPortsError) throw bmPortsError;
-        const managedPortIds = bmPorts.map(p => p.port_id);
+    if (bmPortsError) throw bmPortsError;
+    const managedPortIds = bmPorts.map(p => p.port_id);
 
-        if (managedPortIds.length === 0) {
-          setAllNauticalCompanies([]);
-          return;
-        }
+    if (managedPortIds.length === 0) {
+      setAllNauticalCompanies([]);
+      return;
+    }
 
-        // 2. Get companies that share at least one port with the current BM
-        const { data: companyUsers, error: companyUsersError } = await supabase
-          .from('users')
-          .select('id, company_name, avatar, address, e_mail, phone, user_categorie_service(categorie_service(id, description1)), user_ports(port_id, ports(name))')
-          .eq('profile', 'nautical_company');
+    // 2. Récupérer l’ID du service sélectionné
+    const { data: serviceCategory, error: serviceCategoryError } = await supabase
+      .from('categorie_service')
+      .select('id')
+      .eq('description1', localAppointment.type)
+      .single();
 
-        if (companyUsersError) throw companyUsersError;
+    if (serviceCategoryError || !serviceCategory) {
+      console.error('Erreur service:', serviceCategoryError);
+      setAllNauticalCompanies([]);
+      return;
+    }
 
-        const companiesForBM: NauticalCompany[] = [];
+    const serviceId = serviceCategory.id;
 
-        for (const company of companyUsers) {
-          const companyPortIds = company.user_ports.map((up: any) => up.port_id);
-          const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
+    // 3. Récupérer les entreprises liées à ce service
+    const { data: companyUsers, error: companyUsersError } = await supabase
+      .from('users')
+      .select(`
+        id, company_name, avatar, address, e_mail, phone,
+        user_categorie_service(categorie_service_id),
+        user_ports(port_id, ports(name))
+      `)
+      .eq('profile', 'nautical_company');
 
-          if (commonPorts.length > 0) {
-            // Pick the first common port for display on the compact card
-            const commonPortName = company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '';
+    if (companyUsersError) throw companyUsersError;
 
-            companiesForBM.push({
-              id: company.id,
-              name: company.company_name,
-              logo: company.avatar,
-              location: commonPortName, // Common port name for display in modal list
-              categories: company.user_categorie_service.map((ucs: any) => ({
-                id: ucs.categorie_service.id,
-                description1: ucs.categorie_service.description1
-              })),
-              contactEmail: company.e_mail,
-              contactPhone: company.phone,
-              ports: company.user_ports.map((up: any) => ({ id: up.port_id, name: up.ports.name })) // All ports for company
-            });
-          }
-        }
-        setAllNauticalCompanies(companiesForBM);
+    const companiesForBM: NauticalCompany[] = [];
 
-      } catch (e) {
-        console.error('Error fetching nautical companies:', e);
+    for (const company of companyUsers) {
+      const portIds = company.user_ports.map((up: any) => up.port_id);
+      const hasCommonPort = portIds.some(pid => managedPortIds.includes(pid));
+
+      const serviceIds = company.user_categorie_service.map((ucs: any) => ucs.categorie_service_id);
+      const offersSelectedService = serviceIds.includes(serviceId);
+
+      if (hasCommonPort && offersSelectedService) {
+        const portName = company.user_ports.find((up: any) =>
+          managedPortIds.includes(up.port_id))?.ports?.name || '';
+
+        companiesForBM.push({
+          id: company.id.toString(),
+          name: company.company_name,
+          logo: company.avatar,
+          location: portName,
+          contactEmail: company.e_mail,
+          contactPhone: company.phone,
+          categories: [{ id: serviceId, description1: localAppointment.type }],
+          ports: company.user_ports.map((up: any) => ({ id: up.port_id, name: up.ports.name })),
+        });
       }
-    };
+    }
+
+    setAllNauticalCompanies(companiesForBM);
+
+  } catch (e) {
+    console.error('Erreur lors du fetch des entreprises :', e);
+    setAllNauticalCompanies([]);
+  }
+};
+
 
     fetchAllClients();
     fetchServiceTypes();
@@ -700,6 +722,8 @@ const BoatSelectionModal = ({ client }: { client: Client | null }) => (
                 <Text style={styles.modalItemText}>{type}</Text>
               </TouchableOpacity>
             ))}
+
+
           </ScrollView>
         </View>
       </View>

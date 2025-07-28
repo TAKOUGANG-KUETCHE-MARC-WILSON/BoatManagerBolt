@@ -36,6 +36,7 @@ interface PleasureBoater extends BaseUser {
     portId: string;
     boatManagerId: string;
   }>;
+  phone?: string; // Ajout de la propriété phone ici
 }
 
 interface BoatManagerUser extends BaseUser {
@@ -159,7 +160,7 @@ bcrypt.setRandomFallback((len: number) => {
   const getAndSetUserProfile = async (authUserId: string) => {
     const { data, error } = await supabase
       .from('users')
-      .select('*, user_ports(port_id)')
+      .select('*, e_mail, first_name, last_name, avatar, phone, job_title, experience, certification, bio, created_at, company_name, siret, address, profile, user_ports(port_id)') // Ensure 'phone' is selected
       .eq('id', authUserId)
       .single();
 
@@ -207,6 +208,11 @@ bcrypt.setRandomFallback((len: number) => {
         avatar: data.avatar,
         role: data.profile as UserRole,
         createdAt: data.created_at, // Add created_at here
+        phone: data.phone, // Ensure phone is assigned here
+        job_title: data.job_title,
+        experience: data.experience,
+        bio: data.bio,
+        certification: data.certification,
       };
 
       let userProfile: User;
@@ -739,4 +745,3 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
     return <WrappedComponent {...props} onSubmit={handleSubmit} />;
   };
 }
-

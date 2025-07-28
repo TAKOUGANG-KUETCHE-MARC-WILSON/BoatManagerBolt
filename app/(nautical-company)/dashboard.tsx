@@ -1,50 +1,231 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
-import { Ship, Calendar, FileText, Clock, ChevronRight, TriangleAlert as AlertTriangle, Star, MapPin, MessageSquare } from 'lucide-react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image } from 'react-native';
+import { Users, FileText, Building, ChevronRight, Clock, CircleCheck as CheckCircle, MessageSquare, MapPin, Ship, Briefcase,TriangleAlert as AlertTriangle, Star, CircleAlert as AlertCircle, Euro, Calendar } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase';
 
 export default function DashboardScreen() {
   const { user } = useAuth();
   const [currentDate] = useState(new Date());
+  const [loading, setLoading] = useState(true);
 
-  const stats = {
-    upcomingAppointments: 8,
-    pendingRequests: 5,
-    urgentRequests: 2,
-    newMessages: 3
-  };
+  const [stats, setStats] = useState({
+    upcomingAppointments: 0,
+    pendingRequests: 0,
+    urgentRequests: 0,
+    newMessages: 0,
+    performanceRating: 0,
+    performanceReviewCount: 0,
+  });
+
+  const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [topRatedPartners, setTopRatedPartners] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // Fetch current nautical company's performance stats
+        const { data: companyProfile, error: profileError } = await supabase
+          .from('users')
+          .select('rating, review_count')
+          .eq('id', user.id)
+          .single();
+
+        if (profileError) {
+          console.error('Error fetching company profile:', profileError);
+        }
+
+        // Fetch upcoming appointments
+        const { data: appointmentsData, count: upcomingAppointmentsCount, error: appointmentsError } = await supabase
+          .from('rendez_vous')
+          .select(`
+            id,
+            date_rdv,
+            heure,
+            description,
+            id_client(first_name, last_name),
+            id_boat(name, type, place_de_port)
+          `, { count: 'exact' })
+          .eq('id_companie', user.id)
+          .gte('date_rdv', new Date().toISOString().split('T')[0]) // Date >= today
+          .in('statut', ['en_attente', 'confirme']) // Assuming these are upcoming statuses
+          .order('date_rdv', { ascending: true })
+          .order('heure', { ascending: true })
+          .limit(3); // Limit to 3 for dashboard display
+
+        if (appointmentsError) {
+          console.error('Error fetching upcoming appointments:', appointmentsError);
+        } else {
+          setUpcomingAppointments(appointmentsData);
+        }
+
+        // Fetch pending requests (status 'submitted')
+        const { count: pendingRequestsCount, error: pendingRequestsError } = await supabase
+          .from('service_request')
+          .select('id', { count: 'exact' })
+          .eq('id_companie', user.id)
+          .eq('statut', 'submitted');
+
+        if (pendingRequestsError) {
+          console.error('Error fetching pending requests:', pendingRequestsError);
+        }
+
+        // Fetch urgent requests
+        const { count: urgentRequestsCount, error: urgentRequestsError } = await supabase
+          .from('service_request')
+          .select('id', { count: 'exact' })
+          .eq('id_companie', user.id)
+          .eq('urgence', 'urgent');
+
+        if (urgentRequestsError) {
+          console.error('Error fetching urgent requests:', urgentRequestsError);
+        }
+
+        // Fetch new messages (simplified: count all unread messages for this user)
+        const { count: newMessagesCount, error: messagesError } = await supabase
+          .from('messages')
+          .select('id', { count: 'exact' })
+          .eq('receiver_id', user.id)
+          .eq('is_read', false);
+
+        if (messagesError) {
+          console.error('Error fetching new messages:', messagesError);
+        }
+
+        // Fetch recent activities (last 5 service requests for this company)
+        const { data: activitiesData, error: activitiesError } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            statut,
+            date,
+            prix,
+            id_client(first_name, last_name),
+            id_boat(name)
+          `)
+          .eq('id_companie', user.id)
+          .order('date', { ascending: false })
+          .limit(5);
+
+        if (activitiesError) {
+          console.error('Error fetching recent activities:', activitiesError);
+        } else {
+          setRecentActivities(activitiesData.map(activity => ({
+            id: activity.id,
+            type: activity.statut, // Using status as type for simplicity
+            title: activity.description,
+            description: `Demande pour ${activity.id_client?.first_name || 'N/A'} ${activity.id_client?.last_name || 'N/A'} - ${activity.id_boat?.name || 'N/A'}`,
+            time: `${Math.floor((new Date().getTime() - new Date(activity.date).getTime()) / (1000 * 60 * 60 * 24))}j`, // Days ago
+            amount: activity.prix ? `${activity.prix}€` : undefined,
+            entity: `${activity.id_client?.first_name || 'N/A'} ${activity.id_client?.last_name || 'N/A'}`,
+            entityType: 'client'
+          })));
+        }
+
+        // Fetch top rated partners (Boat Managers and other Nautical Companies)
+        const { data: partnersData, error: partnersError } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, company_name, profile, avatar, rating, review_count')
+          .in('profile', ['boat_manager', 'nautical_company'])
+          .order('rating', { ascending: false })
+          .limit(3);
+
+        if (partnersError) {
+          console.error('Error fetching top rated partners:', partnersError);
+        } else {
+          setTopRatedPartners(partnersData.map(partner => ({
+            id: partner.id,
+            name: partner.profile === 'boat_manager' ? `${partner.first_name} ${partner.last_name}` : partner.company_name,
+            type: partner.profile,
+            rating: partner.rating || 0,
+            reviews: partner.review_count || 0,
+            image: partner.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop'
+          })));
+        }
+
+        setStats(prevStats => ({
+          ...prevStats,
+          upcomingAppointments: upcomingAppointmentsCount || 0,
+          pendingRequests: pendingRequestsCount || 0,
+          urgentRequests: urgentRequestsCount || 0,
+          newMessages: newMessagesCount || 0,
+          performanceRating: companyProfile?.rating || 0,
+          performanceReviewCount: companyProfile?.review_count || 0,
+        }));
+
+      } catch (error) {
+        console.error('Dashboard data fetch error:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user]);
 
   const handleNavigate = (route: string) => {
     router.push(route);
   };
 
-  // Formater la date au format JJ-MM-AAAA
-  const formatDate = (date: Date) => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}-${month}-${year}`;
+  const getActivityIcon = (type: string) => {
+    switch (type) {
+      case 'quote_accepted': // Assuming this status exists or is inferred
+        return <FileText size={24} color="#10B981" />;
+      case 'ready_to_bill':
+        return <FileText size={24} color="#3B82F6" />;
+      case 'paid':
+        return <Euro size={24} color="#10B981" />;
+      case 'submitted':
+        return <Clock size={24} color="#F59E0B" />;
+      default:
+        return <Clock size={24} color="#666" />;
+    }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text>Chargement du tableau de bord...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.welcomeText}>
-          Bienvenue, {user?.companyName || 'Entreprise'}
-        </Text>
-        <Text style={styles.dateText}>
-          {currentDate.toLocaleDateString('fr-FR', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric'
-          })}
+        <View>
+          <Text style={styles.welcomeText}>
+            Bienvenue, {user?.companyName || 'Entreprise'}
+          </Text>
+          <Text style={styles.dateText}>
+            {currentDate.toLocaleDateString('fr-FR', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric'
+            })}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.activeRequestsBanner}>
+        <FileText size={20} color="#0066CC" />
+        <Text style={styles.activeRequestsText}>
+          {stats.pendingRequests} nouvelles demandes
         </Text>
       </View>
 
       <View style={styles.statsGrid}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.statCard, styles.urgentCard]}
           onPress={() => handleNavigate('/(nautical-company)/requests?urgency=urgent')}
         >
@@ -53,7 +234,7 @@ export default function DashboardScreen() {
           <Text style={[styles.statLabel, { color: '#DC2626' }]}>Demandes urgentes</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.statCard}
           onPress={() => handleNavigate('/(nautical-company)/planning')}
         >
@@ -62,7 +243,7 @@ export default function DashboardScreen() {
           <Text style={styles.statLabel}>RDV à venir</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.statCard}
           onPress={() => handleNavigate('/(nautical-company)/requests?status=submitted')}
         >
@@ -76,7 +257,7 @@ export default function DashboardScreen() {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.statCard}
           onPress={() => handleNavigate('/(nautical-company)/messages')}
         >
@@ -92,7 +273,7 @@ export default function DashboardScreen() {
       </View>
 
       {/* Carte de performance */}
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.performanceCard}
       >
         <View style={styles.performanceHeader}>
@@ -101,17 +282,17 @@ export default function DashboardScreen() {
             <Text style={styles.performanceTitleText}>Performance client</Text>
           </View>
           <View style={styles.ratingContainer}>
-            <Text style={styles.ratingText}>4.8</Text>
+            <Text style={styles.ratingText}>{stats.performanceRating.toFixed(1)}</Text>
             <View style={styles.starsContainer}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <Star
                   key={star}
                   size={16}
-                  fill={star <= 4 ? '#FFC107' : 'none'}
-                  color={star <= 4 ? '#FFC107' : '#D1D5DB'}
+                  fill={star <= Math.floor(stats.performanceRating) ? '#FFC107' : 'none'}
+                  color={star <= Math.floor(stats.performanceRating) ? '#FFC107' : '#D1D5DB'}
                 />
               ))}
-              <Text style={styles.reviewCount}>(42 avis)</Text>
+              <Text style={styles.reviewCount}>({stats.performanceReviewCount} avis)</Text>
             </View>
           </View>
         </View>
@@ -124,7 +305,7 @@ export default function DashboardScreen() {
           <Text style={styles.sectionTitle}>Rendez-vous à venir</Text>
         </View>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.viewAllButton}
           onPress={() => handleNavigate('/(nautical-company)/planning')}
         >
@@ -132,41 +313,47 @@ export default function DashboardScreen() {
           <ChevronRight size={20} color="#0066CC" />
         </TouchableOpacity>
 
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.appointmentsContainer}
-        >
-          {[...Array(3)].map((_, index) => (
-            <TouchableOpacity 
-              key={index} 
-              style={styles.appointmentCard}
-              onPress={() => handleNavigate(`/appointment/${index + 1}`)}
-            >
-              <View style={styles.appointmentHeader}>
-                <Clock size={16} color="#666" />
-                <Text style={styles.appointmentTime}>
-                  {index === 0 ? '09:00' : index === 1 ? '14:00' : '10:00'}
+        {upcomingAppointments.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.appointmentsContainer}
+          >
+            {upcomingAppointments.map((appointment, index) => (
+              <TouchableOpacity
+                key={appointment.id}
+                style={styles.appointmentCard}
+                onPress={() => handleNavigate(`/appointment/${appointment.id}`)}
+              >
+                <View style={styles.appointmentHeader}>
+                  <Clock size={16} color="#666" />
+                  <Text style={styles.appointmentTime}>
+                    {appointment.heure ? appointment.heure.substring(0, 5).replace(':', 'h') : 'N/A'}
+                  </Text>
+                </View>
+                <Text style={styles.appointmentTitle}>
+                  {appointment.description || 'Rendez-vous'}
                 </Text>
-              </View>
-              <Text style={styles.appointmentTitle}>
-                {index === 0 ? 'Maintenance moteur' : index === 1 ? 'Contrôle technique' : 'Installation GPS'}
-              </Text>
-              <Text style={styles.appointmentClient}>
-                {index === 0 ? 'Jean Dupont' : index === 1 ? 'Sophie Martin' : 'Pierre Dubois'}
-              </Text>
-              <Text style={styles.appointmentBoat}>
-                {index === 0 ? 'Le Grand Bleu • Voilier' : index === 1 ? 'Le Petit Prince • Yacht' : 'Le Navigateur • Voilier'}
-              </Text>
-              <View style={styles.appointmentLocation}>
-                <MapPin size={14} color="#666" />
-                <Text style={styles.locationText}>
-                  {index === 0 ? 'Port de Marseille' : index === 1 ? 'Port de Nice' : 'Port de Saint-Tropez'}
+                <Text style={styles.appointmentClient}>
+                  {appointment.id_client?.first_name || 'N/A'} {appointment.id_client?.last_name || 'N/A'}
                 </Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+                <Text style={styles.appointmentBoat}>
+                  {appointment.id_boat?.name || 'N/A'} • {appointment.id_boat?.type || 'N/A'}
+                </Text>
+                <View style={styles.appointmentLocation}>
+                  <MapPin size={14} color="#666" />
+                  <Text style={styles.locationText}>
+                    {appointment.id_boat?.place_de_port || 'N/A'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Aucun rendez-vous à venir.</Text>
+          </View>
+        )}
       </View>
 
       {/* Section des dernières demandes */}
@@ -176,7 +363,7 @@ export default function DashboardScreen() {
           <Text style={styles.sectionTitle}>Dernières demandes</Text>
         </View>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.viewAllButton}
           onPress={() => handleNavigate('/(nautical-company)/requests')}
         >
@@ -184,46 +371,36 @@ export default function DashboardScreen() {
           <ChevronRight size={20} color="#0066CC" />
         </TouchableOpacity>
 
-        {[...Array(3)].map((_, index) => (
-          <TouchableOpacity 
-            key={index} 
-            style={styles.requestCard}
-            onPress={() => handleNavigate(`/request/${index + 1}`)}
-          >
-            <View style={styles.requestInfo}>
-              <Text style={styles.requestTitle}>
-                {index === 0 ? 'Installation GPS' : index === 1 ? 'Réparation voile' : 'Nettoyage coque'}
-              </Text>
-              <Text style={styles.requestClient}>
-                {index === 0 ? 'Sophie Martin • Le Petit Prince' : index === 1 ? 'Jean Dupont • Le Grand Bleu' : 'Pierre Dubois • Le Navigateur'}
-              </Text>
-            </View>
-            <View style={styles.requestStatus}>
-              <View style={[
-                styles.statusDot, 
-                { 
-                  backgroundColor: index === 0 
-                    ? '#F59E0B' 
-                    : index === 1 
-                    ? '#3B82F6' 
-                    : '#10B981' 
-                }
-              ]} />
-              <Text style={[
-                styles.statusText, 
-                { 
-                  color: index === 0 
-                    ? '#F59E0B' 
-                    : index === 1 
-                    ? '#3B82F6' 
-                    : '#10B981' 
-                }
-              ]}>
-                {index === 0 ? 'En attente' : index === 1 ? 'En cours' : 'Terminée'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+        {recentActivities.length > 0 ? (
+          <View style={styles.activitiesList}>
+            {recentActivities.map((activity) => (
+              <TouchableOpacity
+                key={activity.id}
+                style={styles.activityCard}
+                onPress={() => handleNavigate(`/request/${activity.id}`)}
+              >
+                <View style={styles.activityIconContainer}>
+                  {getActivityIcon(activity.type)}
+                </View>
+                <View style={styles.activityInfo}>
+                  <Text style={styles.activityTitle}>{activity.title}</Text>
+                  <Text style={styles.activityDescription}>{activity.description}</Text>
+                  <View style={styles.activityMeta}>
+                    <Text style={styles.activityTime}>{activity.time}</Text>
+                    {activity.amount && (
+                      <Text style={styles.activityAmount}>{activity.amount}</Text>
+                    )}
+                  </View>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Aucune activité récente.</Text>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -233,6 +410,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   header: {
     padding: 20,
@@ -250,6 +431,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textTransform: 'capitalize',
+  },
+  activeRequestsBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f7ff',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#bfdbfe',
+  },
+  activeRequestsText: {
+    color: '#0066CC',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  summaryBadge: {
+    backgroundColor: '#f0f7ff',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  summaryBadgeText: {
+    color: '#0066CC',
+    fontSize: 14,
+    fontWeight: '600',
   },
   statsGrid: {
     flexDirection: 'row',
@@ -474,13 +684,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-  requestCard: {
+  activitiesList: {
+    gap: 12,
+  },
+  activityCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 12,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -496,32 +708,77 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  requestInfo: {
+  activityIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f8fafc',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  activityInfo: {
     flex: 1,
   },
-  requestTitle: {
+  activityTitle: {
     fontSize: 16,
     fontWeight: '500',
     color: '#1a1a1a',
     marginBottom: 4,
   },
-  requestClient: {
+  activityDescription: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 8,
   },
-  requestStatus: {
+  activityMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#F59E0B',
+  activityTime: {
+    fontSize: 12,
+    color: '#94a3b8',
   },
-  statusText: {
-    fontSize: 14,
+  activityAmount: {
+    fontSize: 12,
+    color: '#10B981',
+    fontWeight: '600',
+  },
+  activityRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  activityRatingText: {
+    fontSize: 12,
     color: '#F59E0B',
+    fontWeight: '600',
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
   }
 });

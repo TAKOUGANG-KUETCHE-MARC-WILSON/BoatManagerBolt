@@ -1,32 +1,48 @@
 import { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native';
+import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, ChevronDown, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro, X } from 'lucide-react-native';
 import { router } from 'expo-router';
-import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Euro, Building, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { supabase } from '@/src/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 
-// Types de statuts pour le plaisancier (simplifiés)
-type RequestStatus = 'submitted' | 'in_progress' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'to_pay' | 'paid' | 'cancelled';
+// Types de statuts pour les différents rôles
+type RequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
-type SortKey = 'date' | 'type';
+type SortKey = 'date' | 'type' | 'client' | 'company';
 
+// Updated Request interface to match Supabase data structure
 interface Request {
   id: string;
-  title: string;
-  type: string;
-  status: RequestStatus;
-  urgency: UrgencyLevel;
-  date: string;
-  description: string;
-  category: string;
-  boatManager: {
+  description: string; // Maps to service_request.description
+  type: string; // Maps to categorie_service.description1
+  status: RequestStatus; // Maps to service_request.statut
+  urgency: UrgencyLevel; // Maps to service_request.urgence
+  date: string; // Maps to service_request.date
+  prix: number | null; // Maps to service_request.prix
+  note_add: string | null; // Maps to service_request.note_add
+  client: {
     id: string;
-    name: string;
-    port: string;
+    first_name: string;
+    last_name: string;
+    avatar: string | null;
+    e_mail: string;
+    phone: string;
   };
-  company?: {
+  boat: {
+    name: string;
+    type: string;
+    place_de_port: string | null;
+  };
+  boat_manager: { // Renamed from boatManager to match Supabase relation
     id: string;
-    name: string;
-  };
-  currentHandler?: 'boat_manager' | 'company';
+    first_name: string;
+    last_name: string;
+  } | null;
+  companie: { // Renamed from company to match Supabase relation
+    id: string;
+    company_name: string;
+  } | null;
+  scheduledDate?: string;
   invoiceReference?: string;
   invoiceAmount?: number;
   invoiceDate?: string;
@@ -34,227 +50,210 @@ interface Request {
   hasStatusUpdate?: boolean;
 }
 
-// Configuration des statuts pour le plaisancier (simplifiée)
+// Configuration des statuts pour le Plaisancier
 const statusConfig = {
   submitted: {
     icon: Clock,
-    color: '#C0351A',
+    color: '#C0351A', // Orange vif
     label: 'Transmise',
     description: 'Votre demande a été transmise',
   },
   in_progress: {
     icon: CircleDot,
-    color: '#3B82F6',
+    color: '#3B82F6', // Bleu vif
     label: 'En cours',
     description: 'Nos équipes travaillent sur votre demande',
   },
+  forwarded: {
+    icon: Upload,
+    color: '#A855F7', // Violet
+    label: 'Transmise',
+    description: 'Transmise à une entreprise',
+  },
   quote_sent: {
     icon: FileText,
-    color: '#8B5CF6',
+    color: '#8B5CF6', // Vert clair
     label: 'Devis reçu',
     description: 'Un devis vous a été envoyé',
   },
   quote_accepted: {
     icon: CheckCircle2,
-    color: '#10B981',
+    color: '#10B981', // Vert foncé
     label: 'Devis accepté',
     description: 'Vous avez accepté le devis',
   },
   scheduled: {
     icon: Calendar,
-    color: '#0EA5E9',
+    color: '#2563EB', // Bleu plus foncé
     label: 'Planifiée',
     description: 'Intervention planifiée',
   },
   completed: {
     icon: CheckCircle2,
-    color: '#2BCA00',
+    color: '#0EA5E9', // Bleu ciel
     label: 'Terminée',
     description: 'Intervention terminée',
   },
+  ready_to_bill: {
+    icon: Upload,
+    color: '#6366F1', // Indigo
+    label: 'Bon à facturer',
+    description: 'Prêt pour facturation',
+  },
   to_pay: {
     icon: FileText,
-    color: '#EF4444',
+    color: '#EAB308', // Jaune doré
     label: 'À régler',
     description: 'Une facture vous a été envoyée',
   },
   paid: {
     icon: Euro,
-    color: '#F97316',
+    color: '#a6acaf', // Gris
     label: 'Réglée',
     description: 'Facture payée',
   },
   cancelled: {
     icon: XCircle,
-    color: '#000000',
+    color: '#DC2626', // Rouge vif
     label: 'Annulée',
     description: 'Demande annulée',
   }
 };
 
-// Exemples de demandes pour le plaisancier
-const mockRequests: Request[] = [
-  {
-    id: '1',
-    title: 'Entretien moteur',
-    type: 'Maintenance',
-    status: 'in_progress',
-    urgency: 'normal',
-    date: '19-02-2024',
-    description: 'Révision complète du moteur et changement des filtres',
-    category: 'Services',
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company',
-    isNew: false
-  },
-  {
-    id: '2',
-    title: 'Réparation voile',
-    type: 'Réparation',
-    status: 'quote_sent',
-    urgency: 'urgent',
-    date: '24-02-2024',
-    description: 'Déchirure importante sur la grand-voile, besoin d\'une réparation rapide',
-    category: 'Services',
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    hasStatusUpdate: true
-  },
-  {
-    id: '3',
-    title: 'Installation GPS',
-    type: 'Amélioration',
-    status: 'quote_accepted',
-    urgency: 'normal',
-    date: '23-02-2024',
-    description: 'Installation d\'un nouveau système GPS pour navigation côtière',
-    category: 'Services',
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '4',
-    title: 'Contrôle annuel',
-    type: 'Contrôle',
-    status: 'scheduled',
-    urgency: 'normal',
-    date: '22-02-2024',
-    description: 'Contrôle technique annuel obligatoire',
-    category: 'Services',
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    scheduledDate: '15-03-2024'
-  },
-  {
-    id: '5',
-    title: 'Nettoyage coque',
-    type: 'Maintenance',
-    status: 'completed',
-    urgency: 'normal',
-    date: '21-02-2024',
-    description: 'Nettoyage complet de la coque et traitement antifouling',
-    category: 'Services',
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '6',
-    title: 'Vérification amarrage',
-    type: 'Sécurité',
-    status: 'to_pay',
-    urgency: 'urgent',
-    date: '20-02-2024',
-    description: 'Vérification de l\'amarrage avant tempête annoncée',
-    category: 'Sécurité',
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    invoiceReference: 'FAC-2024-001',
-    invoiceAmount: 150,
-    invoiceDate: '25-02-2024'
-  },
-  {
-    id: '7',
-    title: 'Renouvellement assurance',
-    type: 'Administratif',
-    status: 'paid',
-    urgency: 'normal',
-    date: '18-02-2024',
-    description: 'Assistance pour le renouvellement de l\'assurance du bateau',
-    category: 'Administratif',
-    boatManager: {
-      id: 'bm4',
-      name: 'Lucas Bernard',
-      port: 'Port de Saint-Tropez'
-    },
-    invoiceReference: 'FAC-2024-002',
-    invoiceAmount: 75,
-    invoiceDate: '20-02-2024'
-  },
-  {
-    id: '8',
-    title: 'Mise en vente',
-    type: 'Vente',
-    status: 'cancelled',
-    urgency: 'normal',
-    date: '15-02-2024',
-    description: 'Publication de l\'annonce de vente du bateau',
-    category: 'Vente/Achat',
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    }
-  }
-];
-
 export default function RequestsScreen() {
+  const { user } = useAuth();
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortAsc, setSortAsc] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<RequestStatus | null>(null);
   const [selectedUrgency, setSelectedUrgency] = useState<UrgencyLevel | null>(null);
-  const [requests, setRequests] = useState<Request[]>(mockRequests);
+  const [requests, setRequests] = useState<Request[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showSummaryDetails, setShowSummaryDetails] = useState(false);
+
+  useEffect(() => {
+    const fetchRequests = async () => {
+      setLoading(true);
+      if (!user?.id) {
+        setRequests([]); // Clear requests if user is not logged in
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            statut,
+            urgence,
+            date,
+            prix,
+            note_add,
+            id_client,
+            id_boat_manager,
+            id_companie,
+            categorie_service(description1),
+            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
+            boat(name, type, place_de_port),
+            boat_manager:users!id_boat_manager(id, first_name, last_name),
+            companie:users!id_companie(id, company_name)
+          `)
+          .eq('id_client', user.id);
+
+        if (error) {
+          console.error('Error fetching requests:', error);
+          Alert.alert('Erreur', 'Impossible de charger les demandes.');
+          setRequests([]);
+          return;
+        }
+
+        const formattedRequests: Request[] = data.map((req: any) => {
+          // Extract scheduledDate, invoiceReference, invoiceAmount, invoiceDate from note_add if available
+          let scheduledDate: string | undefined;
+          let invoiceReference: string | undefined;
+          let invoiceAmount: number | undefined;
+          let invoiceDate: string | undefined;
+
+          if (req.note_add) {
+            // Example: "Planifiée le 2024-03-15"
+            const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+            if (scheduledMatch) {
+              scheduledDate = scheduledMatch[1];
+            }
+
+            // Example: "Facture FAC-2024-001 • 1200€ • 2024-03-01"
+            const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d+\.?\d*)€ • (\d{4}-\d{2}-\d{2})/);
+            if (invoiceMatch) {
+              invoiceReference = invoiceMatch[1];
+              invoiceAmount = parseFloat(invoiceMatch[2]);
+              invoiceDate = invoiceMatch[3];
+            }
+          }
+
+          return {
+            id: req.id.toString(),
+            description: req.description,
+            type: req.categorie_service?.description1 || 'N/A',
+            status: req.statut as RequestStatus,
+            urgency: req.urgence as UrgencyLevel,
+            date: req.date,
+            prix: req.prix,
+            note_add: req.note_add,
+            client: {
+              id: req.users.id.toString(),
+              first_name: req.users.first_name,
+              last_name: req.users.last_name,
+              avatar: req.users.avatar,
+              e_mail: req.users.e_mail,
+              phone: req.users.phone,
+            },
+            boat: {
+              name: req.boat.name,
+              type: req.boat.type,
+              place_de_port: req.boat.place_de_port,
+            },
+            boat_manager: req.boat_manager ? {
+              id: req.boat_manager.id.toString(),
+              first_name: req.boat_manager.first_name,
+              last_name: req.boat_manager.last_name,
+            } : null,
+            companie: req.companie ? {
+              id: req.companie.id.toString(),
+              company_name: req.companie.company_name,
+            } : null,
+            scheduledDate: scheduledDate,
+            invoiceReference: invoiceReference,
+            invoiceAmount: invoiceAmount,
+            invoiceDate: invoiceDate,
+            isNew: false, // Managed client-side
+            hasStatusUpdate: false // Managed client-side
+          };
+        });
+
+        setRequests(formattedRequests);
+      } catch (e) {
+        console.error('Unexpected error:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+        setRequests([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRequests();
+  }, [user]);
 
   // Marquer les demandes comme vues lorsque l'écran est ouvert
   useEffect(() => {
-    const updatedRequests = requests.map(request => ({
-      ...request,
-      isNew: false,
-      hasStatusUpdate: false
-    }));
-    setRequests(updatedRequests);
-  }, []);
+    setRequests(prev =>
+      prev.map(request => ({
+        ...request,
+        isNew: false,
+        hasStatusUpdate: false
+      }))
+    );
+  }, [requests.length]);
 
   const requestsSummary = useMemo(() => {
     return {
@@ -292,9 +291,12 @@ export default function RequestsScreen() {
           ? new Date(a.date).getTime() - new Date(b.date).getTime()
           : new Date(b.date).getTime() - new Date(a.date).getTime();
       } else {
+        // Fallback for 'type' or other string fields
+        const aValue = a[sortKey as keyof Request] as string;
+        const bValue = b[sortKey as keyof Request] as string;
         return sortAsc
-          ? a[sortKey].localeCompare(b[sortKey])
-          : b[sortKey].localeCompare(a[sortKey]);
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
       }
     });
   }, [sortKey, sortAsc, selectedStatus, selectedUrgency, requests]);
@@ -322,13 +324,12 @@ export default function RequestsScreen() {
   };
 
   const formatDate = (dateString: string) => {
-    // Si la date est déjà au format JJ-MM-AAAA, la retourner telle quelle
-    if (/^\d{2}-\d{2}-\d{4}$/.test(dateString)) {
-      return dateString;
-    }
-    
-    // Sinon, convertir depuis le format ISO
+    // Supabase returns dates in ISO format (e.g., "2024-02-20T10:05:00.000Z")
+    // Convert to Date object and then format
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      return 'Invalid Date'; // Handle invalid date strings
+    }
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
@@ -344,6 +345,24 @@ export default function RequestsScreen() {
     setSelectedUrgency(urgency === selectedUrgency ? null : urgency);
     setSelectedStatus(null);
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement de vos demandes...</Text>
+      </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.emptyStateText}>
+          Veuillez vous connecter pour voir vos demandes.
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -596,7 +615,7 @@ export default function RequestsScreen() {
                   <View style={styles.requestHeader}>
                     <View style={styles.requestInfo}>
                       <View style={styles.requestTitleContainer}>
-                        <Text style={styles.requestTitle}>{request.title}</Text>
+                        <Text style={styles.requestTitle}>{request.description}</Text>
                         {request.urgency === 'urgent' && (
                           <View style={styles.urgentBadge}>
                             <AlertTriangle size={14} color="#DC2626" />
@@ -623,20 +642,20 @@ export default function RequestsScreen() {
                     </View>
                     <View style={styles.requestDate}>
                       <Calendar size={16} color="#666" />
-                      <Text style={styles.dateText}>{request.date}</Text>
+                      <Text style={styles.dateText}>{formatDate(request.date)}</Text>
                     </View>
                     
                     <View style={styles.boatManagerInfo}>
                       <User size={16} color="#0066CC" />
                       <Text style={styles.boatManagerName}>
-                        {request.boatManager.name} • {request.boatManager.port}
+                        {request.boat_manager?.first_name} {request.boat_manager?.last_name} • {request.boat.place_de_port}
                       </Text>
                     </View>
                     
-                    {request.company && (
+                    {request.companie && (
                       <View style={styles.companyInfo}>
                         <Building size={16} color="#8B5CF6" />
-                        <Text style={styles.companyName}>{request.company.name}</Text>
+                        <Text style={styles.companyName}>{request.companie.company_name}</Text>
                       </View>
                     )}
                     
@@ -692,6 +711,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   summaryContainer: {
     backgroundColor: 'white',
@@ -1084,3 +1107,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   }
 });
+

@@ -253,25 +253,26 @@ export default function HomeScreen() {
     const fetchInitialData = async () => {
       if (!user?.id) return;
 
-      // Fetch user's primary port and associated Boat Manager
-      const { data: userPorts, error: userPortsError } = await supabase
+      // 1. Fetch ALL ports the current user is associated with
+      const { data: userAssociatedPorts, error: userAssociatedPortsError } = await supabase
         .from('user_ports')
         .select('port_id')
-        .eq('user_id', user.id)
-        .limit(1); // Assuming the first port is the primary one for this display
+        .eq('user_id', user.id);
 
-      if (userPortsError) {
-        console.error('Error fetching user ports:', userPortsError);
+      if (userAssociatedPortsError) {
+        console.error('Error fetching user associated ports:', userAssociatedPortsError);
         return;
       }
 
+      const userPortIds = new Set(userAssociatedPorts.map(up => up.port_id.toString()));
+
+      // Determine the primary port for the main Boat Manager section (if any)
+      // This part can remain as is, or be adjusted if a specific "primary" port is needed.
+      // For now, let's assume the first one found is "primary" for the BM section display.
       let primaryPortId: string | null = null;
-      if (userPorts && userPorts.length > 0) {
-        primaryPortId = userPorts[0].port_id.toString();
+      if (userAssociatedPorts && userAssociatedPorts.length > 0) {
+        primaryPortId = userAssociatedPorts[0].port_id.toString();
         setUserHomePortId(primaryPortId); // Store user's home port ID
-        console.log('User ID:', user.id);
-        console.log('Fetched userPorts:', userPorts);
-        console.log('Primary Port ID:', primaryPortId);
 
         // Fetch Boat Manager for the user's home port
         const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
@@ -314,7 +315,7 @@ export default function HomeScreen() {
         }
       }
 
-      // Fetch all ports and filter out the user's home port
+      // Fetch all ports
       const { data: portsData, error: portsError } = await supabase
         .from('ports')
         .select('id, name');
@@ -323,12 +324,12 @@ export default function HomeScreen() {
         console.error('Error fetching all ports:', portsError);
         return;
       }
-      console.log('Fetched portsData (all):', portsData);
+
+      // Filter out ports the user is ALREADY associated with
       const filteredAvailablePorts = portsData
-        .filter(p => p.id.toString() !== primaryPortId)
+        .filter(p => !userPortIds.has(p.id.toString())) // Exclude all ports the user is associated with
         .map(p => ({ id: p.id.toString(), name: p.name }));
       setAvailablePorts(filteredAvailablePorts);
-      console.log('Filtered availablePorts (for modal):', filteredAvailablePorts);
 
       // Fetch all boat managers for the temporary section
       const { data: allBmData, error: allBmError } = await supabase
@@ -340,7 +341,6 @@ export default function HomeScreen() {
         console.error('Error fetching all boat managers:', allBmError);
         return;
       }
-      console.log('Fetched allBmData (all BMs):', allBmData);
       setAllBoatManagers(allBmData.map(bm => ({
         id: bm.id.toString(),
         name: `${bm.first_name} ${bm.last_name}`,
@@ -359,14 +359,12 @@ export default function HomeScreen() {
   const filteredPorts = availablePorts.filter(port => 
     port.name.toLowerCase().includes(temporaryPortSearch.toLowerCase())
   );
-  console.log('Modal filteredPorts:', filteredPorts);
 
   // Effect to update the temporary Boat Manager when a port is selected
   useEffect(() => {
     const updateTemporaryBm = async () => {
       if (selectedTemporaryPortId) {
         const port = availablePorts.find(p => p.id === selectedTemporaryPortId);
-        console.log('Selected Temporary Port:', port);
         if (port) {
           setSelectedTemporaryPort(port);
           
@@ -377,7 +375,6 @@ export default function HomeScreen() {
             .eq('port_id', parseInt(port.id))
             .limit(1);
 
-          console.log('BM Port Assignments for selected port:', bmPortAssignments);
           if (bmPortAssignmentsError) {
             console.error('Error fetching BM for temporary port:', bmPortAssignmentsError);
             setTemporaryBoatManager(null);
@@ -387,7 +384,6 @@ export default function HomeScreen() {
           if (bmPortAssignments && bmPortAssignments.length > 0) {
             const bmId = bmPortAssignments[0].user_id;
             const bm = allBoatManagers.find(manager => manager.id === bmId);
-            console.log('Found BM for selected port:', bm);
             if (bm) {
                 setTemporaryBoatManager({
                     ...bm,
@@ -468,7 +464,7 @@ export default function HomeScreen() {
                 <MapPin size={20} color={selectedTemporaryPortId === port.id ? "#0066CC" : "#666"} />
                 <Text style={[
                   styles.portItemText,
-                  selectedTemporaryPortId === port.id && styles.portItemTextSelected
+                  selectedTemporaryPortId === port.id && styles.selectedPortItemText
                 ]}>
                   {port.name}
                 </Text>
@@ -577,7 +573,7 @@ export default function HomeScreen() {
         <BoatManagerSection boatManager={mainBoatManager} />
         
         {/* Temporary Port Section */}
-        <TemporaryPortSection />
+        {user && <TemporaryPortSection />}
       </View>
       
       <TemporaryPortModal />
@@ -601,6 +597,7 @@ const styles = StyleSheet.create({
   },
   heroText: {
     fontSize: 32,
+    color: 'white',
     fontWeight: 'bold',
     textAlign: 'center',
   },
@@ -1099,3 +1096,4 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
+

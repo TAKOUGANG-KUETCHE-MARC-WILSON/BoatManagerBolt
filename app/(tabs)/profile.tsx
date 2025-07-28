@@ -1,23 +1,28 @@
 import { useState, useEffect, memo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch } from 'react-native';
 import { router } from 'expo-router';
-import { Ship, Users, Phone, Mail, Calendar, LogOut, MapPin, Image as ImageIcon, X, Plus, Pencil, Briefcase, Anchor, Star, ChevronRight, Settings, User, Tag, Info, Hash, FileText as FileTextIcon } from 'lucide-react-native';
+import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User, Users, Star, ChevronRight, Settings, Tag, Info, Hash } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
-interface ServiceHistory {
+interface Service {
   id: string;
-  date: string;
-  type: string;
+  name: string;
   description: string;
-  provider: {
+  icon: any; // Icons are still hardcoded as they are UI components
+}
+
+interface BoatManagerProfile {
+  title: string;
+  experience: string;
+  certifications: string[];
+  bio: string;
+  ports: {
     id: string;
     name: string;
-    type: 'boat_manager' | 'nautical_company';
-    image: string;
-  };
-  status: 'completed' | 'in_progress';
+    boatCount: number;
+  }[];
 }
 
 interface BoatManager {
@@ -36,14 +41,112 @@ interface Boat {
   image: string;
 }
 
+interface InventoryItem {
+  id: string;
+  category: string;
+  name: string;
+  brand?: string;
+  model?: string;
+  serialNumber?: string;
+  purchaseDate?: string;
+  notes?: string;
+}
+
+interface ServiceHistory {
+  id: string;
+  date: string;
+  type: string;
+  provider: {
+    id: string;
+    name: string;
+    type: 'boat_manager' | 'nautical_company';
+    image: string;
+  };
+  status: 'completed' | 'in_progress';
+  rated: boolean;
+}
+
+interface Review {
+  id: string;
+  author: string;
+  rating: number;
+  comment: string;
+  date: string;
+}
+
+// Hardcoded service icons (map to fetched service names)
+const serviceIconsMap = {
+  'Maintenance': Wrench,
+  'Amélioration': Tool,
+  'Contrôle': Gauge,
+  'Accès': Key,
+  'Administratif': FileText,
+  // Add other service types and their icons as needed
+};
+
 const avatars = {
   male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
   female: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
   neutral: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop',
 };
 
+// Mock inventory data for the profile page (keeping as mock as no DB table defined)
+const mockInventory: InventoryItem[] = [
+  {
+    id: 'i1',
+    category: 'Navigation',
+    name: 'GPS',
+    brand: 'Garmin',
+    model: 'GPSMAP 1243xsv',
+    serialNumber: 'GAR123456',
+    purchaseDate: '2020-06-15',
+    notes: 'Installé sur le tableau de bord'
+  },
+  {
+    id: 'i2',
+    category: 'Sécurité',
+    name: 'Gilets de sauvetage',
+    brand: 'Plastimo',
+    purchaseDate: '2020-05-20',
+    notes: '6 gilets adultes'
+  },
+  {
+    id: 'i3',
+    category: 'Moteur',
+    name: 'Hélice de secours',
+    brand: 'Volvo',
+    model: 'P2-50',
+    purchaseDate: '2021-03-10'
+  }
+];
+
+// Mock reviews for the RatingModal (keeping as mock for client-side simulation)
+const mockReviews: Review[] = [
+  {
+    id: '1',
+    author: 'Jean Dupont',
+    rating: 5,
+    comment: 'Excellent service, très professionnel et réactif.',
+    date: '15 février 2024',
+  },
+  {
+    id: '2',
+    author: 'Marie Martin',
+    rating: 4,
+    comment: 'Très bonne expérience, je recommande.',
+    date: '10 février 2024',
+  },
+  {
+    id: '3',
+    author: 'Pierre Durand',
+    rating: 5,
+    comment: 'Service impeccable et conseils avisés.',
+    date: '5 février 2024',
+  },
+];
+
 // Extracted EditProfileModal component
-const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile }) => (
+const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => (
   <Modal
     visible={visible}
     transparent
@@ -64,41 +167,60 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
         
         <ScrollView style={styles.modalBody}>
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>Prénom</Text>
+            <Text style={styles.formLabel}>Votre fonction</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.firstName}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, firstName: text }))}
-              placeholder="Prénom"
+              value={formData.title}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
+              placeholder="Ex: Boat Manager Senior"
             />
           </View>
+          
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>Nom</Text>
+            <Text style={styles.formLabel}>Expérience</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.lastName}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, lastName: text }))}
-              placeholder="Nom"
+              value={formData.experience}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, experience: text }))}
+              placeholder="Ex: 8 ans"
             />
           </View>
+          
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>Email</Text>
+            <Text style={styles.formLabel}>Certifications</Text>
             <TextInput
               style={styles.formInput}
-              value={formData.email}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, email: text }))}
-              placeholder="Email"
-              keyboardType="email-address"
+              value={formData.certifications}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, certifications: text }))}
+              placeholder="Ex: Certification YBM, Expert Maritime"
             />
+            <Text style={styles.helperText}>Séparez les certifications par des virgules</Text>
+            
+            <View style={styles.addCertificationContainer}>
+              <TextInput
+                style={styles.addCertificationInput}
+                value={newCertification}
+                onChangeText={setNewCertification}
+                placeholder="Ajouter une certification"
+              />
+              <TouchableOpacity 
+                style={styles.addCertificationButton}
+                onPress={handleAddCertification}
+              >
+                <Plus size={20} color="white" />
+              </TouchableOpacity>
+            </View>
           </View>
+          
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>Téléphone</Text>
+            <Text style={styles.formLabel}>Biographie</Text>
             <TextInput
-              style={styles.formInput}
-              value={formData.phone}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, phone: text }))}
-              placeholder="Téléphone"
-              keyboardType="phone-pad"
+              style={[styles.formInput, styles.textArea]}
+              value={formData.bio}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, bio: text }))}
+              placeholder="Parlez de vous et de votre expérience..."
+              multiline
+              numberOfLines={4}
             />
           </View>
         </ScrollView>
@@ -121,7 +243,7 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
       </View>
     </View>
   </Modal>
-));
+))
 
 // Extracted PhotoModal component
 const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
@@ -164,7 +286,7 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
       </View>
     </View>
   </Modal>
-));
+))
 
 // Extracted AvatarModal component
 const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
@@ -175,7 +297,7 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
     onRequestClose={onClose}
   >
     <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
+      <ScrollView style={styles.modalContent}> {/* Changed to ScrollView */}
         <Text style={styles.modalTitle}>Choisir un avatar</Text>
         
         <TouchableOpacity 
@@ -217,55 +339,74 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
         >
           <Text style={styles.modalCancelText}>Annuler</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </View>
   </Modal>
-));
+))
 
 export default function ProfileScreen() {
   const { isAuthenticated, user, logout } = useAuth();
-  const [showPhotoModal, setShowPhotoModal] = useState(false);
-  const [showAvatarModal, setShowAvatarModal] = useState(false);
-  const [selectedTab, setSelectedTab] = useState<'boats' | 'ports' | 'history' | 'settings'>('boats');
-  const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
+  const [selectedTab, setSelectedTab] = useState<'boats' | 'ports' | 'satisfaction' | 'inventory'>('boats');
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showPhotoModal, setShowPhotoModal] = useState(false); // Initial state should be false
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  const [userProfile, setUserProfile] = useState({
-    firstName: user?.firstName || '',
-    lastName: user?.lastName || '',
-    email: user?.email || '',
-    phone: user?.phone || '',
-    memberSince: user?.createdAt ? new Date(user.createdAt).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A',
-    profileImage: user?.avatar || avatars.neutral
+  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral);
+
+  const [profile, setProfile] = useState<BoatManagerProfile>({
+    title: '',
+    experience: '',
+    certifications: [],
+    bio: '',
+    ports: [],
   });
 
-  const [boats, setBoats] = useState<Boat[]>([]);
-  const [userPorts, setUserPorts] = useState<any[]>([]); // Store user's ports with BM info
-  const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
-  const [boatManagers, setBoatManagers] = useState<BoatManager[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+
+  const [formData, setFormData] = useState({
+    title: '',
+    experience: '',
+    bio: '',
+    certifications: '',
+  });
+
+  const [newCertification, setNewCertification] = useState('');
+
+  const [boats, setBoats] = useState<Boat[]>([]); // Initialize as empty array
+  const [boatManagers, setBoatManagers] = useState<BoatManager[]>([]); // Initialize as empty array
+  const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]); // Initialize as empty array
+
+  // New state for inventory item modal
+  const [showInventoryDetailModal, setShowInventoryDetailModal] = useState(false);
+  const [selectedInventoryItem, setSelectedInventoryItem] = useState<InventoryItem | null>(null);
+
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [selectedService, setSelectedService] = useState<ServiceHistory | null>(null);
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
 
   useEffect(() => {
     const fetchProfileData = async () => {
       if (!user?.id) return;
 
-      // Update local userProfile state from auth context
-      setUserProfile({
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        phone: user.phone || '',
-        memberSince: user.createdAt ? new Date(user.createdAt).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A',
-        profileImage: user.avatar || avatars.neutral
+      // Set initial user profile data from AuthContext
+      setLocalAvatar(user.avatar || avatars.neutral);
+      setFormData({
+        title: user.job_title || '', // Assuming job_title exists on user object from AuthContext
+        experience: user.experience || '', // Assuming experience exists
+        bio: user.bio || '', // Assuming bio exists
+        certifications: (user.certification || []).join(', '), // Assuming certification exists
       });
 
-      // Fetch Boats
+      // Fetch user's boats
       const { data: boatsData, error: boatsError } = await supabase
         .from('boat')
-        .select('id, name, type, longueur, image')
+        .select('id, name, type, longueur, image') // Assuming 'longueur' maps to 'length'
         .eq('id_user', user.id);
 
       if (boatsError) {
-        console.error('Error fetching boats:', boatsError);
+        console.error('Error fetching user boats:', boatsError);
       } else {
         setBoats(boatsData.map(b => ({
           id: b.id.toString(),
@@ -276,103 +417,115 @@ export default function ProfileScreen() {
         })));
       }
 
-      // Fetch User Ports and associated Boat Managers
+      // Fetch user's ports and associated Boat Managers
       const { data: userPortsData, error: userPortsError } = await supabase
         .from('user_ports')
-        .select('port_id, ports(name)')
+        .select('port_id')
         .eq('user_id', user.id);
 
       if (userPortsError) {
         console.error('Error fetching user ports:', userPortsError);
       } else {
-        const fetchedUserPorts = await Promise.all(userPortsData.map(async (up: any) => {
-          const { data: bmData, error: bmError } = await supabase
+        const portIds = userPortsData.map(p => p.port_id);
+        if (portIds.length > 0) {
+          const { data: portsData, error: portsError } = await supabase
+            .from('ports')
+            .select('id, name');
+
+          if (portsError) {
+            console.error('Error fetching ports:', portsError);
+          } else {
+            const fetchedPorts = await Promise.all(portsData
+              .filter(p => portIds.includes(p.id))
+              .map(async (port) => {
+                const { count: boatCount, error: boatCountError } = await supabase
+                  .from('boat')
+                  .select('id', { count: 'exact' })
+                  .eq('id_port', port.id);
+
+                if (boatCountError) {
+                  console.error(`Error fetching boat count for port ${port.name}:`, boatCountError);
+                }
+
+                return {
+                  id: port.id.toString(),
+                  name: port.name,
+                  boatCount: boatCount || 0,
+                };
+              })
+            );
+            setProfile(prev => ({ ...prev, ports: fetchedPorts }));
+          }
+
+          // Fetch Boat Managers associated with these ports
+          const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
             .from('user_ports')
             .select('user_id')
-            .eq('port_id', up.port_id)
-            .limit(1); // Assuming one BM per port for simplicity
+            .in('port_id', portIds);
 
-          let boatManagerDetails: BoatManager | undefined;
-          if (!bmError && bmData && bmData.length > 0) {
-            const { data: bmProfile, error: bmProfileError } = await supabase
-              .from('users')
-              .select('id, first_name, last_name, avatar, e_mail, phone, rating')
-              .eq('id', bmData[0].user_id)
-              .eq('profile', 'boat_manager')
-              .single();
+          if (bmPortAssignmentsError) {
+            console.error('Error fetching BM port assignments:', bmPortAssignmentsError);
+          } else {
+            const uniqueBmIds = [...new Set(bmPortAssignments.map(pa => pa.user_id))];
+            if (uniqueBmIds.length > 0) {
+              const { data: fetchedBms, error: bmFetchError } = await supabase
+                .from('users')
+                .select('id, first_name, last_name, avatar, user_ports(ports(name))')
+                .in('id', uniqueBmIds)
+                .eq('profile', 'boat_manager');
 
-            if (!bmProfileError && bmProfile) {
-              boatManagerDetails = {
-                id: bmProfile.id.toString(),
-                name: `${bmProfile.first_name} ${bmProfile.last_name}`,
-                image: bmProfile.avatar || avatars.neutral,
-                rating: bmProfile.rating || 0,
-                location: up.ports.name,
-              };
+              if (bmFetchError) {
+                console.error('Error fetching associated Boat Managers:', bmFetchError);
+              } else {
+                setBoatManagers(fetchedBms.map(bm => ({
+                  id: bm.id.toString(),
+                  name: `${bm.first_name} ${bm.last_name}`,
+                  image: bm.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+                  rating: 4.8, // Mock rating, fetch from reviews later
+                  location: bm.user_ports && bm.user_ports.length > 0 ? bm.user_ports[0].ports.name : 'N/A',
+                })));
+              }
             }
           }
-          return {
-            port: up.ports.name,
-            boatManager: boatManagerDetails,
-          };
-        }));
-        setUserPorts(fetchedUserPorts);
-        setBoatManagers(fetchedUserPorts.map(p => p.boatManager).filter(Boolean) as BoatManager[]);
+        }
       }
 
-      // Fetch Service History
-      const { data: serviceRequestsData, error: serviceRequestsError } = await supabase
+      // Fetch service history
+      const { data: serviceHistoryData, error: serviceHistoryError } = await supabase
         .from('service_request')
         .select(`
           id,
           date,
-          description,
           statut,
-          id_boat(name),
-          id_companie(company_name, avatar, profile),
-          id_boat_manager(first_name, last_name, avatar, profile),
-          categorie_service(description1)
+          description,
+          categorie_service(description1),
+          users_provider:id_companie(first_name, last_name, company_name, profile, avatar),
+          users_bm:id_boat_manager(first_name, last_name, profile, avatar)
         `)
         .eq('id_client', user.id)
         .order('date', { ascending: false });
 
-      if (serviceRequestsError) {
-        console.error('Error fetching service history:', serviceRequestsError);
+      if (serviceHistoryError) {
+        console.error('Error fetching service history:', serviceHistoryError);
       } else {
-        setServiceHistory(serviceRequestsData.map((sr: any) => {
-          let providerName = '';
-          let providerType: 'boat_manager' | 'nautical_company' = 'boat_manager'; // Default
-          let providerImage = '';
-          let providerId = '';
-
-          if (sr.id_companie) {
-            providerName = sr.id_companie.company_name;
-            providerType = 'nautical_company';
-            providerImage = sr.id_companie.avatar || avatars.neutral;
-            providerId = sr.id_companie.id;
-          } else if (sr.id_boat_manager) {
-            providerName = `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`;
-            providerType = 'boat_manager';
-            providerImage = sr.id_boat_manager.avatar || avatars.neutral;
-            providerId = sr.id_boat_manager.id;
-          }
+        setServiceHistory(serviceHistoryData.map(sr => {
+          const providerUser = sr.users_provider || sr.users_bm;
+          const providerName = providerUser?.profile === 'nautical_company' ? providerUser.company_name : `${providerUser?.first_name || ''} ${providerUser?.last_name || ''}`;
+          const providerType = providerUser?.profile || 'unknown';
 
           return {
             id: sr.id.toString(),
             date: sr.date,
             type: sr.categorie_service?.description1 || 'N/A',
             description: sr.description,
-            status: sr.statut === 'completed' ? 'completed' : 'in_progress', // Simplify status
-            boat: {
-              id: sr.id_boat?.id.toString() || '',
-              name: sr.id_boat?.name || 'N/A',
-            },
             provider: {
-              id: providerId,
+              id: providerUser?.id.toString() || '',
               name: providerName,
-              type: providerType,
-              image: providerImage,
+              type: providerType as 'boat_manager' | 'nautical_company',
+              image: providerUser?.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
             },
+            status: sr.statut as 'completed' | 'in_progress', // Assuming these statuses
+            rated: false, // This needs to be fetched from a reviews table
           };
         }));
       }
@@ -380,62 +533,6 @@ export default function ProfileScreen() {
 
     fetchProfileData();
   }, [user]);
-
-  const handleChoosePhoto = async () => {
-    if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 1,
-    });
-
-    if (!result.canceled) {
-      const newAvatarUri = result.assets[0].uri;
-      setUserProfile(prev => ({ ...prev, profileImage: newAvatarUri }));
-      // Update Supabase
-      if (user?.id) {
-        const { error } = await supabase
-          .from('users')
-          .update({ avatar: newAvatarUri })
-          .eq('id', user.id);
-        if (error) console.error('Error updating avatar:', error);
-      }
-    }
-    setShowPhotoModal(false);
-  };
-
-  const handleDeletePhoto = async () => {
-    setUserProfile(prev => ({ ...prev, profileImage: avatars.neutral })); // Set to default neutral avatar
-    // Update Supabase
-    if (user?.id) {
-      const { error } = await supabase
-        .from('users')
-        .update({ avatar: avatars.neutral }) // Set to default avatar URL
-        .eq('id', user.id);
-      if (error) console.error('Error deleting avatar:', error);
-    }
-    setShowPhotoModal(false);
-  };
-
-  const handleSelectAvatar = async (type: keyof typeof avatars) => {
-    const newAvatarUri = avatars[type];
-    setUserProfile(prev => ({ ...prev, profileImage: newAvatarUri }));
-    // Update Supabase
-    if (user?.id) {
-      const { error } = await supabase
-        .from('users')
-        .update({ avatar: newAvatarUri })
-        .eq('id', user.id);
-      if (error) console.error('Error selecting avatar:', error);
-    }
-    setShowAvatarModal(false);
-    setShowPhotoModal(false); // Close PhotoModal after selecting avatar
-  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -459,7 +556,61 @@ export default function ProfileScreen() {
     );
   };
     
+  const handleChoosePhoto = async () => {
+    // Request media library permissions
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (status !== 'granted') {
+      Alert.alert(
+        'Permission requise',
+        'Veuillez autoriser l\'accès à votre galerie pour choisir une photo. Vous pouvez le faire dans les réglages de votre appareil.'
+      );
+      return;
+    }
+
+    // Launch image library
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 1,
+      });
+
+      if (!result.canceled) {
+        setLocalAvatar(result.assets[0].uri); // Update local avatar state
+        // In a real app, you would also upload this to Supabase Storage and update the user's avatar URL in the database
+      }
+    } catch (error) {
+      console.error('Error launching image picker:', error);
+      Alert.alert('Erreur', 'Impossible d\'ouvrir la galerie d\'images. Veuillez réessayer.');
+    } finally {
+      setShowPhotoModal(false);
+    }
+  };
+
+  const handleDeletePhoto = () => {
+    setLocalAvatar(avatars.neutral); // Set to default neutral avatar
+    // In a real app, you would also remove the avatar from Supabase Storage and update the user's avatar URL to null/default in the database
+    // For now, just update local state
+    setShowPhotoModal(false);
+  };
+
+  const handleSelectAvatar = (type: keyof typeof avatars) => {
+    setLocalAvatar(avatars[type]);
+    // In a real app, you would also update the user's avatar URL in the database
+    // For now, just update local state
+    setShowAvatarModal(false);
+    setShowPhotoModal(false);
+  };
+
   const handleEditProfile = () => {
+    setFormData({
+      title: profile.title,
+      experience: profile.experience,
+      bio: profile.bio,
+      certifications: (profile.certifications || []).join(', '), // Ensure certifications is an array
+    });
     setShowEditModal(true);
   };
 
@@ -469,13 +620,19 @@ export default function ProfileScreen() {
       return;
     }
 
+    const certificationsArray = formData.certifications
+      .split(',')
+      .map(cert => cert.trim())
+      .filter(cert => cert !== '');
+
     const { error } = await supabase
       .from('users')
       .update({
-        first_name: userProfile.firstName,
-        last_name: userProfile.lastName,
-        e_mail: userProfile.email,
-        phone: userProfile.phone,
+        job_title: formData.title,
+        experience: formData.experience,
+        bio: formData.bio,
+        certification: certificationsArray,
+        avatar: localAvatar, // Save the selected avatar URL
       })
       .eq('id', user.id);
 
@@ -483,9 +640,62 @@ export default function ProfileScreen() {
       console.error('Error updating profile:', error);
       Alert.alert('Erreur', `Impossible de mettre à jour le profil: ${error.message}`);
     } else {
+      setProfile(prev => ({
+        ...prev,
+        title: formData.title,
+        experience: formData.experience,
+        bio: formData.bio,
+        certifications: certificationsArray,
+      }));
       setShowEditModal(false);
       Alert.alert('Succès', 'Votre profil a été mis à jour avec succès.');
     }
+  };
+
+  const handleAddCertification = () => {
+    if (newCertification.trim()) {
+      setFormData(prev => ({
+        ...prev,
+        certifications: prev.certifications ? `${prev.certifications}, ${newCertification}` : newCertification,
+      }));
+      setNewCertification('');
+    }
+  };
+
+  const handleRateService = (service: ServiceHistory) => {
+    setSelectedService(service);
+    setRating(0);
+    setComment('');
+    setShowRatingModal(true);
+  };
+
+  const handleSubmitRating = () => {
+    if (rating === 0) {
+      Alert.alert('Erreur', 'Veuillez sélectionner une note');
+      return;
+    }
+
+    // In a real application, you would send this rating to your backend
+    alert('Votre évaluation a été enregistrée avec succès !');
+    setShowRatingModal(false);
+    
+    // Add the new review to the mock list (simulation)
+    mockReviews.unshift({
+      id: Date.now().toString(),
+      author: `${user?.firstName} ${user?.lastName}`,
+      rating,
+      comment,
+      date: new Date().toLocaleDateString('fr-FR', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      })
+    });
+    
+    // Update average rating (simulation) - this won't persist
+    // const totalRatings = mockReviews.reduce((sum, review) => sum + review.rating, 0);
+    // boatManager.rating = parseFloat((totalRatings / mockReviews.length).toFixed(1));
+    // boatManager.reviewCount = mockReviews.length;
   };
 
   const StarRating = ({ rating }: { rating: number }) => (
@@ -501,45 +711,124 @@ export default function ProfileScreen() {
     </View>
   );
 
+  const RatingModal = ({ boatManagerName }: { boatManagerName: string }) => (
+    <Modal
+      visible={showRatingModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowRatingModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Évaluer {boatManagerName}</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowRatingModal(false)}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.ratingServiceInfo}>
+            <Text style={styles.ratingServiceTitle}>{selectedService?.type}</Text>
+            <Text style={styles.ratingServiceDescription}>
+              {selectedService?.description}
+            </Text>
+          </View>
+          
+          <View style={styles.starsContainer}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <TouchableOpacity
+                key={star}
+                onPress={() => setRating(star)}
+              >
+                <Star
+                  size={40}
+                  color="#FFC107"
+                  fill={star <= rating ? '#FFC107' : 'none'}
+                  style={styles.starIcon}
+                />
+              </TouchableOpacity>
+            ))}
+          </View>
+          
+          <Text style={styles.ratingLabel}>
+            {rating === 0 ? 'Sélectionnez une note' : 
+             rating === 1 ? 'Très insatisfait' :
+             rating === 2 ? 'Insatisfait' :
+             rating === 3 ? 'Correct' :
+             rating === 4 ? 'Satisfait' : 'Très satisfait'}
+          </Text>
+          
+          <View style={styles.commentContainer}>
+            <TextInput
+              style={styles.commentInput}
+              value={comment}
+              onChangeText={setComment}
+              placeholder="Partagez votre expérience..."
+              multiline
+              numberOfLines={4}
+            />
+          </View>
+          
+          <View style={styles.ratingActions}>
+            <TouchableOpacity 
+              style={styles.ratingCancelButton}
+              onPress={() => setShowRatingModal(false)}
+            >
+              <Text style={styles.ratingCancelText}>Annuler</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[
+                styles.ratingSubmitButton,
+                rating === 0 && styles.ratingSubmitButtonDisabled
+              ]}
+              onPress={handleSubmitRating}
+              disabled={rating === 0}
+            >
+              <Text style={styles.ratingSubmitText}>Envoyer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const ProfileHeader = () => (
     <View style={styles.profileHeader}>
       <View style={styles.profileImageContainer}>
         <Image 
-          source={{ uri: userProfile.profileImage }} 
+          source={{ uri: localAvatar }} // Use localAvatar here
           style={styles.profileImage} 
         />
         <TouchableOpacity 
           style={styles.editPhotoButton}
-          onPress={() => setShowPhotoModal(true)}
+          onPress={() => setShowPhotoModal(true)} // Only open modal on press
         >
           <Pencil size={16} color="white" />
         </TouchableOpacity>
       </View>
       
       <Text style={styles.profileName}>
-        {userProfile.firstName} {userProfile.lastName}
+        {user?.firstName} {user?.lastName}
       </Text>
       
       <View style={styles.profileInfoList}>
         <View style={styles.profileInfoItem}>
           <Mail size={20} color="#666" />
-          <Text style={styles.profileInfoText}>{userProfile.email}</Text>
+          <Text style={styles.profileInfoText}>{user?.email}</Text>
         </View>
         <View style={styles.profileInfoItem}>
           <Phone size={20} color="#666" />
-          <Text style={styles.profileInfoText}>{userProfile.phone}</Text>
+          <Text style={styles.profileInfoText}>{user?.phone || 'N/A'}</Text> {/* Display phone number */}
         </View>
         <View style={styles.profileInfoItem}>
           <Calendar size={20} color="#666" />
-          <Text style={styles.profileInfoText}>Membre depuis {userProfile.memberSince}</Text>
+          <Text style={styles.profileInfoText}>Membre depuis {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : 'N/A'}</Text>
         </View>
       </View>
-      <TouchableOpacity 
-        style={styles.editProfileButton}
-        onPress={handleEditProfile}
-      >
-        <Text style={styles.editProfileText}>Modifier mon profil</Text>
-      </TouchableOpacity>
     </View>
   );
 
@@ -563,10 +852,10 @@ export default function ProfileScreen() {
         <View style={styles.boatsContainer}>
           {boats.length > 0 ? (
             boats.map((boat) => (
-              <TouchableOpacity // Added TouchableOpacity here
+              <TouchableOpacity
                 key={boat.id} 
                 style={styles.boatCard}
-                onPress={() => router.push(`/boats/${boat.id}`)} // Added onPress handler
+                onPress={() => router.push(`/boats/${boat.id}`)}
               >
                 <Image source={{ uri: boat.image }} style={styles.boatImage} />
                 <View style={styles.boatInfo}>
@@ -580,11 +869,7 @@ export default function ProfileScreen() {
             ))
           ) : (
             <View style={styles.emptyState}>
-              <Boat size={48} color="#ccc" />
-              <Text style={styles.emptyStateTitle}>Aucun bateau</Text>
-              <Text style={styles.emptyStateText}>
-                Ajoutez votre premier bateau pour commencer à gérer vos services.
-              </Text>
+              <Text style={styles.emptyStateText}>Aucun bateau enregistré.</Text>
             </View>
           )}
         </View>
@@ -593,30 +878,32 @@ export default function ProfileScreen() {
   );
 
   const PortsSection = () => (
-    <View style={styles.portsContainer}>
-      <Text style={styles.portTitle}>Mes ports d'attache</Text>
-      {userPorts.length > 0 ? (
-        userPorts.map((portData, index) => (
-          <View key={index} style={styles.portCard}>
-            <MapPin size={24} color="#0066CC" />
-            <View style={styles.portInfo}>
-              <Text style={styles.portName}>{portData.port}</Text>
-              {portData.boatManager && (
-                <Text style={styles.portAddress}>Boat Manager: {portData.boatManager.name}</Text>
-              )}
-            </View>
-            <ChevronRight size={20} color="#666" />
-          </View>
-        ))
-      ) : (
-        <View style={styles.emptyState}>
-          <MapPin size={48} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>Aucun port d'attache</Text>
-          <Text style={styles.emptyStateText}>
-            Ajoutez un port d'attache pour être mis en relation avec un Boat Manager.
-          </Text>
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleContainer}>
+          <MapPin size={24} color="#0066CC" />
+          <Text style={styles.sectionTitle}>Mes ports d'attache</Text>
         </View>
-      )}
+      </View>
+      
+      <View style={styles.portsContainer}>
+        {profile.ports.length > 0 ? (
+          profile.ports.map((port) => (
+            <View key={port.id} style={styles.portCard}>
+              <MapPin size={24} color="#0066CC" />
+              <View style={styles.portInfo}>
+                <Text style={styles.portName}>{port.name}</Text>
+                <Text style={styles.portAddress}>{port.name}</Text> {/* Assuming address is same as name for simplicity */}
+              </View>
+              <ChevronRight size={20} color="#666" />
+            </View>
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Aucun port d'attache enregistré.</Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 
@@ -638,7 +925,7 @@ export default function ProfileScreen() {
               onPress={() => router.push(`/request/${service.id}`)}
             >
               <View style={styles.serviceHistoryHeader}>
-                <View style={styles.serviceInfo}>
+                <View>
                   <Text style={styles.serviceHistoryType}>{service.type}</Text>
                   <Text style={styles.serviceHistoryDate}>
                     {new Date(service.date).toLocaleDateString('fr-FR', {
@@ -676,15 +963,27 @@ export default function ProfileScreen() {
                 </View>
               </View>
               
+              {service.status === 'completed' && !service.rated && (
+                <TouchableOpacity 
+                  style={styles.rateButton}
+                  onPress={() => handleRateService(service)}
+                >
+                  <Star size={16} color="#F59E0B" />
+                  <Text style={styles.rateButtonText}>Évaluer ce service</Text>
+                </TouchableOpacity>
+              )}
+              
+              {service.rated && (
+                <View style={styles.ratedBadge}>
+                  <Star size={16} color="#10B981" fill="#10B981" />
+                  <Text style={styles.ratedBadgeText}>Service évalué</Text>
+                </View>
+              )}
             </TouchableOpacity>
           ))
         ) : (
           <View style={styles.emptyState}>
-            <FileTextIcon size={48} color="#ccc" />
-            <Text style={styles.emptyStateTitle}>Aucun historique de service</Text>
-            <Text style={styles.emptyStateText}>
-              Vos demandes de service et interventions passées apparaîtront ici.
-            </Text>
+            <Text style={styles.emptyStateText}>Aucun historique de service.</Text>
           </View>
         )}
       </View>
@@ -703,10 +1002,10 @@ export default function ProfileScreen() {
       <View style={styles.managersList}>
         {boatManagers.length > 0 ? (
           boatManagers.map((manager) => (
-            <TouchableOpacity // Added TouchableOpacity here
+            <TouchableOpacity
               key={manager.id} 
               style={styles.managerCard}
-              onPress={() => router.push(`/boat-manager/${manager.id}`)} // Added onPress handler
+              onPress={() => router.push(`/boat-manager/${manager.id}`)}
             >
               <Image source={{ uri: manager.image }} style={styles.managerImage} />
               <View style={styles.managerInfo}>
@@ -721,15 +1020,139 @@ export default function ProfileScreen() {
           ))
         ) : (
           <View style={styles.emptyState}>
-            <Users size={48} color="#ccc" />
-            <Text style={styles.emptyStateTitle}>Aucun Boat Manager</Text>
+            <Text style={styles.emptyStateText}>Aucun Boat Manager trouvé.</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+
+  const InventoryTab = () => (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleContainer}>
+          <Anchor size={24} color="#0066CC" />
+          <Text style={styles.sectionTitle}>Inventaire du bateau</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.addButton}
+          onPress={() => router.push(`/boats/inventory/new?boatId=${boats[0]?.id || '1'}`)}
+        >
+          <Plus size={20} color="#0066CC" />
+          <Text style={styles.addButtonText}>Ajouter</Text>
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.inventoryList}>
+        {mockInventory.length > 0 ? (
+          mockInventory.map((item) => (
+            <TouchableOpacity 
+              key={item.id} 
+              style={styles.inventoryItemCard}
+              onPress={() => {
+                setShowInventoryDetailModal(true);
+                setSelectedInventoryItem(item);
+              }}
+            >
+              <View style={styles.inventoryItemHeader}>
+                <Text style={styles.inventoryItemName}>{item.name}</Text>
+                <View style={styles.inventoryItemCategoryBadge}>
+                  <Text style={styles.inventoryItemCategoryText}>{item.category}</Text>
+                </View>
+              </View>
+              <Text style={styles.inventoryItemDetails}>
+                {item.brand} {item.model} {item.serialNumber}
+              </Text>
+              <ChevronRight size={20} color="#666" style={styles.inventoryItemChevron} />
+            </TouchableOpacity>
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <Anchor size={48} color="#ccc" />
+            <Text style={styles.emptyStateTitle}>Aucun équipement</Text>
             <Text style={styles.emptyStateText}>
-              Vos Boat Managers assignés apparaîtront ici.
+              Ajoutez les équipements présents sur votre bateau.
             </Text>
           </View>
         )}
       </View>
     </View>
+  );
+
+  const InventoryItemDetailModal = () => (
+    <Modal
+      visible={showInventoryDetailModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowInventoryDetailModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Détails de l'équipement</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowInventoryDetailModal(false)}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          {selectedInventoryItem ? (
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.inventoryDetailCard}>
+                <View style={styles.inventoryDetailHeader}>
+                  <Text style={styles.inventoryDetailName}>{selectedInventoryItem.name}</Text>
+                  <View style={styles.inventoryDetailCategoryBadge}>
+                    <Text style={styles.inventoryDetailCategoryText}>{selectedInventoryItem.category}</Text>
+                  </View>
+                </View>
+
+                {selectedInventoryItem.brand && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Tag size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Marque:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.brand}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.model && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Info size={16} color="#666" />
+                    <Text style={styles.detailLabel}>Modèle:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.model}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.serialNumber && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Hash size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Numéro de série:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.serialNumber}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.purchaseDate && (
+                  <View style={styles.inventoryDetailRow}>
+                    <Calendar size={16} color="#666" />
+                    <Text style={styles.inventoryDetailLabel}>Date d'achat:</Text>
+                    <Text style={styles.inventoryDetailValue}>{selectedInventoryItem.purchaseDate}</Text>
+                  </View>
+                )}
+                {selectedInventoryItem.notes && (
+                  <View style={styles.inventoryDetailNotesContainer}>
+                    <FileText size={16} color="#666" />
+                    <Text style={styles.inventoryDetailNotesLabel}>Notes:</Text>
+                    <Text style={styles.inventoryDetailNotesText}>{selectedInventoryItem.notes}</Text>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+          ) : (
+            <View style={styles.modalBody}>
+              <Text style={styles.emptyModalText}>Aucun détail d'équipement sélectionné.</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </Modal>
   );
 
   const AccountSettings = () => (
@@ -742,7 +1165,7 @@ export default function ProfileScreen() {
       </View>
       
       <TouchableOpacity style={styles.settingItem}
-        onPress={() => setShowEditModal(true)}
+        onPress={() => router.push('/profile/edit')}
         >
         <Text style={styles.settingText}>Modifier mon profil</Text>
         <ChevronRight size={20} color="#666" />
@@ -825,11 +1248,11 @@ export default function ProfileScreen() {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity 
-            style={[styles.tab, selectedTab === 'history' && styles.activeTab]}
-            onPress={() => setSelectedTab('history')}
+            style={[styles.tab, selectedTab === 'inventory' && styles.activeTab]}
+            onPress={() => setSelectedTab('inventory')}
           >
-            <Text style={[styles.tabText, selectedTab === 'history' && styles.activeTabText]}>
-              Historique
+            <Text style={[styles.tabText, selectedTab === 'inventory' && styles.activeTabText]}>
+              Inventaire
             </Text>
           </TouchableOpacity>
          
@@ -838,22 +1261,28 @@ export default function ProfileScreen() {
         {/* Tab Content */}
         {selectedTab === 'boats' && <BoatsList />}
         {selectedTab === 'ports' && <PortsSection />}
-        {selectedTab === 'history' && <ServiceHistoryList />}
+        {selectedTab === 'inventory' && <InventoryTab />}
        
         
         {/* These sections are always visible regardless of the selected tab */}
         <BoatManagersList />
         <AccountSettings />
       </ScrollView>
-      <PhotoModal />
-      <AvatarModal />
-      <EditProfileModal 
-        visible={showEditModal}
-        onClose={() => setShowEditModal(false)}
-        formData={userProfile}
-        setFormData={setUserProfile}
-        handleSaveProfile={handleSaveProfile}
+      <PhotoModal 
+        visible={showPhotoModal} // Control visibility with state
+        onClose={() => setShowPhotoModal(false)}
+        onChoosePhoto={handleChoosePhoto}
+        onDeletePhoto={handleDeletePhoto}
+        hasCustomPhoto={localAvatar !== avatars.neutral}
+        onSelectAvatar={() => setShowAvatarModal(true)}
       />
+      <AvatarModal 
+        visible={showAvatarModal}
+        onClose={() => setShowAvatarModal(false)}
+        onSelectAvatar={handleSelectAvatar}
+      />
+      {selectedService && <RatingModal boatManagerName={selectedService.provider.name} />}
+      <InventoryItemDetailModal />
     </>
   );
 }
@@ -915,24 +1344,21 @@ const styles = StyleSheet.create({
   },
   profileImageContainer: {
     position: 'relative',
-    alignSelf: 'center',
     marginBottom: 16,
   },
   profileImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 3,
-    borderColor: '#0066CC',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
   },
   editPhotoButton: {
     position: 'absolute',
-    bottom: 0,
     right: 0,
+    bottom: 0,
     backgroundColor: '#0066CC',
     padding: 8,
     borderRadius: 20,
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: 'white',
   },
   profileName: {
@@ -1049,6 +1475,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
+    marginBottom: 4,
   },
   boatDetails: {
     fontSize: 14,
@@ -1126,14 +1553,31 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center', // Ensure it's centered
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 16, // Unified borderRadius
     padding: 24,
     gap: 16,
+    width: '90%', // Added width
+    maxWidth: 500, // Added maxWidth
+    maxHeight: '90%', // Adjusted maxHeight to allow more content
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
   },
   modalTitle: {
     fontSize: 20,
@@ -1242,7 +1686,7 @@ modalCancelButton: {
         elevation: 2,
       },
       web: {
-        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -1426,7 +1870,7 @@ modalCancelButton: {
         elevation: 4,
       },
       web: {
-        boxBoxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
+        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
       },
     }),
   },
@@ -1472,7 +1916,7 @@ modalCancelButton: {
         elevation: 2,
       },
       web: {
-        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -1525,7 +1969,7 @@ modalCancelButton: {
         elevation: 2,
       },
       web: {
-        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -1556,7 +2000,7 @@ modalCancelButton: {
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -1630,37 +2074,4 @@ modalCancelButton: {
     padding: 20,
   },
 });
-
-// Mock data for reviews
-const mockReviews = [
-  {
-    id: '1',
-    author: 'Jean Dupont',
-    rating: 5,
-    comment: 'Excellent service, très professionnel et réactif.',
-    date: '15 février 2024',
-  },
-  {
-    id: '2',
-    author: 'Marie Martin',
-    rating: 4,
-    comment: 'Très bonne expérience, je recommande.',
-    date: '10 février 2024',
-  },
-  {
-    id: '3',
-    author: 'Pierre Durand',
-    rating: 5,
-    comment: 'Service impeccable et conseils avisés.',
-    date: '5 février 2024',
-  },
-];
-
-// Mock data for boat manager
-const boatManager = {
-  id: '1',
-  name: 'Marie Martin',
-  rating: 4.8,
-  reviewCount: 156,
-};
 

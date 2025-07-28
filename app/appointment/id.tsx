@@ -10,7 +10,7 @@ interface Appointment {
   time: string | null; // Peut être null
   duration: number | null; // Peut être null
   type: string;
-  status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'en_attente' | 'confirme' | 'annule' | 'termine';
   client: {
     id: string;
     name: string;
@@ -30,7 +30,7 @@ interface Appointment {
     id: string;
     name: string;
   };
-  nauticalCompany?: {
+  nauticalCompany?: { // Renamed from company to match Supabase relation
     id: string;
     name: string;
     phone?: string | null; // Peut être null
@@ -38,12 +38,8 @@ interface Appointment {
 }
 
 export default function AppointmentDetailsScreen() {
-  const params = useLocalSearchParams();
-  const { id } = params;
-
-  console.log("Params reçus dans [id].tsx:", params); // <-- Ajoutez cette ligne
-  console.log("ID reçu dans [id].tsx:", id); // <-- Ajoutez cette ligne
-const [appointment, setAppointment] = useState<Appointment | null>(null);
+  const { id } = useLocalSearchParams();
+  const [appointment, setAppointment] = useState<Appointment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,9 +69,9 @@ const [appointment, setAppointment] = useState<Appointment | null>(null);
             duree,
             description,
             statut,
-            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
-            boat(id, name, type, place_de_port),
-            invite(id, first_name, last_name, phone, profile),
+            id_client(id, first_name, last_name, avatar, e_mail, phone),
+            id_boat(id, name, type, place_de_port),
+            id_companie(id, company_name, phone),
             categorie_service(description1)
           `)
           .eq('id', appointmentIdNum) // Utiliser l'ID converti en nombre
@@ -114,28 +110,25 @@ const [appointment, setAppointment] = useState<Appointment | null>(null);
             type: data.categorie_service?.description1 || 'unknown',
             status: data.statut,
             client: {
-              id: data.users.id.toString(),
-              name: `${data.users.first_name ?? ''} ${data.users.last_name ?? ''}`, // Gérer undefined
-              avatar: data.users.avatar || null, // Gérer avatar null
-              email: data.users.e_mail,
-              phone: data.users.phone,
+              id: data.id_client.id.toString(),
+              name: `${data.id_client.first_name ?? ''} ${data.id_client.last_name ?? ''}`, // Gérer undefined
+              avatar: data.id_client.avatar || null, // Gérer avatar null
+              email: data.id_client.e_mail,
+              phone: data.id_client.phone,
             },
             boat: {
-              id: data.boat.id.toString(),
-              name: data.boat.name,
-              type: data.boat.type,
-              place_de_port: data.boat.place_de_port ?? null, // Gérer place_de_port null
+              id: data.id_boat.id.toString(),
+              name: data.id_boat.name,
+              type: data.id_boat.type,
+              place_de_port: data.id_boat.place_de_port ?? null, // Gérer place_de_port null
             },
-            location: data.boat.place_de_port ?? null, // Utiliser place_de_port du bateau ou null
+            location: data.id_boat.place_de_port ?? null, // Utiliser place_de_port du bateau ou null
             description: data.description ?? null, // Gérer description null
-            nauticalCompany:
-  data.invite && data.invite.profile === 'nautical_company'
-    ? {
-        id: data.invite.id.toString(),
-        name: `${data.invite.first_name} ${data.invite.last_name}`,
-        phone: data.invite.phone ?? null,
-      }
-    : null, // Gérer id_companie null
+            nauticalCompany: data.id_companie ? {
+              id: data.id_companie.id.toString(),
+              name: data.id_companie.company_name,
+              phone: data.id_companie.phone ?? null, // Gérer phone null
+            } : null, // Gérer id_companie null
           });
         } else {
           setError("Rendez-vous non trouvé.");
@@ -172,8 +165,9 @@ const [appointment, setAppointment] = useState<Appointment | null>(null);
 
   const handleEditAppointment = () => {
     if (appointment?.id) {
+      // Navigation vers le planning de l'entreprise du nautisme pour modification
       router.push({
-        pathname: '/(boat-manager)/planning',
+        pathname: '/(nautical-company)/planning',
         params: { editAppointmentId: appointment.id }
       });
     } else {
@@ -205,7 +199,7 @@ const [appointment, setAppointment] = useState<Appointment | null>(null);
                 Alert.alert('Erreur', `Impossible de supprimer le rendez-vous: ${deleteError.message}`);
               } else {
                 Alert.alert('Succès', 'Le rendez-vous a été supprimé avec succès.');
-                router.back(); // Go back to the previous screen (e.g., planning list)
+                router.back(); // Revenir à l'écran précédent (ex: liste des plannings)
               }
             }
           },
@@ -452,3 +446,4 @@ const styles = StyleSheet.create({
     color: '#EF4444',
   },
 });
+
