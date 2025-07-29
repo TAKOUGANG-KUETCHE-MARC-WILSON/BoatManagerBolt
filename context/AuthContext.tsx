@@ -76,6 +76,7 @@ export type User = PleasureBoater | BoatManagerUser | NauticalCompany | Corporat
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
+  loading: boolean; 
   pendingServiceRequest: ServiceRequest | null;
   ports: Port[];
   login: (email: string, password: string, portId?: string) => Promise<void>;
@@ -94,6 +95,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [pendingServiceRequest, setPendingServiceRequest] = useState<ServiceRequest | null>(null);
   const [availablePorts, setAvailablePorts] = useState<Port[]>([]);
 
@@ -136,7 +138,7 @@ bcrypt.setRandomFallback((len: number) => {
       }
     };
 
-    loadAndSetSession();
+    loadAndSetSession().finally(() => setLoading(false));
 
     // Listen for auth state changes from Supabase
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -621,6 +623,7 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
       value={{
         isAuthenticated,
         user,
+        loading,
         pendingServiceRequest,
         ports: availablePorts,
         login,

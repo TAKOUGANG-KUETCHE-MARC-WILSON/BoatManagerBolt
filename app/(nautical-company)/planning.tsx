@@ -1,3 +1,4 @@
+// app/(nautical-company)/planning.tsx
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Modal, TextInput, Alert } from 'react-native';
 import { Calendar as CalendarIcon, Clock, Bot as Boat, MapPin, User, ChevronRight, ChevronLeft, MessageSquare, FileText, Plus, X, Check, Building, Search } from 'lucide-react-native';
@@ -53,6 +54,10 @@ interface Client {
     name: string;
     type: string;
     place_de_port?: string;
+  }>;
+  ports?: Array<{ // Added ports to Client interface
+    id: string;
+    name: string;
   }>;
 }
 
@@ -255,6 +260,9 @@ const BoatManagerSelectionModal = ({ visible, onClose, onSelectBoatManager, boat
             </TouchableOpacity>
           ))}
 
+         {/* Zone vierge */}
+          <View style={{ height: 60 }} />
+
         </ScrollView>
       </View>
       </View>
@@ -388,7 +396,7 @@ const AddAppointmentModal = ({
   onSaveAppointment,
   allClients,
   allBoatManagers,
-  allNauticalCompanies,
+  allNauticalCompanies, // This is now "other nautical companies"
   allServiceCategories,
   mode, // 'new' or 'edit'
 }) => {
@@ -398,18 +406,31 @@ const AddAppointmentModal = ({
 
   const [modalSelectedClient, setModalSelectedClient] = useState<Client | null>(null);
   const [modalSelectedBoat, setModalSelectedBoat] = useState<Client['boats'][0] | null>(null);
-  const [modalSelectedNauticalCompany, setModalSelectedNauticalCompany] = useState<NauticalCompany | null>(null);
-  const [modalWithNauticalCompany, setModalWithNauticalCompany] = useState(false);
+  const [modalSelectedBoatManager, setModalSelectedBoatManager] = useState<BoatManager | null>(null); // State for invited BM
+  const [modalWithBoatManager, setModalWithBoatManager] = useState(false); // Toggle for inviting BM
 
   const [notifyClient, setNotifyClient] = useState(false);
   const [showClientModal, setShowClientModal] = useState(false);
   const [showBoatModal, setShowBoatModal] = useState(false);
-  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false); // Not used in this modal, but kept for consistency
-  const [showNauticalCompanyModal, setShowNauticalCompanyModal] = useState(false);
+  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false); // For selecting BM to invite
   const [showServiceTypeModal, setShowServiceTypeModal] = useState(false);
   const [isScheduleDatePickerVisible, setIsScheduleDatePickerVisible] = useState(false);
   const [isScheduleTimePickerVisible, setIsScheduleTimePickerVisible] = useState(false);
+  
 
+  const filteredBoatManagers = useMemo(() => {
+  if (!modalSelectedClient) return allBoatManagers;
+
+  const clientPortNames = modalSelectedClient.ports
+    ?.map(port => port.name)
+    .filter(Boolean) || [];
+
+  return allBoatManagers.filter(manager =>
+    manager.ports.some(managerPort => clientPortNames.includes(managerPort))
+  );
+}, [modalSelectedClient, allBoatManagers]);
+
+  
 
   // Initialize internal states when modal becomes visible or initialAppointment changes
   useEffect(() => {
@@ -417,7 +438,7 @@ const AddAppointmentModal = ({
       setLocalAppointment(initialAppointment);
       setInitialBoatPlaceDePort(initialAppointment.boat?.place_de_port ?? undefined);
 
-      // Initialize client, boat, nauticalCompany based on initialAppointment
+      // Initialize client, boat, invited professional based on initialAppointment
       if (initialAppointment.id) { // EDIT MODE
         const client = allClients.find(c => c.id === initialAppointment.client?.id);
         setModalSelectedClient(client || null);
@@ -425,14 +446,21 @@ const AddAppointmentModal = ({
         const boat = client?.boats.find(b => b.id === initialAppointment.boat?.id);
         setModalSelectedBoat(boat || null);
 
-        setModalSelectedNauticalCompany(initialAppointment.nauticalCompany || null);
-        setModalWithNauticalCompany(!!initialAppointment.nauticalCompany);
+        // Check if invited professional is a Boat Manager
+        if (initialAppointment.invite?.profile === 'boat_manager') {
+          const invitedBm = allBoatManagers.find(bm => bm.id === initialAppointment.invite?.id);
+          setModalSelectedBoatManager(invitedBm || null);
+          setModalWithBoatManager(true);
+        } else {
+          setModalSelectedBoatManager(null);
+          setModalWithBoatManager(false);
+        }
         setNotifyClient(initialAppointment.notifier === 'oui'); // Assuming 'notifier' is a property in initialAppointment
       } else { // NEW APPOINTMENT MODE
         setModalSelectedClient(null);
         setModalSelectedBoat(null);
-        setModalSelectedNauticalCompany(null);
-        setModalWithNauticalCompany(false);
+        setModalSelectedBoatManager(null);
+        setModalWithBoatManager(false);
         setNotifyClient(false); // Default for new appointment
         setLocalAppointment({ // Reset localAppointment for new entry
           date: new Date().toISOString().split('T')[0],
@@ -445,7 +473,7 @@ const AddAppointmentModal = ({
         });
       }
     }
-  }, [visible, initialAppointment, allClients, allNauticalCompanies]); // Dependencies
+  }, [visible, initialAppointment, allClients, allBoatManagers]); // Dependencies
 
   const handleLocalDateConfirm = (date: Date) => {
     setLocalAppointment(prev => ({ ...prev, date: date.toISOString().split('T')[0] }));
@@ -468,8 +496,8 @@ const AddAppointmentModal = ({
       return false;
     }
 
-    if (modalWithNauticalCompany && !modalSelectedNauticalCompany) { // Use internal state
-      Alert.alert('Erreur', 'Veuillez sélectionner une entreprise du nautisme');
+    if (modalWithBoatManager && !modalSelectedBoatManager) { // Use internal state
+      Alert.alert('Erreur', 'Veuillez sélectionner un Boat Manager à associer');
       return false;
     }
 
@@ -579,9 +607,9 @@ const AddAppointmentModal = ({
       date_rdv: localAppointment.date,
       heure: localAppointment.time,
       duree: durationInTimeFormat,
-      cree_par: Number(user?.id), // Current Boat Manager's ID
-      invite: modalWithNauticalCompany ? Number(modalSelectedNauticalCompany?.id) : null, // Use internal state
-      statut: modalWithNauticalCompany ? 'en_attente' : 'confirme',
+      cree_par: Number(user?.id), // Current Nautical Company's ID
+      invite: modalWithBoatManager ? Number(modalSelectedBoatManager?.id) : null, // Use internal state for invited BM
+      statut: modalWithBoatManager ? 'en_attente' : 'confirme', // If inviting BM, status is 'en_attente'
       notifier: notifyClient ? 'oui' : 'non',
       lieu: localAppointment.location,
     };
@@ -666,21 +694,26 @@ const AddAppointmentModal = ({
         } : null,
       };
 
-      Alert.alert(
-        'Succès',
-        successMessage, // Message dynamique
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              onSaveAppointment(savedAppointment, !!localAppointment.id);
-              onClose(); // Ferme la modale
-            }
-          }
-        ]
-      );
+      console.log('✅ Sauvegarde réussie, préparation fermeture modale...');
+onSaveAppointment(savedAppointment, !!localAppointment.id);
+
+setTimeout(() => {
+  Alert.alert(
+    'Succès',
+    successMessage,
+    [
+      {
+        text: 'OK',
+        onPress: () => {
+          onClose(); // ferme la modale
+          console.log('✅ Modale fermée après succès.');
+        }
+      }
+    ]
+  );
+}, 100);
     }
-  }, [localAppointment, modalSelectedClient, modalSelectedBoat, modalWithNauticalCompany, modalSelectedNauticalCompany, initialBoatPlaceDePort, user, onClose, onSaveAppointment]);
+  }, [localAppointment, modalSelectedClient, modalSelectedBoat, modalWithBoatManager, modalSelectedBoatManager, initialBoatPlaceDePort, user, onClose, onSaveAppointment]);
 
   return (
     <Modal
@@ -855,34 +888,34 @@ const AddAppointmentModal = ({
             </View>
 
             <View style={styles.formSection}>
-              <Text style={styles.formSectionTitle}>Avec une entreprise du nautisme</Text>
+              <Text style={styles.formSectionTitle}>Associer un Boat Manager</Text>
               <View style={styles.companyToggleContainer}>
-                <Text style={styles.companyToggleLabel}>Associer une entreprise</Text>
+                <Text style={styles.companyToggleLabel}>Associer un Boat Manager</Text>
                 <TouchableOpacity
                   style={[
                     styles.toggleButton,
-                    modalWithNauticalCompany ? styles.toggleButtonActive : styles.toggleButtonInactive
+                    modalWithBoatManager ? styles.toggleButtonActive : styles.toggleButtonInactive
                   ]}
-                  onPress={() => setModalWithNauticalCompany(!modalWithNauticalCompany)}
+                  onPress={() => setModalWithBoatManager(!modalWithBoatManager)}
                 >
                   <View style={[
                     styles.toggleIndicator,
-                    modalWithNauticalCompany ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
+                    modalWithBoatManager ? styles.toggleIndicatorActive : styles.toggleIndicatorInactive
                   ]} />
                 </TouchableOpacity>
               </View>
 
-              {modalWithNauticalCompany && (
+              {modalWithBoatManager && (
                 <TouchableOpacity
                   style={styles.formField}
-                  onPress={() => setShowNauticalCompanyModal(true)}
+                  onPress={() => setShowBoatManagerModal(true)}
                 >
                   <View style={styles.formFieldIcon}>
-                    <Building size={20} color="#0066CC" />
+                    <User size={20} color="#0066CC" />
                   </View>
                   <View style={styles.formFieldContent}>
-                    <Text style={modalSelectedNauticalCompany ? styles.formFieldValue : styles.formFieldPlaceholder}>
-                      {modalSelectedNauticalCompany ? modalSelectedNauticalCompany.name : 'Sélectionner une entreprise du nautisme'}
+                    <Text style={modalSelectedBoatManager ? styles.formFieldValue : styles.formFieldPlaceholder}>
+                      {modalSelectedBoatManager ? modalSelectedBoatManager.name : 'Sélectionner un Boat Manager'}
                     </Text>
                   </View>
                   <ChevronRight size={20} color="#666" />
@@ -893,7 +926,7 @@ const AddAppointmentModal = ({
            <View style={styles.formSection}>
   <Text style={styles.formSectionTitle}>Notification</Text>
   <View style={styles.companyToggleContainer}>
-    <Text style={styles.companyToggleLabel}>Associer le client</Text>
+    <Text style={styles.companyToggleLabel}>Notifier le client</Text>
     <TouchableOpacity
       style={[
         styles.toggleButton,
@@ -1001,22 +1034,11 @@ const AddAppointmentModal = ({
         visible={showBoatManagerModal}
         onClose={() => setShowBoatManagerModal(false)}
         onSelectBoatManager={(manager) => {
-          // This modal is not directly used for setting selectedBoatManager in this flow
-          // as the main appointment form is for BM creating appointments.
-          // If you intend to allow inviting another BM, this logic needs to be integrated.
-          // For now, it's effectively a no-op for the main form.
+          setModalSelectedBoatManager(manager); // Set the selected Boat Manager
+          setModalWithBoatManager(true); // Ensure toggle is on if selected
           setShowBoatManagerModal(false);
         }}
-        boatManagers={allBoatManagers}
-      />
-      <NauticalCompanySelectionModal
-        visible={showNauticalCompanyModal}
-        onClose={() => setShowNauticalCompanyModal(false)}
-        onSelectNauticalCompany={(company) => {
-          setModalSelectedNauticalCompany(company);
-          setShowNauticalCompanyModal(false);
-        }}
-        nauticalCompanies={allNauticalCompanies}
+        boatManagers={filteredBoatManagers}
       />
       <ServiceTypeSelectionModal
         visible={showServiceTypeModal}
@@ -1042,7 +1064,7 @@ export default function PlanningScreen() {
   // Data for modals
   const [allClients, setAllClients] = useState<Client[]>([]);
   const [allBoatManagers, setAllBoatManagers] = useState<BoatManager[]>([]);
-  const [allNauticalCompanies, setAllNauticalCompanies] = useState<NauticalCompany[]>([]);
+  const [allNauticalCompanies, setAllNauticalCompanies] = useState<NauticalCompany[]>([]); // This is now "other nautical companies"
   const [allServiceCategories, setAllServiceCategories] = useState<Array<{id: number; description1: string}>>([]);
 
   // New appointment form state (this is the initial state for the modal)
@@ -1061,13 +1083,176 @@ export default function PlanningScreen() {
 
   // useFocusEffect to refetch appointments and handle edit mode when the screen comes into focus
   useFocusEffect(
-    useCallback(() => {
-      const fetchPlanningData = async () => {
-        if (!user?.id) return;
+  useCallback(() => {
+    console.log('👀 useFocusEffect déclenché');
 
-        // --- Fetch all necessary data for the planning screen and modals ---
-        // Fetch appointments where current user is creator or invited
-        const { data: rdvData, error: rdvError } = await supabase
+    let isActive = true;
+
+    const fetchPlanningData = async () => {
+      if (!user?.id) return;
+
+      // 1. RDV liés à l'utilisateur
+      const { data: rdvData, error: rdvError } = await supabase
+        .from('rendez_vous')
+        .select(`
+          id, date_rdv, heure, duree, description, statut,
+          id_client(id, first_name, last_name, avatar),
+          id_boat(id, name, type, place_de_port),
+          invite(id, first_name, last_name, profile),
+          cree_par(id, first_name, last_name, profile),
+          categorie_service(description1)
+        `)
+        .or(`cree_par.eq.${user.id},invite.eq.${user.id}`);
+
+      if (rdvError) {
+        console.error('Erreur chargement RDV:', rdvError);
+      } else if (isActive && rdvData) {
+        const formatted = rdvData.map(rdv => {
+          const duration = typeof rdv.duree === 'string'
+            ? rdv.duree.split(':').reduce((acc, val, i) => acc + (i === 0 ? +val * 60 : +val), 0)
+            : rdv.duree;
+          return {
+            id: rdv.id.toString(),
+            date: rdv.date_rdv,
+            time: rdv.heure,
+            duration,
+            type: rdv.categorie_service?.description1 || '',
+            status: rdv.statut,
+            description: rdv.description || null,
+            client: {
+              id: rdv.id_client.id.toString(),
+              name: `${rdv.id_client.first_name} ${rdv.id_client.last_name}`,
+              avatar: rdv.id_client.avatar
+            },
+            boat: {
+              id: rdv.id_boat.id.toString(),
+              name: rdv.id_boat.name,
+              type: rdv.id_boat.type,
+              place_de_port: rdv.id_boat.place_de_port
+            },
+            location: rdv.id_boat.place_de_port || null,
+            boatManager: rdv.cree_par?.profile === 'boat_manager' ? {
+              id: rdv.cree_par.id.toString(),
+              name: `${rdv.cree_par.first_name} ${rdv.cree_par.last_name}`
+            } : null,
+            invite: rdv.invite ? {
+              id: rdv.invite.id.toString(),
+              name: `${rdv.invite.first_name} ${rdv.invite.last_name}`,
+              profile: rdv.invite.profile
+            } : undefined,
+            nauticalCompany: rdv.invite?.profile === 'nautical_company' ? {
+              id: rdv.invite.id.toString(),
+              name: `${rdv.invite.first_name} ${rdv.invite.last_name}`
+            } : null
+          };
+        });
+        setAppointments(formatted);
+      }
+
+      // 2. Ports opérés
+      const { data: companyPorts, error: portsErr } = await supabase
+        .from('user_ports')
+        .select('port_id')
+        .eq('user_id', Number(user.id));
+      if (portsErr) return console.error('Ports erreur:', portsErr);
+
+      const operatedPortIds = companyPorts.map(p => p.port_id);
+
+      // 3. Clients sur ces ports
+      const { data: users, error: clientsErr } = await supabase
+        .from('users')
+        .select(`
+          id, first_name, last_name, avatar,
+          boat(id, name, type, place_de_port),
+          user_ports(port_id, ports(name))
+        `)
+        .eq('profile', 'pleasure_boater');
+
+      if (!clientsErr && isActive && users) {
+        const filtered = users.filter(u =>
+          u.user_ports?.some(up => operatedPortIds.includes(up.port_id))
+        );
+        const parsed = filtered.map(u => ({
+          id: u.id.toString(),
+          name: `${u.first_name} ${u.last_name}`,
+          avatar: u.avatar,
+          boats: u.boat || [],
+          ports: u.user_ports?.map(up => ({
+            id: up.port_id.toString(),
+            name: up.ports?.name || ''
+          })) || []
+        }));
+        setAllClients(parsed);
+      }
+
+      // 4. Catégories de service
+      const { data: cats, error: catErr } = await supabase
+        .from('user_categorie_service')
+        .select('categorie_service(id, description1)')
+        .eq('user_id', Number(user.id));
+      if (!catErr && cats) {
+        setAllServiceCategories(cats.map(uc => uc.categorie_service));
+      }
+
+      // 5. Boat Managers liés aux ports
+      const { data: portAssignments, error: paErr } = await supabase
+        .from('user_ports')
+        .select('user_id, ports(name)')
+        .in('port_id', operatedPortIds);
+      if (paErr) return;
+
+      const bmIds = [...new Set(portAssignments.map(p => p.user_id))];
+
+      const { data: bms, error: bmErr } = await supabase
+        .from('users')
+        .select('id, first_name, last_name')
+        .in('id', bmIds)
+        .eq('profile', 'boat_manager');
+
+      if (!bmErr && bms) {
+        setAllBoatManagers(
+          bms.map(bm => ({
+            id: bm.id.toString(),
+            name: `${bm.first_name} ${bm.last_name}`,
+            ports: portAssignments
+              .filter(p => p.user_id === bm.id)
+              .map(p => p.ports?.name || '')
+          }))
+        );
+      }
+
+      // 6. Autres entreprises nautiques (invitation)
+      const { data: others, error: othersErr } = await supabase
+        .from('users')
+        .select('id, company_name, user_ports(port_id, ports(name))')
+        .eq('profile', 'nautical_company')
+        .neq('id', Number(user.id));
+
+      if (!othersErr && others) {
+        const filteredCompanies = others.filter(comp =>
+          comp.user_ports.some(up => operatedPortIds.includes(up.port_id))
+        );
+        const formattedCompanies = filteredCompanies.map(comp => ({
+          id: comp.id.toString(),
+          name: comp.company_name,
+          logo: '',
+          location: comp.user_ports[0]?.ports?.name || '',
+          categories: [],
+          ports: comp.user_ports.map(up => ({
+            id: up.port_id,
+            name: up.ports.name
+          }))
+        }));
+        setAllNauticalCompanies(formattedCompanies);
+      }
+    };
+
+    fetchPlanningData();
+
+    if (editAppointmentId) {
+      console.log('🚀 Détection editAppointmentId, chargement de l’édition...');
+      const fetchAppointmentForEdit = async () => {
+        const { data, error } = await supabase
           .from('rendez_vous')
           .select(`
             id, date_rdv, heure, duree, description, statut,
@@ -1077,220 +1262,64 @@ export default function PlanningScreen() {
             cree_par(id, first_name, last_name, profile),
             categorie_service(description1)
           `)
-          .or(`cree_par.eq.${user.id},invite.eq.${user.id}`);
+          .eq('id', Number(editAppointmentId))
+          .single();
 
-        if (rdvError) {
-          console.error('Error fetching appointments:', rdvError);
+        if (error) {
+          console.error('Erreur chargement RDV pour édition:', error);
+          Alert.alert('Erreur', 'Impossible de charger le rendez-vous.');
         } else {
-          const formattedAppointments: Appointment[] = rdvData.map(rdv => {
-            let durationInMinutes: number | null = null;
-            if (typeof rdv.duree === 'string') {
-              const parts = rdv.duree.split(':');
-              if (parts.length >= 2) {
-                const hours = parseInt(parts[0], 10);
-                const minutes = parseInt(parts[1], 10);
-                durationInMinutes = hours * 60 + minutes;
-              }
-            } else if (typeof rdv.duree === 'number') {
-              durationInMinutes = rdv.duree;
-            }
+          const duration =
+            typeof data.duree === 'string'
+              ? data.duree.split(':').reduce((acc, val, i) => acc + (i === 0 ? +val * 60 : +val), 0)
+              : data.duree;
 
-            return {
-              id: rdv.id.toString(),
-              date: rdv.date_rdv,
-              time: rdv.heure,
-              duration: durationInMinutes,
-              type: rdv.categorie_service?.description1 || 'unknown',
-              status: rdv.statut,
-              client: {
-                id: rdv.id_client.id.toString(),
-                name: `${rdv.id_client.first_name} ${rdv.id_client.last_name}`,
-                avatar: rdv.id_client.avatar,
-              },
-              boat: {
-                id: rdv.id_boat.id.toString(),
-                name: rdv.id_boat.name,
-                type: rdv.id_boat.type,
-                place_de_port: rdv.id_boat.place_de_port,
-              },
-              location: rdv.id_boat.place_de_port || null,
-              description: rdv.description || null,
-              boatManager: rdv.cree_par && rdv.cree_par.profile === 'boat_manager' ? {
-                id: rdv.cree_par.id.toString(),
-                name: `${rdv.cree_par.first_name} ${rdv.cree_par.last_name}`,
-              } : null,
-              invite: rdv.invite ? {
-                id: rdv.invite.id.toString(),
-                name: `${rdv.invite.first_name} ${rdv.invite.last_name}`,
-                profile: rdv.invite.profile,
-              } : undefined,
-              nauticalCompany: rdv.invite && rdv.invite.profile === 'nautical_company' ? {
-                id: rdv.invite.id.toString(),
-                name: `${rdv.invite.first_name} ${rdv.invite.last_name}`,
-              } : null,
-            };
-          });
-          setAppointments(formattedAppointments);
-        }
-
-        // Fetch ports the current nautical company operates in
-        const { data: companyPorts, error: companyPortsError } = await supabase
-          .from('user_ports')
-          .select('port_id')
-          .eq('user_id', Number(user.id));
-
-        if (companyPortsError) {
-          console.error('Error fetching company ports:', companyPortsError);
-          return;
-        }
-        const operatedPortIds = companyPorts.map(p => p.port_id);
-
-        // Fetch clients whose boats are in these operated ports
-        if (operatedPortIds.length > 0) {
-          const { data: clientBoatData, error: clientBoatError } = await supabase
-            .from('boat')
-            .select('id_user, id_port')
-            .in('id_port', operatedPortIds);
-
-          if (clientBoatError) {
-            console.error('Error fetching client boats by port:', clientBoatError);
-            return;
-          }
-
-          const uniqueClientIds = [...new Set(clientBoatData.map(cb => cb.id_user))];
-
-          if (uniqueClientIds.length > 0) {
-            const { data: clientsData, error: clientsError } = await supabase
-              .from('users')
-              .select('id, first_name, last_name, avatar, boat(id, name, type, place_de_port)')
-              .in('id', uniqueClientIds)
-              .eq('profile', 'pleasure_boater');
-
-            if (clientsError) {
-              console.error('Error fetching clients:', clientsError);
-            } else {
-              setAllClients(clientsData.map(c => ({
-                id: c.id.toString(),
-                name: `${c.first_name} ${c.last_name}`,
-                avatar: c.avatar,
-                boats: c.boat || []
-              })) as Client[]);
-            }
-          }
-        }
-
-        // Fetch service categories that the current nautical company offers
-        const { data: categoriesData, error: categoriesError } = await supabase
-          .from('user_categorie_service')
-          .select('categorie_service(id, description1)')
-          .eq('user_id', Number(user.id));
-
-        if (categoriesError) {
-          console.error('Error fetching service categories for company:', categoriesError);
-        } else {
-          setAllServiceCategories(categoriesData.map(uc => uc.categorie_service));
-        }
-
-        // Fetch other nautical companies (for invitation)
-        const { data: otherCompanies, error: otherCompaniesError } = await supabase
-          .from('users')
-          .select('id, company_name, user_ports(port_id, ports(name))')
-          .eq('profile', 'nautical_company')
-          .neq('id', Number(user.id)); // Exclude current company
-
-        if (otherCompaniesError) {
-          console.error('Error fetching other nautical companies:', otherCompaniesError);
-        } else {
-          const filteredOtherCompanies: NauticalCompany[] = [];
-          for (const company of otherCompanies) {
-            const companyPortIds = company.user_ports.map((up: any) => up.port_id);
-            const commonPorts = operatedPortIds.filter(opId => companyPortIds.includes(opId));
-
-            if (commonPorts.length > 0) {
-              filteredOtherCompanies.push({
-                id: company.id.toString(),
-                name: company.company_name,
-                logo: '', // Not fetched here, can be added if needed
-                location: company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '',
-                categories: [], // Not fetched here, can be added if needed
-                ports: company.user_ports.map((up: any) => ({ id: up.port_id, name: up.ports.name }))
-              });
-            }
-          }
-          setAllNauticalCompanies(filteredOtherCompanies);
-        }
-      };
-
-      fetchPlanningData();
-
-      // Handle editAppointmentId from params AFTER all data is fetched
-      if (editAppointmentId) {
-        const fetchAppointmentForEdit = async () => {
-          const { data, error: rdvError } = await supabase
-            .from('rendez_vous')
-            .select(`
-              id, date_rdv, heure, duree, description, statut,
-              id_client(id, first_name, last_name, avatar),
-              id_boat(id, name, type, place_de_port),
-              invite(id, first_name, last_name, profile),
-              cree_par(id, first_name, last_name, profile),
-              categorie_service(description1)
-            `)
-            .eq('id', Number(editAppointmentId))
-            .single();
-
-          if (rdvError) {
-            console.error('Error fetching appointment for edit:', rdvError);
-            Alert.alert('Erreur', 'Impossible de charger le rendez-vous pour modification.');
-          } else if (data) {
-            let durationInMinutes: number | null = null;
-            if (typeof data.duree === 'string') {
-              const parts = data.duree.split(':');
-              if (parts.length >= 2) {
-                const hours = parseInt(parts[0], 10);
-                const minutes = parseInt(parts[1], 10);
-                durationInMinutes = hours * 60 + minutes;
-              }
-            }
-
-            const clientData = {
+          setNewAppointment({
+            id: data.id.toString(),
+            date: data.date_rdv,
+            time: data.heure,
+            duration,
+            type: data.categorie_service?.description1 || '',
+            status: data.statut,
+            location: data.id_boat.place_de_port || null,
+            description: data.description || null,
+            client: {
               id: data.id_client.id.toString(),
               name: `${data.id_client.first_name} ${data.id_client.last_name}`,
-              avatar: data.id_client.avatar,
-            };
-            const boatData = {
+              avatar: data.id_client.avatar
+            },
+            boat: {
               id: data.id_boat.id.toString(),
               name: data.id_boat.name,
               type: data.id_boat.type,
-              place_de_port: data.id_boat.place_de_port,
-            };
-            const nauticalCompanyData = data.invite?.profile === 'nautical_company' ? {
+              place_de_port: data.id_boat.place_de_port
+            },
+            invite: data.invite?.profile === 'boat_manager' ? {
               id: data.invite.id.toString(),
               name: `${data.invite.first_name} ${data.invite.last_name}`,
-            } : null;
+              profile: data.invite.profile
+            } : undefined,
+            nauticalCompany: data.invite?.profile === 'nautical_company' ? {
+              id: data.invite.id.toString(),
+              name: `${data.invite.first_name} ${data.invite.last_name}`
+            } : null
+          });
 
-            setNewAppointment({
-              id: data.id.toString(),
-              date: data.date_rdv,
-              time: data.heure,
-              duration: durationInMinutes,
-              type: data.categorie_service?.description1 || '',
-              status: data.statut,
-              location: data.boat.place_de_port || null,
-              description: data.description || null,
-              client: clientData,
-              boat: boatData,
-              nauticalCompany: nauticalCompanyData,
-            });
-
+          setTimeout(() => {
             setShowAddModal(true);
-            router.replace('/(nautical-company)/planning'); // Navigate back to clear params
-          }
-        };
-        fetchAppointmentForEdit();
-      }
-    }, [user, editAppointmentId])
-  );
+          }, 100);
+          router.replace('/(nautical-company)/planning');
+        }
+      };
+      fetchAppointmentForEdit();
+    }
+
+    return () => {
+      isActive = false;
+    };
+  }, [user, editAppointmentId])
+);
+
 
 
   const formatDate = (date: Date) => {

@@ -7,23 +7,24 @@ import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 
 export default function NauticalCompanyTabLayout() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth(); // ✅ récupère loading aussi
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadRequests, setUnreadRequests] = useState(0);
 
+  // Redirection uniquement une fois que user est chargé
   useEffect(() => {
-    if (user?.role !== 'nautical_company') {
+    if (!loading && user?.role !== 'nautical_company') {
       router.replace('/(tabs)');
     }
-    
-    // Simulate fetching unread counts
+
+    // Simulation des messages non lus (à personnaliser plus tard)
     setUnreadMessages(2);
     setUnreadRequests(3);
-  }, [user]);
+  }, [user, loading]);
 
-  if (user?.role !== 'nautical_company') {
-    return null;
-  }
+  // N'affiche rien tant que le rôle n'est pas chargé ou n'est pas autorisé
+  if (loading) return null;
+  if (user?.role !== 'nautical_company') return null;
 
   return (
     <Tabs
@@ -87,19 +88,9 @@ export default function NauticalCompanyTabLayout() {
         options={{
           title: 'Devis',
           headerShown: true,
-          href: null, // Masquer cet écran de la barre d'onglets
+          href: null, // Masqué de la barre d'onglets
         }}
       />
-      {/* L'entrée suivante est supprimée car appointment-form.tsx est maintenant un composant */}
-      {/* <Tabs.Screen
-        name="planning/appointment-form.tsx"
-        options={{
-          title: 'Devis',
-          headerShown: true,
-          href: null, // Masquer cet écran de la barre d'onglets
-        }}
-      /> */}
     </Tabs>
-    
   );
 }

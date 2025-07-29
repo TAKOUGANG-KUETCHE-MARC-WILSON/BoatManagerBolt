@@ -44,22 +44,25 @@ export default function DashboardScreen() {
         }
 
         // Fetch upcoming appointments
-        const { data: appointmentsData, count: upcomingAppointmentsCount, error: appointmentsError } = await supabase
-          .from('rendez_vous')
-          .select(`
-            id,
-            date_rdv,
-            heure,
-            description,
-            id_client(first_name, last_name),
-            id_boat(name, type, place_de_port)
-          `, { count: 'exact' })
-          .eq('id_companie', user.id)
-          .gte('date_rdv', new Date().toISOString().split('T')[0]) // Date >= today
-          .in('statut', ['en_attente', 'confirme']) // Assuming these are upcoming statuses
-          .order('date_rdv', { ascending: true })
-          .order('heure', { ascending: true })
-          .limit(3); // Limit to 3 for dashboard display
+        const today = new Date().toISOString().split('T')[0];
+const now = new Date().toTimeString().slice(0, 5); // "HH:MM"
+
+const { data: appointmentsData, count: upcomingAppointmentsCount, error: appointmentsError } = await supabase
+  .from('rendez_vous')
+  .select(`
+    id,
+    date_rdv,
+    heure,
+    description,
+    id_client(first_name, last_name),
+    id_boat(name, type, place_de_port)
+  `, { count: 'exact' })
+  .or(`invite.eq.${user.id},cree_par.eq.${user.id}`) // ✅ entreprise invitée OU créatrice
+  .in('statut', ['en_attente', 'confirme']) // ✅ statuts valides
+  .or(`date_rdv.gt.${today},and(date_rdv.eq.${today},heure.gt.${now})`) // ✅ futur
+  .order('date_rdv', { ascending: true })
+  .order('heure', { ascending: true })
+  .limit(3); // Limit to 3 for dashboard display
 
         if (appointmentsError) {
           console.error('Error fetching upcoming appointments:', appointmentsError);
