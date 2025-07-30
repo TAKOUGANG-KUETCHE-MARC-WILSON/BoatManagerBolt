@@ -121,22 +121,27 @@ bcrypt.setRandomFallback((len: number) => {
     fetchPorts();
 
     const loadAndSetSession = async () => {
-      try {
-        let userId = null;
-        if (Platform.OS === 'web') {
-          userId = localStorage.getItem('user_id');
-        } else {
-          userId = await SecureStore.getItemAsync('user_id');
-        }
+  try {
+    let userId = null;
+    if (Platform.OS === 'web') {
+      userId = localStorage.getItem('user_id');
+    } else {
+      userId = await SecureStore.getItemAsync('user_id');
+    }
 
-        if (userId) {
-          await getAndSetUserProfile(userId);
-        }
-      } catch (error) {
-        console.error('Failed to load session:', error);
-        await clearSession(); // Clear potentially corrupted session
+    if (userId) {
+      const userProfile = await getAndSetUserProfile(userId);
+
+      // ✅ Redirection automatique si on retrouve un utilisateur
+      if (userProfile) {
+        redirectUser(userProfile.role);
       }
-    };
+    }
+  } catch (error) {
+    console.error('Failed to load session:', error);
+    await clearSession(); // Clear potentially corrupted session
+  }
+};
 
     loadAndSetSession().finally(() => setLoading(false));
 

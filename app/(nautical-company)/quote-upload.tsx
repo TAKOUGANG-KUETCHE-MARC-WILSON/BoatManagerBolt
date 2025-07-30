@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Modal } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Upload, FileText, User, Bot as Boat, Calendar, Plus, X, Check, Download, Euro, Trash } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 interface Service {
   id: string;
@@ -13,10 +14,11 @@ interface Service {
 }
 
 interface QuoteUploadForm {
+  requestId: string; // Added to link to service_request
   title: string;
   clientId: string;
   clientName: string;
-  boatId: string;
+  boatId: string; // This should be the actual boat ID (string representation of integer)
   boatName: string;
   boatType: string;
   validUntil: string;
@@ -29,31 +31,29 @@ interface QuoteUploadForm {
 }
 
 export default function QuoteUploadScreen() {
-  const { requestId, clientId, clientName, boatId, boatName, boatType } = useLocalSearchParams<{
+  const { requestId } = useLocalSearchParams<{
     requestId?: string;
-    clientId?: string;
-    clientName?: string;
-    boatId?: string;
-    boatName?: string;
-    boatType?: string;
   }>();
   
   const { user } = useAuth();
   const [uploadMethod, setUploadMethod] = useState<'create' | 'upload' | null>(null);
   const [showMethodModal, setShowMethodModal] = useState(true);
-  
+  const [loading, setLoading] = useState(true);
+  const [requestDetails, setRequestDetails] = useState<any>(null); // To store fetched request details
+
   // Définir la date de validité par défaut (30 jours à partir d'aujourd'hui)
   const defaultValidUntil = new Date();
   defaultValidUntil.setDate(defaultValidUntil.getDate() + 30);
   const defaultValidUntilStr = defaultValidUntil.toISOString().split('T')[0];
   
   const [form, setForm] = useState<QuoteUploadForm>({
+    requestId: requestId || '',
     title: requestId ? 'Devis pour demande #' + requestId : '',
-    clientId: clientId || '',
-    clientName: clientName || '',
-    boatId: boatId || '',
-    boatName: boatName || '',
-    boatType: boatType || '',
+    clientId: '', // Will be fetched
+    clientName: '', // Will be fetched
+    boatId: '', // Will be fetched
+    boatName: '', // Will be fetched
+    boatType: '', // Will be fetched
     validUntil: defaultValidUntilStr,
     services: [
       {
@@ -68,6 +68,59 @@ export default function QuoteUploadScreen() {
   
   const [errors, setErrors] = useState<Partial<Record<keyof QuoteUploadForm | 'services', string>>>({});
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      if (!requestId) {
+        Alert.alert('Erreur', 'ID de la demande manquant.');
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // Fetch service request details
+        const { data: reqData, error: reqError } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            id_client(id, first_name, last_name, e_mail),
+            id_boat(id, name, type, place_de_port)
+          `)
+          .eq('id', parseInt(requestId))
+          .single();
+
+        if (reqError || !reqData) {
+          console.error('Error fetching service request:', reqError);
+          Alert.alert('Erreur', 'Impossible de charger les détails de la demande.');
+          setLoading(false);
+          return;
+        }
+        setRequestDetails(reqData);
+
+        setForm(prev => ({
+          ...prev,
+          clientId: reqData.id_client.id.toString(),
+          clientName: `${reqData.id_client.first_name} ${reqData.id_client.last_name}`,
+          boatId: reqData.id_boat.id.toString(),
+          boatName: reqData.id_boat.name,
+          boatType: reqData.id_boat.type,
+          // Pre-fill title if it's empty and request has a description
+          title: prev.title || reqData.description || `Devis pour demande #${requestId}`,
+        }));
+
+      } catch (e) {
+        console.error('Unexpected error fetching initial data:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des données.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
+  }, [requestId]);
+
 
   const handleSelectFile = async () => {
     try {
@@ -169,35 +222,78 @@ export default function QuoteUploadScreen() {
     }
   };
   
-  const handleConfirmSubmit = () => {
-    // Ici, vous enverriez normalement les données au serveur
-    // Pour cette démo, nous simulons simplement une réponse réussie
-    
+  const handleConfirmSubmit = async () => {
     setShowConfirmModal(false);
-    
-    Alert.alert(
-      'Devis envoyé',
-      'Le devis a été envoyé avec succès au client.',
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            if (requestId) {
-              // Si nous venons d'une demande, retourner à la demande
-              router.push(`/request/${requestId}`);
-            } else {
-              // Sinon, retourner à la liste des demandes
-              router.back();
-            }
-          }
+    if (!requestDetails || !user?.id) {
+      Alert.alert('Erreur', 'Données de requête ou utilisateur non disponibles.');
+      return;
+    }
+
+    let fileUrl: string | null = null;
+    if (uploadMethod === 'upload' && form.file) {
+      try {
+        const fileExtension = form.file.name.split('.').pop();
+        const filePath = `quotes/${form.requestId}/${Date.now()}.${fileExtension}`;
+        const response = await fetch(form.file.uri);
+        const blob = await response.blob();
+
+        const { data, error: uploadError } = await supabase.storage
+          .from('quotes') // Assuming a bucket named 'quotes'
+          .upload(filePath, blob, {
+            contentType: form.file.type,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error('Error uploading file:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
+          return;
         }
-      ]
-    );
+        fileUrl = supabase.storage.from('quotes').getPublicUrl(filePath).data.publicUrl;
+      } catch (e) {
+        console.error('Error processing file upload:', e);
+        Alert.alert('Erreur', 'Une erreur est survenue lors du traitement du fichier.');
+        return;
+      }
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from('service_request')
+        .update({
+          statut: 'quote_sent',
+          prix: totalAmount,
+          note_add: fileUrl ? `Devis PDF: ${fileUrl}` : form.services[0]?.description || null, // Store file URL or first service description
+        })
+        .eq('id', parseInt(form.requestId));
+
+      if (updateError) {
+        console.error('Error updating service request:', updateError);
+        Alert.alert('Erreur', `Échec de l'envoi du devis: ${updateError.message}`);
+      } else {
+        const message = `Le devis a été envoyé avec succès au client.`;
+        Alert.alert(
+          'Devis envoyé',
+          message,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                router.back(); // Go back to requests list
+              }
+            }
+          ]
+        );
+      }
+    } catch (e) {
+      console.error('Unexpected error during quote submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la soumission du devis.');
+    }
   };
   
   const MethodSelectionModal = () => (
     <Modal
-      visible={showMethodModal}
+      visible={showMethodModal && !loading} // Only show if not loading
       transparent
       animationType="slide"
       onRequestClose={() => {
@@ -411,7 +507,7 @@ export default function QuoteUploadScreen() {
               </View>
               
               <View style={styles.serviceInputContainer}>
-                <Text style={styles.serviceLabel}>Montant (€)</Text>
+                <Text style={styles.label}>Montant (€)</Text>
                 <View style={styles.amountInputContainer}>
                   <Euro size={20} color="#666" />
                   <TextInput
@@ -542,6 +638,14 @@ export default function QuoteUploadScreen() {
     </>
   );
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des données...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -601,6 +705,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -1022,3 +1131,4 @@ const styles = StyleSheet.create({
     color: '#0066CC',
   },
 });
+

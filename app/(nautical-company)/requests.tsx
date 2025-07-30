@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native';
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import { useAuth } from '@/context/AuthContext'; // Import useAuth
 
 // Types de statuts pour les différents rôles
 type NauticalCompanyRequestStatus = 'submitted' | 'in_progress' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
@@ -16,7 +18,7 @@ interface Request {
   urgency: UrgencyLevel;
   date: string;
   description: string;
-  category: string;
+  category: string; // This might be derived or removed if not directly from DB
   client: {
     id: string;
     name: string;
@@ -28,343 +30,26 @@ interface Request {
       type: string;
     };
   };
-  boatManager: {
+  boatManager?: { // Optional, as not all requests have a BM directly involved in creation
     id: string;
     name: string;
-    port: string;
+    port: string; // Derived from users.port
   };
-  company: {
+  company?: { // Optional
     id: string;
     name: string;
   };
-  currentHandler?: 'boat_manager' | 'company';
-  quoteIds?: string[];
-  location?: string;
-  notes?: string;
-  scheduledDate?: string;
-  invoiceReference?: string;
-  invoiceAmount?: number;
-  invoiceDate?: string;
-  isNew?: boolean;
-  hasStatusUpdate?: boolean;
+  currentHandler?: 'boat_manager' | 'company'; // Derived or managed client-side
+  quoteIds?: string[]; // Not directly from DB, might be derived or removed
+  location?: string; // Not directly from DB, might be derived or removed
+  notes?: string; // Maps to service_request.note_add
+  scheduledDate?: string; // Derived from rendez_vous table or note_add
+  invoiceReference?: string; // Derived from note_add
+  invoiceAmount?: number; // Maps to service_request.prix
+  invoiceDate?: string; // Derived from note_add
+  isNew?: boolean; // Client-side UI flag
+  hasStatusUpdate?: boolean; // Client-side UI flag
 }
-
-// Exemples de demandes avec les différents statuts possibles chez l'entreprise du nautisme
-const mockRequests: Request[] = [
-  {
-    id: '1',
-    title: 'Entretien moteur',
-    type: 'Maintenance',
-    status: 'submitted',
-    urgency: 'normal',
-    date: '25-02-2024',
-    description: 'Révision complète du moteur et changement des filtres',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    isNew: true
-  },
-  {
-    id: '2',
-    title: 'Installation GPS',
-    type: 'Amélioration',
-    status: 'in_progress',
-    urgency: 'normal',
-    date: '23-02-2024',
-    description: 'Installation d\'un nouveau système GPS pour navigation côtière',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company'
-  },
-  {
-    id: '3',
-    title: 'Réparation voile',
-    type: 'Réparation',
-    status: 'quote_sent',
-    urgency: 'urgent',
-    date: '22-02-2024',
-    description: 'Réparation de la grand-voile déchirée',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    quoteIds: ['q1']
-  },
-  {
-    id: '4',
-    title: 'Nettoyage coque',
-    type: 'Maintenance',
-    status: 'quote_accepted',
-    urgency: 'normal',
-    date: '21-02-2024',
-    description: 'Nettoyage complet de la coque et traitement antifouling',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    quoteIds: ['q2']
-  },
-  {
-    id: '5',
-    title: 'Installation panneau solaire',
-    type: 'Amélioration',
-    status: 'scheduled',
-    urgency: 'normal',
-    date: '20-02-2024',
-    description: 'Installation de panneaux solaires pour autonomie énergétique',
-    category: 'Services',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-      email: 'pierre.dubois@example.com',
-      phone: '+33 6 34 56 78 90',
-      boat: {
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    scheduledDate: '10-03-2024',
-    location: 'Port de Saint-Tropez - Quai B',
-    notes: 'Prévoir 3 panneaux de 100W et le matériel de fixation'
-  },
-  {
-    id: '6',
-    title: 'Remplacement hélice',
-    type: 'Réparation',
-    status: 'completed',
-    urgency: 'urgent',
-    date: '19-02-2024',
-    description: 'Remplacement de l\'hélice endommagée',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '7',
-    title: 'Changement batteries',
-    type: 'Maintenance',
-    status: 'ready_to_bill',
-    urgency: 'normal',
-    date: '18-02-2024',
-    description: 'Remplacement des batteries de service qui ne tiennent plus la charge',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '8',
-    title: 'Contrôle annuel',
-    type: 'Contrôle',
-    status: 'to_pay',
-    urgency: 'normal',
-    date: '17-02-2024',
-    description: 'Contrôle technique annuel obligatoire',
-    category: 'Services',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    invoiceReference: 'FAC-2024-003',
-    invoiceAmount: 450,
-    invoiceDate: '25-02-2024'
-  },
-  {
-    id: '9',
-    title: 'Réparation électronique',
-    type: 'Réparation',
-    status: 'paid',
-    urgency: 'normal',
-    date: '16-02-2024',
-    description: 'Réparation du système électronique de navigation',
-    category: 'Services',
-    client: {
-      id: '3',
-      name: 'Pierre Dubois',
-      avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-      email: 'pierre.dubois@example.com',
-      phone: '+33 6 34 56 78 90',
-      boat: {
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm3',
-      name: 'Sophie Laurent',
-      port: 'Port de Saint-Tropez'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    invoiceReference: 'FAC-2024-001',
-    invoiceAmount: 750,
-    invoiceDate: '20-02-2024'
-  },
-  {
-    id: '10',
-    title: 'Installation équipement pêche',
-    type: 'Installation',
-    status: 'cancelled',
-    urgency: 'normal',
-    date: '15-02-2024',
-    description: 'Installation d\'équipements de pêche spécialisés',
-    category: 'Services',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  }
-];
 
 // Configuration des statuts pour l'entreprise du nautisme
 const statusConfig = {
@@ -427,17 +112,159 @@ const statusConfig = {
     color: '#DC2626', // Rouge vif
     label: 'Annulée',
     description: 'Demande annulée',
+  },
+  // Ajout d'un statut par défaut pour gérer les cas non reconnus
+  default: {
+    icon: AlertCircle, // Icône générique pour les statuts inconnus
+    color: '#666666', // Couleur grise
+    label: 'Inconnu',
+    description: 'Statut non reconnu',
   }
 };
 
 export default function RequestsScreen() {
+  const { user } = useAuth(); // Get the current user from AuthContext
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortAsc, setSortAsc] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<NauticalCompanyRequestStatus | null>(null);
   const [selectedUrgency, setSelectedUrgency] = useState<UrgencyLevel | null>(null);
-  const [requests, setRequests] = useState<Request[]>(mockRequests);
+  const [requests, setRequests] = useState<Request[]>([]); // Initialize as empty
+  const [loading, setLoading] = useState(true); // Add loading state
+
+  useEffect(() => {
+    const fetchRequests = async () => {
+      setLoading(true);
+      if (!user?.id) {
+        Alert.alert('Erreur', 'Utilisateur non authentifié.');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('service_request')
+          .select(`
+            id,
+            description,
+            statut,
+            urgence,
+            date,
+            prix,
+            note_add,
+            id_client,
+            id_boat_manager,
+            id_companie,
+            categorie_service(description1),
+            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
+            boat(name, type, place_de_port)
+          `)
+          .eq('id_companie', user.id); // Filter by the current Nautical Company's ID
+
+        if (error) {
+          console.error('Error fetching requests:', error);
+          Alert.alert('Erreur', 'Impossible de charger les demandes.');
+          return;
+        }
+
+        const formattedRequests: Request[] = await Promise.all(data.map(async (req: any) => {
+          // Fetch boat manager details if id_boat_manager is present
+          let boatManagerDetails: Request['boatManager'] | undefined;
+          if (req.id_boat_manager) {
+            const { data: bmData, error: bmError } = await supabase
+              .from('users')
+              .select('id, first_name, last_name, user_ports(ports(name))') // Assuming 'ports' is a relation to get port name
+              .eq('id', req.id_boat_manager)
+              .single();
+            if (!bmError && bmData) {
+              boatManagerDetails = {
+                id: bmData.id.toString(),
+                name: `${bmData.first_name} ${bmData.last_name}`,
+                port: bmData.user_ports && bmData.user_ports.length > 0 ? bmData.user_ports[0].ports.name : 'N/A'
+              };
+            }
+          }
+
+          // Fetch company details if id_companie is present
+          let companyDetails: Request['company'] | undefined;
+          if (req.id_companie) {
+            const { data: companyData, error: companyError } = await supabase
+              .from('users')
+              .select('id, company_name')
+              .eq('id', req.id_companie)
+              .single();
+            if (!companyError && companyData) {
+              companyDetails = {
+                id: companyData.id.toString(),
+                name: companyData.company_name || 'N/A'
+              };
+            }
+          }
+
+          // Parse invoice details from note_add if present
+          let invoiceReference: string | undefined;
+          let invoiceDate: string | undefined;
+          if (req.note_add && (req.statut === 'to_pay' || req.statut === 'paid')) {
+            const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
+            if (invoiceMatch) {
+              invoiceReference = invoiceMatch[1];
+              invoiceDate = invoiceMatch[2];
+            }
+          }
+          
+          // Determine scheduledDate from note_add if present
+          let scheduledDate: string | undefined;
+          if (req.statut === 'scheduled' && req.note_add) {
+            const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+            if (scheduledMatch) {
+              scheduledDate = scheduledMatch[1];
+            }
+          }
+
+          return {
+            id: req.id.toString(),
+            title: req.description, // Using description as title for now
+            type: req.categorie_service?.description1 || 'N/A',
+            status: req.statut as NauticalCompanyRequestStatus,
+            urgency: req.urgence as UrgencyLevel,
+            date: req.date,
+            description: req.description,
+            category: 'Services', // Default category, adjust if needed
+            client: {
+              id: req.users.id.toString(),
+              name: `${req.users.first_name} ${req.users.last_name}`,
+              avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop', // Default avatar
+              email: req.users.e_mail,
+              phone: req.users.phone,
+              boat: {
+                name: req.boat.name,
+                type: req.boat.type
+              }
+            },
+            boatManager: boatManagerDetails,
+            company: companyDetails,
+            notes: req.note_add,
+            scheduledDate: scheduledDate,
+            invoiceReference: invoiceReference,
+            invoiceAmount: req.prix,
+            invoiceDate: invoiceDate,
+            isNew: false, // Managed client-side
+            hasStatusUpdate: false // Managed client-side
+          };
+        }));
+
+        setRequests(formattedRequests);
+      } catch (e) {
+        console.error('Unexpected error:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRequests();
+  }, [user]); // Add user to dependency array to refetch when user changes
 
   const requestsSummary = useMemo(() => {
     return {
@@ -494,13 +321,18 @@ export default function RequestsScreen() {
           ? a.client.name.localeCompare(b.client.name)
           : b.client.name.localeCompare(a.client.name);
       } else if (sortKey === 'boatManager') {
+        const aName = a.boatManager?.name || '';
+        const bName = b.boatManager?.name || '';
         return sortAsc
-          ? a.boatManager.name.localeCompare(b.boatManager.name)
-          : b.boatManager.name.localeCompare(a.boatManager.name);
+          ? aName.localeCompare(bName)
+          : bName.localeCompare(aName);
       } else {
+        // Fallback for 'type' or other string fields
+        const aValue = a[sortKey as keyof Request] as string;
+        const bValue = b[sortKey as keyof Request] as string;
         return sortAsc
-          ? a[sortKey].localeCompare(b[sortKey])
-          : b[sortKey].localeCompare(a[sortKey]);
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
       }
     });
   }, [sortKey, sortAsc, searchQuery, selectedStatus, selectedUrgency, requests]);
@@ -529,13 +361,15 @@ export default function RequestsScreen() {
   };
 
   const formatDate = (dateString: string) => {
-    // Si la date est déjà au format JJ-MM-AAAA, la retourner telle quelle
-    if (/^\d{2}-\d{2}-\d{4}$/.test(dateString)) {
+    // If the date is already in YYYY-MM-DD format, just return it
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
       return dateString;
     }
-    
-    // Sinon, convertir depuis le format ISO
+    // Otherwise, try to parse and format
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      return 'Invalid Date'; // Handle invalid date strings
+    }
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
@@ -557,12 +391,24 @@ export default function RequestsScreen() {
   };
 
   const getCurrentHandlerText = (request: Request) => {
-    if (request.status === 'scheduled') {
-      return `Planifiée le ${request.scheduledDate || ''}`;
+    if (request.status === 'scheduled' && request.scheduledDate) {
+      return `Planifiée le ${formatDate(request.scheduledDate)}`;
+    }
+    
+    if (request.status === 'to_pay' && request.invoiceReference) {
+      return 'Facture en attente de paiement';
     }
     
     return null;
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des demandes...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -829,9 +675,8 @@ export default function RequestsScreen() {
         <View style={styles.requestsList}>
           {filteredAndSortedRequests.length > 0 ? (
             filteredAndSortedRequests.map((request) => {
-              const status = statusConfig[request.status];
+              const status = statusConfig[request.status] || statusConfig.default; // Utilisation de l'entrée par défaut
               const StatusIcon = status.icon;
-              const date = request.date;
               const currentHandlerText = getCurrentHandlerText(request);
 
               return (
@@ -881,7 +726,7 @@ export default function RequestsScreen() {
                     </View>
                     <View style={styles.requestDate}>
                       <Calendar size={16} color="#666" />
-                      <Text style={styles.dateText}>{date}</Text>
+                      <Text style={styles.dateText}>{formatDate(request.date)}</Text>
                     </View>
                     <View style={styles.clientInfo}>
                       <User size={16} color="#666" />
@@ -961,6 +806,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   summaryContainer: {
     backgroundColor: 'white',
@@ -1178,13 +1027,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sortButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
-    gap: 8,
   },
   sortButtonActive: {
     backgroundColor: '#e0f2fe',
