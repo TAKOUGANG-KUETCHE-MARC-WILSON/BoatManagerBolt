@@ -283,6 +283,8 @@ export default function ProfileScreen() {
   const [boats, setBoats] = useState<BoatDetails[]>([]);
   const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
   const [myReviews, setMyReviews] = useState<Review[]>([]);
+  const [otherBoatManagers, setOtherBoatManagers] = useState<BoatManagerProfile[]>([]);
+  const [showAllOtherBMs, setShowAllOtherBMs] = useState(false); // Initialized here
   const [mainBoatManager, setMainBoatManager] = useState<BoatManagerProfile | null>(null);
 
   // States for "Show More/Show Less"
@@ -437,18 +439,26 @@ export default function ProfileScreen() {
         }
 
         const formattedBoats: BoatDetails[] = await Promise.all(boatsData.map(async (boat: any) => {
-          // Simuler lastService basés sur annee_construction
-          const lastServiceDate = boat.annee_construction ? new Date(boat.annee_construction) : null;
+  const { data: lastService, error: lastServiceError } = await supabase
+    .from('service_request')
+    .select('date')
+    .eq('id_boat', boat.id)
+    .order('date', { ascending: false })
+    .limit(1)
+    .single();
 
-          return {
-            id: boat.id.toString(),
-            name: boat.name,
-            type: boat.type,
-            image: boat.image || 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop', // Default image
-            lastService: lastServiceDate ? lastServiceDate.toISOString().split('T')[0] : undefined,
-            status: boat.etat || 'active', // Assurez-vous que 'etat' est un des types définis
-          };
-        }));
+  const lastServiceDate = lastService?.date ? new Date(lastService.date) : null;
+
+  return {
+    id: boat.id.toString(),
+    name: boat.name,
+    type: boat.type,
+    image: boat.image || 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
+    lastService: lastServiceDate ? lastServiceDate.toISOString().split('T')[0] : undefined,
+    status: boat.etat || 'active',
+  };
+}));
+
         setBoats(formattedBoats);
 
         // Fetch service history
@@ -526,7 +536,7 @@ export default function ProfileScreen() {
               reviewedEntity = {
                 id: sr.id_companie.id.toString(),
                 name: sr.id_companie.company_name,
-                avatar: sr.id_companie.avatar || 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop', // Default for company
+                avatar: sr.id_companie.avatar, // Default for company
                 type: 'nautical_company',
                 entityRating: sr.id_companie.rating,
                 entityReviewCount: sr.id_companie.review_count,
@@ -550,57 +560,159 @@ export default function ProfileScreen() {
           });
         setMyReviews(formattedReviews);
 
-        // Fetch main Boat Manager details
-        const { data: userPorts, error: userPortsError } = await supabase
-          .from('user_ports')
-          .select('port_id')
-          .eq('user_id', user.id)
-          .limit(1);
+       // --- Start of Boat Manager selection logic ---
 
-        if (userPortsError) {
-          console.error('Error fetching user ports:', userPortsError);
-        }
+// 1. Récupère tous les ports liés au client (pour retrouver tous les BM connectés)
+const { data: allUserPorts, error: allPortsError } = await supabase
+  .from('user_ports')
+  .select('port_id, created_at')
+  .eq('user_id', user.id);
 
-        if (userPorts && userPorts.length > 0) {
-          const primaryPortId = userPorts[0].port_id;
-          const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
-            .from('user_ports')
-            .select('user_id')
-            .eq('port_id', primaryPortId);
+if (allPortsError) {
+  console.error('Erreur récupération des ports client :', allPortsError);
+  return;
+}
 
-          if (bmPortAssignmentsError) {
-            console.error('Error fetching BM port assignments:', bmPortAssignmentsError);
-          }
+if (!allUserPorts || allUserPorts.length === 0) {
+  console.warn('Ce client n\'est rattaché à aucun port.');
+  return;
+}
 
-          if (bmPortAssignments && bmPortAssignments.length > 0) {
-            const bmIds = bmPortAssignments.map(pa => pa.user_id);
-            const { data: bmData, error: bmError } = await supabase
-              .from('users')
-              .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, user_ports(ports(name))')
-              .in('id', bmIds)
-              .eq('profile', 'boat_manager')
-              .limit(1);
+// 2. Identifier le port d’attache (le plus ancien)
+const primaryPortId = allUserPorts
+  .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0].port_id;
 
-            if (bmError) {
-              console.error('Error fetching main boat manager:', bmError);
-            }
+// 3. Récupère tous les users liés à ces ports
+const portIds = allUserPorts.map(p => p.port_id);
 
-            if (bmData && bmData.length > 0) {
-              const bm = bmData[0];
-              const bmPortName = bm.user_ports && bm.user_ports.length > 0 ? bm.user_ports[0].ports.name : 'N/A';
-              setMainBoatManager({
-                id: bm.id.toString(),
-                name: `${bm.first_name} ${bm.last_name}`,
-                email: bm.e_mail,
-                phone: bm.phone,
-                avatar: bm.avatar || avatars.neutral,
-                location: bmPortName,
-                rating: bm.rating,
-                reviewCount: bm.review_count,
-              });
-            }
-          }
-        }
+const { data: allPortUsers, error: portUsersError } = await supabase
+  .from('user_ports')
+  .select('user_id, port_id')
+  .in('port_id', portIds);
+
+if (portUsersError) {
+  console.error('Erreur récupération des users des ports :', portUsersError);
+  return;
+}
+
+const allBmIds = allPortUsers.map(pu => pu.user_id);
+
+// 4. Filtrer pour ne garder que les Boat Managers
+const { data: allBms, error: bmError } = await supabase
+  .from('users')
+  .select('id, first_name, last_name, avatar, phone, e_mail, rating, review_count')
+  .in('id', allBmIds)
+  .eq('profile', 'boat_manager');
+
+if (bmError) {
+  console.error('Erreur chargement Boat Managers :', bmError);
+  return;
+}
+
+if (!allBms || allBms.length === 0) {
+  console.warn('Aucun Boat Manager trouvé sur les ports du client.');
+  return;
+}
+
+// 5. Récupère tous les services entre le client et les BMs
+const { data: serviceRequests, error: serviceError } = await supabase
+  .from('service_request')
+  .select('id_boat_manager')
+  .eq('id_client', user.id)
+  .in('id_boat_manager', allBms.map(bm => bm.id));
+
+if (serviceError) {
+  console.error('Erreur récupération des services client :', serviceError);
+}
+
+const bmCountMap = {};
+for (const sr of serviceRequests || []) {
+  if (!bmCountMap[sr.id_boat_manager]) bmCountMap[sr.id_boat_manager] = 0;
+  bmCountMap[sr.id_boat_manager]++;
+}
+
+// 6. Trouve le BM principal (celui du port d’attache avec le plus de services)
+const bmIdsOnPrimaryPort = allPortUsers
+  .filter(pu => pu.port_id === primaryPortId)
+  .map(pu => pu.user_id);
+
+const primaryCandidates = allBms.filter(bm => bmIdsOnPrimaryPort.includes(bm.id));
+
+let mainBM = null;
+
+if (primaryCandidates.length === 1) {
+  mainBM = primaryCandidates[0];
+} else {
+  const sortedPrimary = primaryCandidates
+    .sort((a, b) => (bmCountMap[b.id] || 0) - (bmCountMap[a.id] || 0));
+  mainBM = sortedPrimary[0];
+}
+
+const { data: primaryPortData, error: primaryPortError } = await supabase
+  .from('ports')
+  .select('name')
+  .eq('id', primaryPortId)
+  .single();
+
+if (primaryPortError) {
+  console.error('Erreur récupération nom du port d’attache :', primaryPortError);
+}
+
+
+// 7. Formater et stocker le BM principal
+setMainBoatManager(mainBM ? {
+  id: mainBM.id.toString(),
+  name: `${mainBM.first_name} ${mainBM.last_name}`,
+  email: mainBM.e_mail,
+  phone: mainBM.phone,
+  avatar: mainBM.avatar || avatars.neutral,
+  rating: mainBM.rating,
+  reviewCount: mainBM.review_count,
+  location: primaryPortData?.name || 'Port inconnu',
+} : null);
+
+// 8. Afficher les autres Boat Managers (hors principal)
+const otherBmRaw = allBms.filter(bm => !mainBM || bm.id !== mainBM.id);
+
+// Ajoute l’emplacement réel (port d’attache) pour chaque BM
+const otherBMsWithLocation = await Promise.all(
+  otherBmRaw.map(async (bm) => {
+    const { data: portLink, error: portLinkError } = await supabase
+      .from('user_ports')
+      .select('port_id')
+      .eq('user_id', bm.id)
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    let portName = 'Port inconnu';
+
+    if (portLink && portLink.length > 0) {
+      const { data: portData, error: portError } = await supabase
+        .from('ports')
+        .select('name')
+        .eq('id', portLink[0].port_id)
+        .single();
+
+      if (portData?.name) portName = portData.name;
+    }
+
+    return {
+      id: bm.id.toString(),
+      name: `${bm.first_name} ${bm.last_name}`,
+      email: bm.e_mail,
+      phone: bm.phone,
+      avatar: bm.avatar || avatars.neutral,
+      rating: bm.rating,
+      reviewCount: bm.review_count,
+      location: portName,
+    };
+  })
+);
+
+setOtherBoatManagers(otherBMsWithLocation);
+// --- End of Boat Manager selection logic ---
+
+
 
       } catch (e) {
         console.error('Unexpected error fetching profile data:', e);
@@ -649,7 +761,7 @@ export default function ProfileScreen() {
 
       if (uploadError) {
         console.error('Error uploading avatar:', uploadError);
-        Alert.alert('Erreur', `Échec du téléchargement de l'avatar: ${uploadError.message}`);
+        Alert.alert('Erreur', `Échec du téléchargement de l'avatar: ${uploadData.path}`);
         return;
       }
 
@@ -773,14 +885,8 @@ export default function ProfileScreen() {
   const handleAddCertification = () => {
     // This function is not used for Pleasure Boaters' profile editing
     // but kept for consistency if the modal is reused.
-    if (newCertification.trim()) {
-      setFormData(prev => ({
-        ...prev,
-        certifications: prev.certifications ? `${prev.certifications}, ${newCertification}` : newCertification,
-      }));
-      //setNewCertification('');
-    }
-  };
+    // It's a placeholder for the previous version of the modal.
+  }; 
 
   if (loading) {
     return (
@@ -802,6 +908,7 @@ export default function ProfileScreen() {
   const displayedBoats = showAllBoats ? boats : boats.slice(0, 5);
   const displayedHistory = showAllHistory ? serviceHistory : serviceHistory.slice(0, 5);
   const displayedReviews = showAllReviews ? myReviews : myReviews.slice(0, 5);
+  const displayedOtherBMs = showAllOtherBMs ? otherBoatManagers : otherBoatManagers.slice(0, 2); // Top 2 other BMs
 
   return (
     <ScrollView style={styles.container}>
@@ -851,49 +958,93 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      {/* Boat Manager Section */}
-      {mainBoatManager && (
-        <View style={styles.boatManagerSection}>
-          <Text style={styles.sectionTitle}>Votre Boat Manager</Text>
-          <View style={styles.boatManagerCard}>
-            <View style={styles.boatManagerHeader}>
-              <Image source={{ uri: mainBoatManager.avatar }} style={styles.boatManagerAvatar} />
-              <View style={styles.boatManagerInfo}>
-                <Text style={styles.boatManagerName}>{mainBoatManager.name}</Text>
-                <View style={styles.ratingContainer}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <Star
-                      key={star}
-                      size={16}
-                      fill={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : 'none'}
-                      color={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : '#D1D5DB'}
-                    />
-                  ))}
-                  <Text style={styles.ratingText}>{mainBoatManager.rating?.toFixed(1)} ({mainBoatManager.reviewCount} avis)</Text>
-                </View>
-                <Text style={styles.boatManagerLocation}>{mainBoatManager.location}</Text>
-              </View>
+      
+{/* Section : Votre Boat Manager */}
+{mainBoatManager && (
+  <View style={styles.boatManagerSection}>
+    <Text style={styles.sectionTitle}>Votre Boat Manager</Text>
+    <View style={styles.boatManagerCard}>
+      <View style={styles.boatManagerHeader}>
+        <Image source={{ uri: mainBoatManager.avatar }} style={styles.boatManagerAvatar} />
+        <View style={styles.boatManagerInfo}>
+          <Text style={styles.boatManagerName}>{mainBoatManager.name}</Text>
+          <View style={styles.ratingContainer}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <Star
+                key={star}
+                size={16}
+                fill={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : 'none'}
+                color={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : '#D1D5DB'}
+              />
+            ))}
+            <Text style={styles.ratingText}>
+              {mainBoatManager.rating ? `${mainBoatManager.rating.toFixed(1)} (${mainBoatManager.reviewCount} avis)` : 'N/A'}
+            </Text>
+          </View>
+          <Text style={styles.boatManagerLocation}>{mainBoatManager.location}</Text>
+        </View>
+      </View>
+      <TouchableOpacity 
+        style={styles.contactBoatManagerButton}
+        onPress={() => router.push(`/(tabs)/messages?client=${mainBoatManager.id}`)}
+      >
+        <MessageSquare size={20} color="white" />
+        <Text style={styles.contactBoatManagerText}>Contacter mon Boat Manager</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
+
+{/* Section : Autres Boat Managers */}
+{otherBoatManagers.length > 0 && (
+  <View style={styles.boatManagerSection}>
+    <Text style={styles.sectionTitle}>Autres Boat Managers</Text>
+    {displayedOtherBMs.map((bm) => (
+      <View key={bm.id} style={styles.boatManagerCard}>
+        <View style={styles.boatManagerHeader}>
+          <Image source={{ uri: bm.avatar }} style={styles.boatManagerAvatar} />
+          <View style={styles.boatManagerInfo}>
+            <Text style={styles.boatManagerName}>{bm.name}</Text>
+            <View style={styles.ratingContainer}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Star
+                  key={star}
+                  size={16}
+                  fill={star <= Math.floor(bm.rating || 0) ? '#FFC107' : 'none'}
+                  color={star <= Math.floor(bm.rating || 0) ? '#FFC107' : '#D1D5DB'}
+                />
+              ))}
+              <Text style={styles.ratingText}>
+                {bm.rating ? `${bm.rating.toFixed(1)} (${bm.reviewCount} avis)` : 'N/A'}
+              </Text>
             </View>
-            <View style={styles.boatManagerContactInfo}>
-              <View style={styles.contactInfoRow}>
-                <Phone size={16} color="#666" />
-                <Text style={styles.contactInfoText}>{mainBoatManager.phone}</Text>
-              </View>
-              <View style={styles.contactInfoRow}>
-                <Mail size={16} color="#666" />
-                <Text style={styles.contactInfoText}>{mainBoatManager.email}</Text>
-              </View>
-            </View>
-            <TouchableOpacity 
-              style={styles.contactBoatManagerButton}
-              onPress={() => router.push(`/(tabs)/messages?client=${mainBoatManager.id}`)}
-            >
-              <MessageSquare size={20} color="white" />
-              <Text style={styles.contactBoatManagerText}>Contacter mon Boat Manager</Text>
-            </TouchableOpacity>
+            <Text style={styles.boatManagerLocation}>{bm.location}</Text>
           </View>
         </View>
-      )}
+        <TouchableOpacity 
+          style={styles.contactBoatManagerButton}
+          onPress={() => router.push(`/(tabs)/messages?client=${bm.id}`)}
+        >
+          <MessageSquare size={20} color="white" />
+          <Text style={styles.contactBoatManagerText}>Contacter</Text>
+        </TouchableOpacity>
+      </View>
+    ))}
+
+    {otherBoatManagers.length > 2 && (
+      <TouchableOpacity
+        style={styles.showMoreButton}
+        onPress={() => setShowAllOtherBMs(!showAllOtherBMs)}
+      >
+        <Text style={styles.showMoreButtonText}>
+          {showAllOtherBMs ? 'Voir moins' : 'Voir plus'}
+        </Text>
+        {showAllOtherBMs ? <ChevronUp size={20} color="#0066CC" /> : <ChevronDown size={20} color="#0066CC" />}
+      </TouchableOpacity>
+    )}
+  </View>
+)}
+
 
       {/* Settings Section (RE-ADDED) */}
       <View style={styles.section}>
@@ -957,13 +1108,16 @@ export default function ProfileScreen() {
                       <Text style={styles.boatName}>{boat.name}</Text>
                       <Text style={styles.boatType}>{boat.type}</Text>
                     </View>
-                    <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
+
+                    {/* Badge de statut retiré
+                  <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
                       <View style={[styles.statusDot, { backgroundColor: getBoatStatusColor(boat.status) }]} />
                       <Text style={[styles.boatStatusText, { color: getBoatStatusColor(boat.status) }]}>
                         {getBoatStatusLabel(boat.status)}
                       </Text>
                     </View>
-                  </View>
+                    */}
+                  </View> 
 
                   <View style={styles.boatDetails}>
                     {boat.lastService && (
@@ -1868,5 +2022,53 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: '#1a1a1a',
+  },
+  otherBoatManagersSection: {
+    marginTop: 20,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  otherBMCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  otherBMAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  otherBMInfo: {
+    flex: 1,
+  },
+  otherBMName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  otherBMLocation: {
+    fontSize: 14,
+    color: '#666',
+  },
+  otherBMContactButton: {
+    padding: 8,
   },
 });
