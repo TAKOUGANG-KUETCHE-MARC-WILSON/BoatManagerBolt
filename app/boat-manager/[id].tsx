@@ -1,68 +1,50 @@
 import { useState, useEffect, useCallback, memo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Star, MapPin, Phone, Mail, Clock, Shield, Award, Briefcase, Ship, X } from 'lucide-react-native';
+import { ArrowLeft, Star, MapPin, Phone, Mail, Clock, Shield, Award, Briefcase, Ship, X, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 interface Review {
   id: string;
-  author: string;
+  author: string; // Derived from user's first_name, last_name
   rating: number;
   comment: string;
-  date: string;
+  date: string; // created_at
 }
 
 interface Service {
   id: string;
-  name: string;
-  description: string;
-  icon: any;
+  name: string; // categorie_service.description1
+  description: string; // categorie_service.description2
+  icon: any; // Icons are still hardcoded as they are UI components
 }
 
-const mockReviews: Review[] = [
-  {
-    id: '1',
-    author: 'Jean Dupont',
-    rating: 5,
-    comment: 'Excellent service, très professionnel et réactif.',
-    date: '15 février 2024',
-  },
-  {
-    id: '2',
-    author: 'Marie Martin',
-    rating: 4,
-    comment: 'Très bonne expérience, je recommande.',
-    date: '10 février 2024',
-  },
-  {
-    id: '3',
-    author: 'Pierre Durand',
-    rating: 5,
-    comment: 'Service impeccable et conseils avisés.',
-    date: '5 février 2024',
-  },
-];
+interface BoatManagerProfileData {
+  id: string;
+  name: string;
+  title: string;
+  location: string;
+  rating?: number;
+  reviewCount?: number;
+  experience: string;
+  certifications: string[];
+  avatar: string;
+  cover: string; // Assuming a default cover or fetched from somewhere
+  phone: string;
+  email: string;
+  bio: string;
+}
 
-const services: Service[] = [
-  {
-    id: '1',
-    name: 'Maintenance',
-    description: 'Entretien régulier et préventif',
-    icon: Ship,
-  },
-  {
-    id: '2',
-    name: 'Surveillance',
-    description: 'Contrôle et sécurité',
-    icon: Shield,
-  },
-  {
-    id: '3',
-    name: 'Assistance',
-    description: 'Support 24/7',
-    icon: Clock,
-  },
-];
+// Hardcoded service icons (map to fetched service names)
+const serviceIconsMap = {
+  'Maintenance': Wrench,
+  'Amélioration': Tool,
+  'Contrôle': Gauge,
+  'Accès': Key,
+  'Administratif': FileText,
+  // Add other service types and their icons as needed
+};
 
 // Extracted and Memoized RatingModal component
 const RatingModal = memo(({
@@ -173,58 +155,201 @@ export default function BoatManagerProfileScreen() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
 
-  // Dans une vraie application, ces données viendraient d'une API
-  const boatManager = {
-    id,
-    name: 'Marie Martin',
-    title: 'Boat Manager Senior',
-    location: 'Port de Marseille',
-    rating: 4.8,
-    reviewCount: 156,
-    experience: '8 ans',
-    certifications: ['Certification YBM', 'Expert Maritime'],
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    cover: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-    phone: '+33 6 12 34 56 78',
-    email: 'marie.martin@ybm.com',
-  };
+  const [boatManager, setBoatManager] = useState<BoatManagerProfileData | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchBoatManagerData = async () => {
+      if (!id || typeof id !== 'string') {
+        setError('ID du Boat Manager manquant.');
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // Fetch Boat Manager details
+        const { data: bmData, error: bmError } = await supabase
+          .from('users')
+          .select(`
+            id,
+            first_name,
+            last_name,
+            e_mail,
+            phone,
+            avatar,
+            job_title,
+            experience,
+            certification,
+            bio,
+            rating,
+            review_count,
+            user_ports(ports(name))
+          `)
+          .eq('id', id)
+          .eq('profile', 'boat_manager')
+          .single();
+
+        if (bmError || !bmData) {
+          console.error('Error fetching Boat Manager:', bmError);
+          setError('Boat Manager non trouvé.');
+          setLoading(false);
+          return;
+        }
+
+        const bmPortName = bmData.user_ports?.[0]?.ports?.name || 'N/A';
+        setBoatManager({
+          id: bmData.id.toString(),
+          name: `${bmData.first_name} ${bmData.last_name}`,
+          title: bmData.job_title || 'Boat Manager',
+          location: bmPortName,
+          rating: bmData.rating,
+          reviewCount: bmData.review_count,
+          experience: bmData.experience || 'Non renseignée',
+          certifications: bmData.certification || [],
+          avatar: bmData.avatar || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
+          cover: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop', // Default cover
+          phone: bmData.phone || 'N/A',
+          email: bmData.e_mail || 'N/A',
+          bio: bmData.bio || 'Aucune biographie renseignée.',
+        });
+
+        // Fetch services offered by this Boat Manager
+        const { data: bmServicesData, error: bmServicesError } = await supabase
+          .from('user_categorie_service')
+          .select('categorie_service(id, description1, description2)')
+          .eq('user_id', id);
+
+        if (bmServicesError) {
+          console.error('Error fetching BM services:', bmServicesError);
+        } else {
+          setServices(bmServicesData.map(s => ({
+            id: s.categorie_service.id.toString(),
+            name: s.categorie_service.description1,
+            description: s.categorie_service.description2 || '',
+            icon: serviceIconsMap[s.categorie_service.description1] || Ship,
+          })));
+        }
+
+        // Fetch reviews for this Boat Manager
+        const { data: reviewsData, error: reviewsError } = await supabase
+          .from('reviews')
+          .select(`
+            id,
+            rating,
+            comment,
+            created_at,
+            service_request (
+              id_client (first_name, last_name)
+            )
+          `)
+          .eq('service_request.id_boat_manager', id)
+          .order('created_at', { ascending: false });
+
+        if (reviewsError) {
+          console.error('Error fetching reviews:', reviewsError);
+        } else {
+          // Filter out reviews where service_request or id_client is null
+          const filteredAndFormattedReviews = reviewsData
+            .filter(r => r.service_request && r.service_request.id_client)
+            .map(r => ({
+              id: r.id.toString(),
+              rating: r.rating,
+              comment: r.comment,
+              date: new Date(r.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
+              author: `${r.service_request.id_client.first_name} ${r.service_request.id_client.last_name}`,
+            }));
+          setReviews(filteredAndFormattedReviews);
+        }
+
+      } catch (e) {
+        console.error('Unexpected error:', e);
+        setError('Une erreur inattendue est survenue.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBoatManagerData();
+  }, [id]);
 
   const handleContact = () => {
-    router.push('/(tabs)/messages');
+    router.push(`/(tabs)/messages?client=${id}`);
   };
 
-  // Memoized callback for submitting rating
-  const handleSubmitRating = useCallback(() => {
+  const handleSubmitRating = useCallback(async () => {
     if (rating === 0) {
-      alert('Veuillez sélectionner une note');
+      Alert.alert('Erreur', 'Veuillez sélectionner une note.');
+      return;
+    }
+    if (!user?.id || !id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié ou Boat Manager non défini.');
       return;
     }
 
-    // Update mockReviews (global mock data)
-    mockReviews.unshift({
-      id: Date.now().toString(),
-      author: `${user?.firstName} ${user?.lastName}`,
-      rating,
-      comment,
-      date: new Date().toLocaleDateString('fr-FR', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      })
-    });
+    try {
+      const { data, error: insertError } = await supabase
+        .from('user_reviews') // Targeting the user_reviews table
+        .insert({
+          reviewer_id: user.id, // ID of the logged-in user
+          reviewed_user_id: id, // ID of the Boat Manager being reviewed
+          rating: rating,
+          comment: comment,
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
 
-    // Update boatManager.rating and reviewCount (modifying a local constant, won't trigger re-render of this component based on these changes)
-    // In a real application, `boatManager` would likely be part of the component's state or managed by a global state/context,
-    // and updating it would involve calling a `setState` function to trigger a re-render.
-    const totalRatings = mockReviews.reduce((sum, review) => sum + review.rating, 0);
-    boatManager.rating = parseFloat((totalRatings / mockReviews.length).toFixed(1));
-    boatManager.reviewCount = mockReviews.length;
+      if (insertError) {
+        console.error('Error inserting review:', insertError);
+        Alert.alert('Erreur', `Échec de l'envoi de l'avis: ${insertError.message}`);
+      } else {
+        // Update local reviews state
+        setReviews(prev => [
+          {
+            id: data.id.toString(),
+            author: `${user.firstName} ${user.lastName}`,
+            rating: rating,
+            comment: comment,
+            date: new Date(data.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
+          },
+          ...prev,
+        ]);
 
-    alert('Votre évaluation a été enregistrée avec succès !');
-    setShowRatingModal(false);
-    setRating(0); // Reset rating
-    setComment(''); // Reset comment
-  }, [rating, comment, user]); // Dependencies for useCallback
+        // Optionally, update BM's average rating and review count in 'users' table
+        const { data: currentBmStats, error: fetchStatsError } = await supabase
+          .from('users')
+          .select('rating, review_count')
+          .eq('id', id)
+          .single();
+
+        if (!fetchStatsError && currentBmStats) {
+          const newReviewCount = (currentBmStats.review_count || 0) + 1;
+          const newTotalRating = ((currentBmStats.rating || 0) * (currentBmStats.review_count || 0)) + rating;
+          const newAverageRating = newTotalRating / newReviewCount;
+
+          await supabase
+            .from('users')
+            .update({
+              rating: newAverageRating,
+              review_count: newReviewCount,
+            })
+            .eq('id', id);
+        }
+
+        Alert.alert('Succès', 'Votre évaluation a été enregistrée avec succès !');
+        setShowRatingModal(false);
+        setRating(0); // Reset rating
+        setComment(''); // Reset comment
+      }
+    } catch (e) {
+      console.error('Unexpected error submitting review:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'envoi de l\'avis.');
+    }
+  }, [rating, comment, user, id]);
 
   const StarRating = ({ rating }: { rating: number }) => (
     <View style={styles.ratingContainer}>
@@ -238,6 +363,28 @@ export default function BoatManagerProfileScreen() {
       ))}
     </View>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text>Chargement du profil du Boat Manager...</Text>
+      </View>
+    );
+  }
+
+  if (error || !boatManager) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text style={styles.errorText}>{error || 'Profil du Boat Manager introuvable.'}</Text>
+        <TouchableOpacity 
+          style={styles.errorButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -266,9 +413,9 @@ export default function BoatManagerProfileScreen() {
           </View>
 
           <View style={styles.ratingRow}>
-            <StarRating rating={boatManager.rating} />
+            <StarRating rating={boatManager.rating || 0} />
             <Text style={styles.ratingText}>
-              {boatManager.rating} ({boatManager.reviewCount} avis)
+              {boatManager.rating?.toFixed(1)} ({boatManager.reviewCount} avis)
             </Text>
           </View>
         </View>
@@ -318,7 +465,7 @@ export default function BoatManagerProfileScreen() {
           <View>
             <Text style={styles.experienceLabel}>Certifications</Text>
             <Text style={styles.experienceValue}>
-              {boatManager.certifications.join(', ')}
+              {boatManager.certifications.length > 0 ? boatManager.certifications.join(', ') : 'Aucune'}
             </Text>
           </View>
         </View>
@@ -347,30 +494,43 @@ export default function BoatManagerProfileScreen() {
       {/* Tab Content */}
       {selectedTab === 'services' ? (
         <View style={styles.servicesContainer}>
-          {services.map((service) => (
-            <View key={service.id} style={styles.serviceCard}>
-              <View style={styles.serviceIcon}>
-                <service.icon size={24} color="#0066CC" />
+          {services.length > 0 ? (
+            services.map((service) => (
+              <View key={service.id} style={styles.serviceCard}>
+                <View style={styles.serviceIcon}>
+                  {/* MODIFIED LINE: Render the icon component using JSX syntax */}
+                  {service.icon && <service.icon size={24} color="#0066CC" />} 
+                </View>
+                <View style={styles.serviceInfo}>
+                  <Text style={styles.serviceName}>{service.name}</Text>
+                  <Text style={styles.serviceDescription}>{service.description}</Text>
+                </View>
               </View>
-              <View style={styles.serviceInfo}>
-                <Text style={styles.serviceName}>{service.name}</Text>
-                <Text style={styles.serviceDescription}>{service.description}</Text>
-              </View>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun service configuré.</Text>
             </View>
-          ))}
+          )}
         </View>
       ) : (
         <View style={styles.reviewsContainer}>
-          {mockReviews.map((review) => (
-            <View key={review.id} style={styles.reviewCard}>
-              <View style={styles.reviewHeader}>
-                <Text style={styles.reviewAuthor}>{review.author}</Text>
-                <Text style={styles.reviewDate}>{review.date}</Text>
+          {reviews.length > 0 ? (
+            reviews.map((review) => (
+              <View key={review.id} style={styles.reviewCard}>
+                <View style={styles.reviewHeader}>
+                  <Text style={styles.reviewAuthor}>{review.author}</Text>
+                  <Text style={styles.reviewDate}>{review.date}</Text>
+                </View>
+                <StarRating rating={review.rating} />
+                <Text style={styles.reviewComment}>{review.comment}</Text>
               </View>
-              <StarRating rating={review.rating} />
-              <Text style={styles.reviewComment}>{review.comment}</Text>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun avis pour ce Boat Manager.</Text>
             </View>
-          ))}
+          )}
         </View>
       )}
 
@@ -394,6 +554,23 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  errorButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
   coverContainer: {
     height: 200,
@@ -675,37 +852,50 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center', // Centered vertically
+    alignItems: 'center', // Centered horizontally
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    gap: 16,
+    borderRadius: 16, // Rounded corners
+    padding: 24, // Increased padding
+    width: '90%', // Take up most of the width
+    maxWidth: 400, // Max width for larger screens
+    gap: 20, // Spacing between sections
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 }, // Increased shadow
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 8, // Increased elevation
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)', // Stronger shadow
+      },
+    }),
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 16, // Spacing below header
   },
   modalTitle: {
-    fontSize: 20,
+    fontSize: 22, // Larger title
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
   closeButton: {
-    padding: 4,
+    padding: 8, // Padding for touch area
   },
   ratingServiceInfo: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
+    marginBottom: 16, // Spacing below info
   },
   ratingServiceTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
     marginBottom: 4,
@@ -713,51 +903,60 @@ const styles = StyleSheet.create({
   ratingServiceDescription: {
     fontSize: 14,
     color: '#666',
+    lineHeight: 20,
   },
   starsContainer: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    marginBottom: 8,
+    justifyContent: 'center', // Center stars
+    gap: 10, // Spacing between stars
+    marginBottom: 16,
   },
   starIcon: {
-    padding: 4,
+    // No specific style needed here, size and fill are handled by props
   },
   ratingLabel: {
     fontSize: 16,
-    color: '#1a1a1a',
+    fontWeight: '500',
+    color: '#0066CC', // Highlighted color
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   commentContainer: {
-    marginBottom: 16,
+    marginBottom: 20,
   },
   commentLabel: {
     fontSize: 14,
-    color: '#666',
+    fontWeight: '500',
+    color: '#1a1a1a',
     marginBottom: 8,
   },
   commentInput: {
     backgroundColor: '#f8fafc',
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     padding: 12,
     fontSize: 16,
     color: '#1a1a1a',
-    minHeight: 100,
+    minHeight: 100, // Min height for textarea
     textAlignVertical: 'top',
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      },
+    }),
   },
   ratingActions: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     gap: 12,
   },
   ratingCancelButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
     backgroundColor: '#f1f5f9',
+    padding: 14, // Increased padding
+    borderRadius: 12, // Rounded corners
+    alignItems: 'center',
   },
   ratingCancelText: {
     fontSize: 16,
@@ -766,10 +965,10 @@ const styles = StyleSheet.create({
   },
   ratingSubmitButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
     backgroundColor: '#0066CC',
+    padding: 14, // Increased padding
+    borderRadius: 12, // Rounded corners
+    alignItems: 'center',
     ...Platform.select({
       ios: {
         shadowColor: '#0066CC',
@@ -789,8 +988,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#94a3b8',
   },
   ratingSubmitText: {
-    fontSize: 16,
     color: 'white',
+    fontSize: 16,
     fontWeight: '600',
   },
 });

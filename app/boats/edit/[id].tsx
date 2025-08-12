@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Image as ImageIcon, X } from 'lucide-react-native';
+import { ArrowLeft, Image as ImageIcon, X, MapPin } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import PortSelectionModal from '@/components/PortSelectionModal'; // Import the new component
+import * as FileSystem from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Buffer } from 'buffer';
+
 
 interface BoatForm {
   photo: string;
@@ -14,36 +20,10 @@ interface BoatForm {
   engine: string;
   engineHours: string;
   length: string;
-  homePort: string;
+  homePort: string; // Display name for the port
+  portId: string; // ID for the port in the database
+  place_de_port: string; // Added place_de_port
 }
-
-// This would typically come from your API or database
-const boatsData = {
-  '1': {
-    photo: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-    name: 'Le Grand Bleu',
-    type: 'Voilier',
-    manufacturer: 'Bénéteau',
-    model: 'Oceanis 45',
-    constructionYear: '2020',
-    engine: 'Volvo Penta D2-50',
-    engineHours: '500',
-    length: '12m',
-    homePort: 'Port de Marseille',
-  },
-  '2': {
-    photo: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop',
-    name: 'Le Petit Prince',
-    type: 'Yacht',
-    manufacturer: 'Jeanneau',
-    model: 'Sun Odyssey 410',
-    constructionYear: '2022',
-    engine: 'Yanmar 4JH45',
-    engineHours: '200',
-    length: '15m',
-    homePort: 'Port de Nice',
-  },
-};
 
 const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }: {
   visible: boolean;
@@ -68,8 +48,8 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
         </TouchableOpacity>
 
         {hasPhoto && (
-          <TouchableOpacity 
-            style={[styles.modalOption, styles.deleteOption]} 
+          <TouchableOpacity
+            style={[styles.modalOption, styles.deleteOption]}
             onPress={() => {
               onDeletePhoto();
               onClose();
@@ -80,7 +60,7 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.modalCancelButton}
           onPress={onClose}
         >
@@ -106,66 +86,317 @@ export default function EditBoatScreen() {
     engineHours: '',
     length: '',
     homePort: '',
+    portId: '',
+    place_de_port: '', // Initialize place_de_port
   });
+  const [errors, setErrors] = useState<Partial<BoatForm>>({});
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [showPortModal, setShowPortModal] = useState(false);
+  const [portSearch, setPortSearch] = useState('');
+  const [availablePorts, setAvailablePorts] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
-    // Load boat data based on ID
-    if (id && typeof id === 'string' && boatsData[id]) {
-      setForm(boatsData[id]);
-    }
-  }, [id]);
-
-  const [errors, setErrors] = useState<Partial<BoatForm>>({});
-
-  const handleChoosePhoto = async () => {
-    if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) return;
+  const fetchBoatData = async () => {
+    if (!id || typeof id !== 'string') {
+      setFetchError('ID du bateau manquant.');
+      setLoading(false);
+      return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 1,
-    });
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const { data, error } = await supabase
+        .from('boat')
+        .select(`
+          id,
+          name,
+          type,
+          modele,
+          annee_construction,
+          type_moteur,
+          temps_moteur,
+          longueur,
+          image,
+          id_port,
+          constructeur,
+          ports(name),
+          place_de_port
+        `)
+        .eq('id', id)
+        .single();
 
-    if (!result.canceled) {
-      setForm(prev => ({ ...prev, photo: result.assets[0].uri }));
+      if (error) {
+        if (error.code === 'PGRST116') { // No rows found
+          setFetchError('Bateau non trouvé.');
+        } else {
+          console.error('Error fetching boat:', error);
+          setFetchError('Erreur lors du chargement du bateau.');
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (data) {
+        let signedPhotoUrl = '';
+        // Vérifie si une image existe (Supabase)
+        if (data.image && data.image.includes('/storage/v1/object/public/boat.images/')) {
+          // Extraire le "path" relatif à partir de l'URL publique
+          const storagePrefix = '/storage/v1/object/public/boat.images/';
+          const idx = data.image.indexOf(storagePrefix);
+          if (idx !== -1) {
+            const path = data.image.substring(idx + storagePrefix.length);
+            // Générer une URL signée valable 1h
+            const { data: signedUrlData, error: signedUrlError } = await supabase
+              .storage
+              .from('boat.images')
+              .createSignedUrl(path, 60 * 60);
+            if (signedUrlError) {
+              console.warn('Erreur création URL signée :', signedUrlError);
+            } else {
+              signedPhotoUrl = signedUrlData?.signedUrl ?? '';
+              console.log('URL signée générée :', signedPhotoUrl);
+            }
+          }
+        }
+
+        setForm({
+          photo:
+            signedPhotoUrl ||
+            data.image ||
+            'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+          name: data.name || '',
+          type: data.type || '',
+          manufacturer: data.constructeur || '',
+          model: data.modele || '',
+          constructionYear: data.annee_construction
+            ? new Date(data.annee_construction).getFullYear().toString()
+            : '',
+          engine: data.type_moteur || '',
+          engineHours: data.temps_moteur ? data.temps_moteur.toString() : '',
+          length: data.longueur || '',
+          homePort: data.ports?.name || '',
+          portId: data.id_port?.toString() || '',
+          place_de_port: data.place_de_port || '',
+        });
+        setPortSearch(data.ports?.name || '');
+      } else {
+        setFetchError('Bateau non trouvé.');
+      }
+    } catch (e) {
+      console.error('Unexpected error fetching boat:', e);
+      setFetchError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
-    setShowPhotoModal(false);
   };
 
-  const handleDeletePhoto = () => {
-    setForm(prev => ({ ...prev, photo: '' }));
+  const fetchPorts = async () => {
+    const { data, error } = await supabase.from('ports').select('id, name');
+    if (error) {
+      console.error('Error fetching ports:', error);
+    } else {
+      setAvailablePorts(data.map(p => ({ id: p.id.toString(), name: p.name })));
+    }
+  };
+
+  fetchBoatData();
+  fetchPorts();
+}, [id]);
+
+
+  const handleChoosePhoto = async () => {
+    try {
+      if (!mediaPermission?.granted) {
+        const permission = await requestMediaPermission();
+        if (!permission.granted) {
+          Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie.');
+          setShowPhotoModal(false);
+          return;
+        }
+      }
+
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 1,
+      });
+
+      if (pickerResult.canceled || !pickerResult.assets?.length) {
+        setShowPhotoModal(false);
+        return;
+      }
+
+      const asset = pickerResult.assets[0];
+
+      // Manipulate image and store local URI
+      const manipulatedImage = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      setForm(prev => ({ ...prev, photo: manipulatedImage.uri })); // Store local URI
+      setShowPhotoModal(false); // Close modal after selection
+    } catch (e) {
+      console.error('Erreur lors de la sélection de l\'image:', e);
+      Alert.alert('Erreur', 'Impossible de sélectionner l\'image.');
+      setShowPhotoModal(false);
+    }
+  };
+
+  const handleDeletePhoto = async () => {
+    // Check if the current photo URL is from Supabase Storage
+    if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
+      try {
+        const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
+        if (filePath) {
+          const { error } = await supabase.storage
+            .from('boat.images')
+            .remove([filePath]);
+          if (error) {
+            console.error('Error deleting image from storage:', error);
+            Alert.alert('Erreur', `Échec de la suppression de l'image du stockage: ${error.message}`);
+            return;
+          }
+        }
+      } catch (e: any) {
+        console.error('Error processing image deletion:', e.message || e);
+        Alert.alert('Erreur', `Une erreur est survenue lors de la suppression de l'image: ${e.message || 'Veuillez réessayer.'}`);
+      }
+    }
+    setForm(prev => ({ ...prev, photo: '' })); // Reset to empty string
+  };
+
+  const handleSelectPort = (port: { id: string; name: string }) => {
+    setForm(prev => ({
+      ...prev,
+      portId: port.id,
+      homePort: port.name
+    }));
+    setPortSearch(port.name);
+    setShowPortModal(false);
+    if (errors.homePort) {
+      setErrors(prev => ({ ...prev, homePort: undefined }));
+    }
+  };
+
+  const handlePortInputChange = (text: string) => {
+    setPortSearch(text);
+    setShowPortModal(true); // Always show modal when typing
+    setForm(prev => ({ ...prev, portId: '', homePort: text })); // Clear portId until a valid one is selected
   };
 
   const validateForm = () => {
     const newErrors: Partial<BoatForm> = {};
-    
+
     if (!form.name.trim()) newErrors.name = 'Le nom est requis';
     if (!form.type.trim()) newErrors.type = 'Le type est requis';
     if (!form.manufacturer.trim()) newErrors.manufacturer = 'Le constructeur est requis';
     if (!form.length.trim()) newErrors.length = 'La longueur est requise';
-    if (!form.homePort.trim()) newErrors.homePort = 'Le port d\'attache est requis';
+    if (!form.portId) newErrors.homePort = 'Le port d\'attache est requis';
+    if (!form.place_de_port.trim()) newErrors.place_de_port = 'La place de port est requise'; // Validate place_de_port
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (validateForm()) {
-      // Here you would typically update the boat data
-      Alert.alert(
-        'Succès',
-        'Les modifications ont été enregistrées avec succès.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return;
+    }
+
+    setLoading(true);
+    let finalImageUrl = form.photo; // Start with current photo URL
+
+    // If photo is a local URI (newly selected), upload it to Supabase
+    if (form.photo && !form.photo.startsWith('http')) {
+      try {
+        const fileName = `boat_images/${id}/${Date.now()}.jpeg`; 
+        const contentType = 'image/jpeg';
+
+        // Read the file as base64
+        const base64 = await FileSystem.readAsStringAsync(form.photo, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        // Convert base64 to Buffer (Uint8Array)
+        const fileBuffer = Buffer.from(base64, 'base64');
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('boat.images') // Specify the bucket name here
+          .upload(fileName, fileBuffer, { // Use the fileBuffer
+            contentType,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error('Erreur upload Supabase:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement de l'image: ${uploadError.message}`);
+          setLoading(false);
+          return;
+        }
+
+        const { data: signedUrlData, error: signedUrlError } = await supabase
+          .storage
+          .from('boat.images')
+          .createSignedUrl(uploadData.path, 60 * 60); // URL valide 1h
+
+        if (signedUrlError) {
+          console.error('Erreur création URL signée:', signedUrlError);
+          Alert.alert('Erreur', `Problème d'accès à l'image: ${signedUrlError.message}`);
+          return;
+        }
+
+        finalImageUrl = signedUrlData?.signedUrl;
+
+      } catch (e) {
+        console.error('Erreur lors du téléchargement de l\'image:', e);
+        Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement de l\'image.');
+        setLoading(false);
+        return;
+      }
+    }
+
+    try {
+      const { error } = await supabase
+        .from('boat')
+        .update({
+          name: form.name,
+          type: form.type,
+          modele: form.model,
+          annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null,
+          type_moteur: form.engine,
+          temps_moteur: form.engineHours ? form.engineHours : null,
+          longueur: form.length,
+          image: finalImageUrl, // Use the final image URL (local or Supabase)
+          id_port: parseInt(form.portId),
+          constructeur: form.manufacturer,
+          place_de_port: form.place_de_port, // Include place_de_port in update
+        })
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error updating boat:', error);
+        Alert.alert('Erreur', `Échec de la mise à jour du bateau: ${error.message}`);
+      } else {
+        Alert.alert(
+          'Succès',
+          'Les modifications ont été enregistrées avec succès.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.back()
+            }
+          ]
+        );
+      }
+    } catch (e) {
+      console.error('Unexpected error during boat update:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -181,29 +412,80 @@ export default function EditBoatScreen() {
         {
           text: 'Supprimer',
           style: 'destructive',
-          onPress: () => {
-            // Here you would typically delete the boat
-            Alert.alert(
-              'Succès',
-              'Le bateau a été supprimé avec succès.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => router.replace('/(tabs)/profile')
+          onPress: async () => {
+            setLoading(true);
+            try {
+              // Delete image from storage first
+              if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
+                const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
+                if (filePath) {
+                  const { error: deleteImageError } = await supabase.storage
+                    .from('boat.images')
+                    .remove([filePath]);
+                  if (deleteImageError) {
+                    console.warn('Error deleting boat image from storage:', deleteImageError);
+                  }
                 }
-              ]
-            );
+              }
+
+              // Then delete boat record
+              const { error } = await supabase
+                .from('boat')
+                .delete()
+                .eq('id', id);
+
+              if (error) {
+                console.error('Error deleting boat:', error);
+                Alert.alert('Erreur', `Échec de la suppression du bateau: ${error.message}`);
+              } else {
+                Alert.alert(
+                  'Succès',
+                  'Le bateau a été supprimé avec succès.',
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => router.replace('/(tabs)/profile') // Redirect to profile after deletion
+                    }
+                  ]
+                );
+              }
+            } catch (e) {
+              console.error('Unexpected error during boat deletion:', e);
+              Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+            } finally {
+              setLoading(false);
+            }
           },
         },
       ]
     );
   };
 
-  if (!id || typeof id !== 'string' || !boatsData[id]) {
+  if (loading) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Modifier le bateau</Text>
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0066CC" />
+          <Text style={styles.loadingText}>Chargement des données...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -212,8 +494,8 @@ export default function EditBoatScreen() {
           <Text style={styles.title}>Bateau non trouvé</Text>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Ce bateau n'existe pas.</Text>
-          <TouchableOpacity 
+          <Text style={styles.errorText}>{fetchError || 'Ce bateau n\'existe pas ou vous n\'avez pas les permissions pour le voir.'}</Text>
+          <TouchableOpacity
             style={styles.errorButton}
             onPress={() => router.back()}
           >
@@ -227,7 +509,7 @@ export default function EditBoatScreen() {
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -237,15 +519,17 @@ export default function EditBoatScreen() {
       </View>
 
       <View style={styles.form}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.photoContainer}
           onPress={() => setShowPhotoModal(true)}
         >
           {form.photo ? (
             <>
-              <Image 
+              <Image
                 source={{ uri: form.photo }}
                 style={styles.photoPreview}
+                onError={(e) => console.log('Image loading error:', e.nativeEvent.error, 'URL:', form.photo)}
+                onLoad={() => console.log('Image loaded successfully. URL:', form.photo)}
               />
               <TouchableOpacity
                 style={styles.deletePhotoButton}
@@ -349,24 +633,56 @@ export default function EditBoatScreen() {
         </View>
 
         <View style={styles.inputContainer}>
-          <Text style={styles.label}>Port d'attache</Text>
-          <TextInput
-            style={[styles.input, errors.homePort && styles.inputError]}
-            value={form.homePort}
-            onChangeText={(text) => setForm(prev => ({ ...prev, homePort: text }))}
-            placeholder="ex: Port de Marseille"
-          />
-          {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
+  <Text style={styles.label}>Port d'attache</Text>
+  <TouchableOpacity
+  onPress={() => setShowPortModal(true)}
+  activeOpacity={0.7}
+  style={[
+    styles.inputWrapper,
+    errors.homePort && styles.inputWrapperError
+  ]}
+>
+  <MapPin size={20} color={errors.homePort ? '#ff4444' : '#666'} />
+  <TextInput
+    style={styles.portInput}
+    value={form.homePort || ''}
+    editable={false}
+    pointerEvents="none" // désactive le focus, ne sort pas le clavier
+    placeholder="Port d'attache"
+    placeholderTextColor="#999"
+  />
+  <ImageIcon size={18} color="#b0b3b8" style={{ marginLeft: 6 }} />
+</TouchableOpacity>
+  {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
+</View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Place de port</Text>
+          <View style={[styles.inputWrapper, errors.place_de_port && styles.inputWrapperError]}>
+            <MapPin size={20} color={errors.place_de_port ? '#ff4444' : '#666'} />
+            <TextInput
+              style={styles.input}
+              value={form.place_de_port}
+              onChangeText={(text) => setForm(prev => ({ ...prev, place_de_port: text }))}
+              placeholder="ex: A12, Ponton B"
+            />
+          </View>
+          {errors.place_de_port && <Text style={styles.errorText}>{errors.place_de_port}</Text>}
         </View>
 
-        <TouchableOpacity 
-          style={styles.submitButton}
+        <TouchableOpacity
+          style={[styles.submitButton, loading && styles.submitButtonDisabled]}
           onPress={handleSubmit}
+          disabled={loading}
         >
-          <Text style={styles.submitButtonText}>Enregistrer les modifications</Text>
+          {loading ? (
+            <ActivityIndicator color="white" size="small" />
+          ) : (
+            <Text style={styles.submitButtonText}>Enregistrer les modifications</Text>
+          )}
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.deleteButton}
           onPress={handleDelete}
         >
@@ -374,12 +690,21 @@ export default function EditBoatScreen() {
         </TouchableOpacity>
       </View>
 
-      <PhotoModal 
+      <PhotoModal
         visible={showPhotoModal}
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
         hasPhoto={!!form.photo}
+      />
+      <PortSelectionModal
+        visible={showPortModal}
+        onClose={() => setShowPortModal(false)}
+        onSelectPort={handleSelectPort}
+        selectedPortId={form.portId}
+        portsData={availablePorts}
+        searchQuery={portSearch}
+        onSearchQueryChange={setPortSearch}
       />
     </ScrollView>
   );
@@ -388,139 +713,217 @@ export default function EditBoatScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f7fafc',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
+    paddingTop: Platform.OS === 'ios' ? 48 : 24,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#e5e7eb',
+    shadowColor: '#0066CC',
+    shadowOpacity: 0.10,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 5,
   },
   backButton: {
     padding: 8,
-    marginRight: 16,
+    borderRadius: 16,
+    backgroundColor: '#f5f6fa',
+    marginRight: 12,
   },
   title: {
-    fontSize: 20,
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 22,
     fontWeight: 'bold',
-    color: '#1a1a1a',
+    color: '#0066CC',
+    letterSpacing: 1,
+  },
+  editButton: {
+    padding: 8,
+    borderRadius: 16,
+    backgroundColor: '#f5f6fa',
+    marginLeft: 12,
+  },
+  editButtonText: {
+    color: '#0066CC',
+    fontWeight: '600',
+    fontSize: 16,
   },
   form: {
-    padding: 16,
+    padding: 18,
     gap: 20,
   },
   photoContainer: {
     width: '100%',
-    height: 200,
-    backgroundColor: 'white',
-    borderRadius: 12,
+    height: 220,
+    backgroundColor: '#fff',
+    borderRadius: 20,
     overflow: 'hidden',
-    position: 'relative',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-    }),
+    marginBottom: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#0066CC',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.10,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  photoPreview: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
+    resizeMode: 'cover',
+  },
+  deletePhotoButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: '#ff4444',
+    borderRadius: 999,
+    padding: 10,
+    zIndex: 10,
+    elevation: 3,
   },
   photoPlaceholder: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    gap: 8,
-  },
-  photoPreview: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  deletePhotoButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: 20,
-    padding: 8,
+    gap: 10,
+    backgroundColor: '#f0f7ff',
   },
   photoText: {
     fontSize: 16,
     color: '#666',
+    fontWeight: '600',
+    opacity: 0.9,
   },
   inputContainer: {
-    gap: 4,
+    marginBottom: 12,
   },
   label: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#1a1a1a',
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#0066CC',
     marginBottom: 4,
+    marginLeft: 4,
   },
-  input: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    color: '#1a1a1a',
+    borderColor: '#e0e7ef',
+    paddingHorizontal: 14,
+    height: 50,
+    shadowColor: '#0066CC',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
   },
-  inputError: {
+  inputWrapperError: {
     borderColor: '#ff4444',
     backgroundColor: '#fff5f5',
   },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
+  input: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#22223b',
+    fontWeight: '500',
+    height: '100%',
+    ...Platform.select({ web: { outlineStyle: 'none' } }),
+  },
+  portInput: {
+  flex: 1,
+  marginLeft: 8,
+  fontSize: 16,
+  height: '100%',
+  fontWeight: '500',
+  textAlignVertical: 'center',
+  includeFontPadding: false,
+  paddingVertical: 0,   // Essaye avec 0 ou 2, ajuste si besoin
+},
+  clearButton: {
+    padding: 6,
+    borderRadius: 16,
+    backgroundColor: '#f0f0f0',
     marginLeft: 4,
+  },
+  clearButtonText: {
+    fontSize: 20,
+    color: '#aaa',
+    fontWeight: 'bold',
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#ff4444',
+    marginLeft: 4,
+    marginTop: 2,
+    fontWeight: '500',
   },
   submitButton: {
     backgroundColor: '#0066CC',
-    padding: 16,
-    borderRadius: 12,
+    paddingVertical: 16,
+    borderRadius: 16,
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 20,
     shadowColor: '#0066CC',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    shadowOpacity: 0.13,
+    shadowRadius: 10,
     elevation: 4,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#8cb6e6',
   },
   submitButtonText: {
     color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
   },
   deleteButton: {
-    backgroundColor: '#fff5f5',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: '#ff4444',
+    paddingVertical: 14,
+    borderRadius: 16,
     alignItems: 'center',
     marginTop: 8,
+    shadowColor: '#ff4444',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
   },
   deleteButtonText: {
-    color: '#ff4444',
+    color: 'white',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
     justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    gap: 16,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    padding: 28,
+    gap: 20,
+    shadowColor: '#22223b',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 15,
+    elevation: 8,
   },
   modalTitle: {
     fontSize: 20,
@@ -531,14 +934,16 @@ const styles = StyleSheet.create({
   modalOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    padding: 16,
+    gap: 14,
+    padding: 14,
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
+    marginBottom: 2,
   },
   modalOptionText: {
     fontSize: 16,
     color: '#1a1a1a',
+    fontWeight: '600',
   },
   deleteOption: {
     backgroundColor: '#fff5f5',
@@ -546,16 +951,30 @@ const styles = StyleSheet.create({
   deleteOptionText: {
     fontSize: 16,
     color: '#ff4444',
+    fontWeight: '600',
   },
   modalCancelButton: {
     padding: 16,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 6,
   },
   modalCancelText: {
     fontSize: 16,
     color: '#ff4444',
+    fontWeight: '700',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 14,
+    padding: 40,
+  },
+  loadingText: {
+    fontSize: 17,
+    color: '#0066CC',
     fontWeight: '600',
+    marginTop: 14,
   },
   errorContainer: {
     flex: 1,
@@ -568,7 +987,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#0066CC',
     paddingVertical: 12,
     paddingHorizontal: 24,
-    borderRadius: 8,
+    borderRadius: 10,
+    marginTop: 16,
   },
   errorButtonText: {
     color: 'white',

@@ -1,10 +1,109 @@
-import { useState, useEffect, memo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch, ActivityIndicator } from 'react-native';
+import { useState, useEffect, memo, useRef, useCallback } from 'react'; // Ajout de useCallback
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch,Linking, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User, Star, MessageSquare, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Buffer } from 'buffer';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import { supabase } from '@/src/lib/supabase';
+
+
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (isHttpUrl(value)) return value;
+
+  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+
+// Helper to extract path from a public URL
+const pathFromPublicUrl = (url: string) => {
+  const marker = '/storage/v1/object/public/avatars/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return url.slice(idx + marker.length); // ex: users/<id>/<file>.jpg
+};
+
+// Helper to extract path from a signed URL (for boat images)
+// MODIFIÉ pour être plus robuste
+const pathFromSignedBoatImageUrl = (url: string) => {
+  const publicMarker = '/storage/v1/object/public/boat.images/';
+  const signedMarker = '/storage/v1/object/sign/boat.images/';
+
+  let idx = url.indexOf(publicMarker);
+  if (idx !== -1) {
+    return url.substring(idx + publicMarker.length);
+  }
+
+  idx = url.indexOf(signedMarker);
+  if (idx !== -1) {
+    const pathWithToken = url.substring(idx + signedMarker.length);
+    const tokenIndex = pathWithToken.indexOf('?token=');
+    return tokenIndex !== -1 ? pathWithToken.substring(0, tokenIndex) : pathWithToken;
+  }
+  return null; // Not a recognized Supabase storage URL
+};
+
+// Helper to get a signed URL for a boat image
+// MODIFIÉ pour gérer tous les cas d'entrée
+const getSignedBoatImageUrl = async (imageDbValue: string) => {
+  if (!imageDbValue) return '';
+
+  let rawPath = imageDbValue;
+
+  // Si la valeur est déjà une URL publique directe, on extrait le chemin brut
+  if (imageDbValue.includes('/storage/v1/object/public/boat.images/')) {
+    const publicMarker = '/storage/v1/object/public/boat.images/';
+    const publicIdx = imageDbValue.indexOf(publicMarker);
+    if (publicIdx !== -1) {
+      rawPath = imageDbValue.substring(publicIdx + publicMarker.length);
+    } else {
+      // Si c'est une URL publique mais ne correspond pas à notre structure, la retourner telle quelle.
+      return imageDbValue;
+    }
+  }
+  // Si la valeur est une URL signée, on extrait le chemin brut
+  else if (imageDbValue.includes('/storage/v1/object/sign/boat.images/')) {
+    const signedMarker = '/storage/v1/object/sign/boat.images/';
+    const signedIdx = imageDbValue.indexOf(signedMarker);
+    if (signedIdx !== -1) {
+      const pathWithToken = imageDbValue.substring(signedIdx + signedMarker.length);
+      const tokenIndex = pathWithToken.indexOf('?token=');
+      rawPath = tokenIndex !== -1 ? pathWithToken.substring(0, tokenIndex) : pathWithToken;
+    } else {
+      // Si c'est une URL signée mais ne correspond pas à notre structure, la retourner telle quelle.
+      return imageDbValue;
+    }
+  }
+  // Si la valeur est déjà un chemin brut, rawPath reste inchangé
+
+  // Maintenant, utiliser le chemin brut pour créer une nouvelle URL signée
+  const { data, error } = await supabase
+    .storage
+    .from('boat.images')
+    .createSignedUrl(rawPath, 60 * 60); // Valide pour 1 heure
+
+  if (error) {
+    console.error('Error creating signed URL for boat image:', error, 'Path:', rawPath);
+    return '';
+  }
+  return data?.signedUrl || '';
+};
+
+
+// Silhouette universelle
+export const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 
 // Interfaces pour les données récupérées
 interface Service {
@@ -28,7 +127,6 @@ interface ServiceHistory {
   id: string;
   date: string;
   type: string;
-  description: string;
   status: 'completed' | 'in_progress' | 'cancelled' | 'submitted' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'to_pay' | 'paid'; // Correspond à service_request.statut
   boat: {
     id: string;
@@ -62,20 +160,15 @@ interface BoatManagerProfile {
   location?: string;
 }
 
+
 // Hardcoded service icons (map to fetched service names)
 const serviceIconsMap = {
-  'Maintenance': Wrench,
+  'Entretien': Wrench,
   'Amélioration': Tool,
   'Contrôle': Gauge,
   'Accès': Key,
   'Administratif': FileText,
   // Add other service types and their icons as needed
-};
-
-const avatars = {
-  male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-  female: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-  neutral: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop',
 };
 
 // Extracted EditProfileModal component (MODIFIED)
@@ -163,13 +256,9 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
 ));
 
 // Extracted PhotoModal component (unchanged)
-const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
+// Update signature
+const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto }) => (
+  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
     <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
         <Text style={styles.modalTitle}>Photo de profil</Text>
@@ -178,32 +267,22 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
           <ImageIcon size={24} color="#0066CC" />
           <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.modalOption} onPress={onSelectAvatar}>
-          <User size={24} color="#0066CC" />
-          <Text style={styles.modalOptionText}>Choisir un avatar</Text>
-        </TouchableOpacity>
-        
+
         {hasCustomPhoto && (
-          <TouchableOpacity 
-            style={[styles.modalOption, styles.deleteOption]} 
-            onPress={onDeletePhoto}
-          >
+          <TouchableOpacity style={[styles.modalOption, styles.deleteOption]} onPress={onDeletePhoto}>
             <X size={24} color="#ff4444" />
             <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity 
-          style={styles.modalCancelButton}
-          onPress={onClose}
-        >
+        <TouchableOpacity style={styles.modalCancelButton} onPress={onClose}>
           <Text style={styles.modalCancelText}>Annuler</Text>
         </TouchableOpacity>
       </View>
     </View>
   </Modal>
 ));
+
 
 // Extracted AvatarModal component (unchanged)
 const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
@@ -213,43 +292,19 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
     animationType="slide"
     onRequestClose={onClose}
   >
-    <View style={styles.modalOverlay}>
+    {/* <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Choisir un avatar</Text>
-        
+        <Text style={styles.modalTitle}>Réinitialiser la photo</Text>
         <TouchableOpacity 
           style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('male')}
+          onPress={() => onSelectAvatar(DEFAULT_AVATAR)}
         >
           <Image 
-            source={{ uri: avatars.male }} 
+            source={{ uri: DEFAULT_AVATAR }} 
             style={styles.avatarPreview} 
           />
-          <Text style={styles.avatarOptionText}>Avatar Homme</Text>
+          <Text style={styles.avatarOptionText}>Remettre la silhouette</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('female')}
-        >
-          <Image 
-            source={{ uri: avatars.female }} 
-            style={styles.avatarPreview} 
-          />
-          <Text style={styles.avatarOptionText}>Avatar Femme</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('neutral')}
-        >
-          <Image 
-            source={{ uri: avatars.neutral }} 
-            style={styles.avatarPreview} 
-          />
-          <Text style={styles.avatarOptionText}>Avatar Neutre</Text>
-        </TouchableOpacity>
-
         <TouchableOpacity 
           style={styles.modalCancelButton}
           onPress={onClose}
@@ -257,19 +312,35 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
           <Text style={styles.modalCancelText}>Annuler</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </View> */}
   </Modal>
 ));
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+
+  const didRetryAvatarRef = useRef(false);
+  // 1️⃣ Redirection via useEffect, pas dans le rendu !
+  useEffect(() => {
+    if (!user?.id) {
+      router.replace('/login');
+    }
+  }, [user]);
+
+  // 2️⃣ Affiche rien le temps que ça redirige
+  if (!user?.id) {
+    return null;
+  }
+
+ // const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
   const [selectedTab, setSelectedTab] = useState<'boats' | 'history' | 'reviews'>('boats');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
-  const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral);
+  const [avatarPath, setAvatarPath] = useState<string>('');      // ce qui est stocké en BDD (chemin)
+  const [localAvatar, setLocalAvatar] = useState<string>('');    // URL signée pour <Image />
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -283,9 +354,7 @@ export default function ProfileScreen() {
   const [boats, setBoats] = useState<BoatDetails[]>([]);
   const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
   const [myReviews, setMyReviews] = useState<Review[]>([]);
-  const [otherBoatManagers, setOtherBoatManagers] = useState<BoatManagerProfile[]>([]);
-  const [showAllOtherBMs, setShowAllOtherBMs] = useState(false); // Initialized here
-  const [mainBoatManager, setMainBoatManager] = useState<BoatManagerProfile | null>(null);
+  const [associatedBoatManagers, setAssociatedBoatManagers] = useState<BoatManagerProfile[]>([]);
 
   // States for "Show More/Show Less"
   const [showAllBoats, setShowAllBoats] = useState(false);
@@ -390,41 +459,53 @@ export default function ProfileScreen() {
     const fetchProfileData = async () => {
       setLoading(true);
       setError(null);
-      if (!user?.id) {
-        setError('Utilisateur non authentifié.');
-        setLoading(false);
-        return;
-      }
+     
 
       try {
         // Fetch user profile details
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('first_name, last_name, e_mail, phone, avatar, created_at')
-          .eq('id', user.id)
-          .single();
+        // ...
+const { data: userData, error: userError } = await supabase
+  .from('users')
+  .select('first_name, last_name, e_mail, phone, avatar, created_at')
+  .eq('id', user.id)
+  .single();
 
-        if (userError) {
-          console.error('Error fetching user profile:', userError);
-          setError('Échec du chargement du profil utilisateur.');
-          return;
-        }
+if (userError) {
+  console.error('Error fetching user profile:', userError);
+  setError('Échec du chargement du profil utilisateur.');
+  return;
+}
 
-        if (userData) {
-          setLocalAvatar(userData.avatar || avatars.neutral);
-          setProfileData({
-            firstName: userData.first_name || '',
-            lastName: userData.last_name || '',
-            email: userData.e_mail || '',
-            phone: userData.phone || '',
-          });
-          setFormData({
-            firstName: userData.first_name || '',
-            lastName: userData.last_name || '',
-            email: userData.e_mail || '',
-            phone: userData.phone || '',
-          });
-        }
+if (userData) {
+  // Normalise ce qui vient de la BDD
+  let path = '';
+  if (userData.avatar) {
+    if (isHttpUrl(userData.avatar)) {
+      path = pathFromPublicUrl(userData.avatar) || '';
+    } else {
+      path = userData.avatar;
+    }
+  }
+  setAvatarPath(path);
+
+  // Construit l'URL signée si on a un chemin
+  const signed = await getSignedAvatarUrl(path);
+  setLocalAvatar(signed || '');
+
+  setProfileData({
+    firstName: userData.first_name || '',
+    lastName: userData.last_name || '',
+    email: userData.e_mail || '',
+    phone: userData.phone || '',
+  });
+  setFormData({
+    firstName: userData.first_name || '',
+    lastName: userData.last_name || '',
+    email: userData.e_mail || '',
+    phone: userData.phone || '',
+  });
+} // ✅ ce } a maintenant son if
+
 
         // Fetch user's boats
         const { data: boatsData, error: boatsError } = await supabase
@@ -438,26 +519,24 @@ export default function ProfileScreen() {
           return;
         }
 
-        const formattedBoats: BoatDetails[] = await Promise.all(boatsData.map(async (boat: any) => {
-  const { data: lastService, error: lastServiceError } = await supabase
-    .from('service_request')
-    .select('date')
-    .eq('id_boat', boat.id)
-    .order('date', { ascending: false })
-    .limit(1)
-    .single();
+       const formattedBoats: BoatDetails[] = await Promise.all(boatsData.map(async (boat: any) => {
+          let imageUrl = '';
+          if (boat.image) {
+            // Utiliser la fonction getSignedBoatImageUrl pour obtenir l'URL signée
+            imageUrl = await getSignedBoatImageUrl(boat.image);
+          } else {
+            imageUrl = 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1';
+          }
 
-  const lastServiceDate = lastService?.date ? new Date(lastService.date) : null;
+          return {
+            id: boat.id.toString(),
+            name: boat.name,
+            type: boat.type,
+            image: imageUrl,
+            status: boat.etat || 'active',
+          };
+        }));
 
-  return {
-    id: boat.id.toString(),
-    name: boat.name,
-    type: boat.type,
-    image: boat.image || 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-    lastService: lastServiceDate ? lastServiceDate.toISOString().split('T')[0] : undefined,
-    status: boat.etat || 'active',
-  };
-}));
 
         setBoats(formattedBoats);
 
@@ -480,7 +559,7 @@ export default function ProfileScreen() {
           setError('Échec du chargement de l\'historique des services.');
           return;
         }
-
+  
         const formattedServiceHistory: ServiceHistory[] = serviceHistoryData.map((req: any) => ({
           id: req.id.toString(),
           date: req.date,
@@ -527,7 +606,8 @@ export default function ProfileScreen() {
               reviewedEntity = {
                 id: sr.id_boat_manager.id.toString(),
                 name: `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`,
-                avatar: sr.id_boat_manager.avatar || avatars.neutral,
+                avatar: sr.id_boat_manager.avatar && sr.id_boat_manager.avatar.trim() !== '' ? sr.id_boat_manager.avatar : DEFAULT_AVATAR,
+
                 type: 'boat_manager',
                 entityRating: sr.id_boat_manager.rating,
                 entityReviewCount: sr.id_boat_manager.review_count,
@@ -545,7 +625,7 @@ export default function ProfileScreen() {
               reviewedEntity = {
                 id: 'unknown',
                 name: 'Inconnu',
-                avatar: avatars.neutral,
+                avatar: DEFAULT_AVATAR,
                 type: 'boat_manager',
               };
             }
@@ -560,159 +640,94 @@ export default function ProfileScreen() {
           });
         setMyReviews(formattedReviews);
 
-       // --- Start of Boat Manager selection logic ---
+        // --- Start of Boat Manager selection logic (MODIFIED) ---
 
-// 1. Récupère tous les ports liés au client (pour retrouver tous les BM connectés)
-const { data: allUserPorts, error: allPortsError } = await supabase
-  .from('user_ports')
-  .select('port_id, created_at')
-  .eq('user_id', user.id);
+        // 1. Récupère tous les ports liés au client
+        const { data: allUserPorts, error: allPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id') // Removed created_at
+          .eq('user_id', user.id);
 
-if (allPortsError) {
-  console.error('Erreur récupération des ports client :', allPortsError);
-  return;
-}
+        if (allPortsError) {
+          console.error('Erreur récupération des ports client :', allPortsError);
+          return;
+        }
 
-if (!allUserPorts || allUserPorts.length === 0) {
-  console.warn('Ce client n\'est rattaché à aucun port.');
-  return;
-}
+        if (!allUserPorts || allUserPorts.length === 0) {
+          console.warn('Ce client n\'est rattaché à aucun port.');
+          setAssociatedBoatManagers([]); // Clear previous BMs if no ports
+          return;
+        }
 
-// 2. Identifier le port d’attache (le plus ancien)
-const primaryPortId = allUserPorts
-  .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0].port_id;
+        // 2. Récupère tous les Boat Managers associés à ces ports
+        const portIds = allUserPorts.map(p => p.port_id);
 
-// 3. Récupère tous les users liés à ces ports
-const portIds = allUserPorts.map(p => p.port_id);
+        const { data: allPortUsers, error: portUsersError } = await supabase
+          .from('user_ports')
+          .select('user_id, port_id')
+          .in('port_id', portIds);
 
-const { data: allPortUsers, error: portUsersError } = await supabase
-  .from('user_ports')
-  .select('user_id, port_id')
-  .in('port_id', portIds);
+        if (portUsersError) {
+          console.error('Erreur récupération des users des ports :', portUsersError);
+          return;
+        }
 
-if (portUsersError) {
-  console.error('Erreur récupération des users des ports :', portUsersError);
-  return;
-}
+        const allBmIds = [...new Set(allPortUsers.map(pu => pu.user_id))]; // Unique BM IDs
 
-const allBmIds = allPortUsers.map(pu => pu.user_id);
+        // 3. Filtrer pour ne garder que les Boat Managers et récupérer leurs détails
+        const { data: allBms, error: bmError } = await supabase
+          .from('users')
+          .select('id, first_name, last_name, avatar, phone, e_mail, rating, review_count')
+          .in('id', allBmIds)
+          .eq('profile', 'boat_manager');
 
-// 4. Filtrer pour ne garder que les Boat Managers
-const { data: allBms, error: bmError } = await supabase
-  .from('users')
-  .select('id, first_name, last_name, avatar, phone, e_mail, rating, review_count')
-  .in('id', allBmIds)
-  .eq('profile', 'boat_manager');
+        if (bmError) {
+          console.error('Erreur chargement Boat Managers :', bmError);
+          return;
+        }
 
-if (bmError) {
-  console.error('Erreur chargement Boat Managers :', bmError);
-  return;
-}
+        if (!allBms || allBms.length === 0) {
+          console.warn('Aucun Boat Manager trouvé sur les ports du client.');
+          setAssociatedBoatManagers([]); // Clear previous BMs if no BMs found
+          return;
+        }
 
-if (!allBms || allBms.length === 0) {
-  console.warn('Aucun Boat Manager trouvé sur les ports du client.');
-  return;
-}
+        // 4. Ajouter l'emplacement (port) pour chaque BM
+        const associatedBMsWithLocation = await Promise.all(
+          allBms.map(async (bm) => {
+            // Trouver le port le plus ancien associé à ce BM (pour l'affichage)
+            const { data: bmPortLink, error: bmPortLinkError } = await supabase
+              .from('user_ports')
+              .select('port_id')
+              .eq('user_id', bm.id)
+              .order('port_id', { ascending: true }) // Order by port_id as created_at is removed
+              .limit(1);
 
-// 5. Récupère tous les services entre le client et les BMs
-const { data: serviceRequests, error: serviceError } = await supabase
-  .from('service_request')
-  .select('id_boat_manager')
-  .eq('id_client', user.id)
-  .in('id_boat_manager', allBms.map(bm => bm.id));
+            let portName = 'Port inconnu';
+            if (bmPortLink && bmPortLink.length > 0) {
+              const { data: portData, error: portError } = await supabase
+                .from('ports')
+                .select('name')
+                .eq('id', bmPortLink[0].port_id)
+                .single();
+              if (portData?.name) portName = portData.name;
+            }
 
-if (serviceError) {
-  console.error('Erreur récupération des services client :', serviceError);
-}
+            return {
+              id: bm.id.toString(),
+              name: `${bm.first_name} ${bm.last_name}`,
+              email: bm.e_mail,
+              phone: bm.phone,
+              avatar: bm.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+              rating: bm.rating,
+              reviewCount: bm.review_count,
+              location: portName,
+            };
+          })
+        );
 
-const bmCountMap = {};
-for (const sr of serviceRequests || []) {
-  if (!bmCountMap[sr.id_boat_manager]) bmCountMap[sr.id_boat_manager] = 0;
-  bmCountMap[sr.id_boat_manager]++;
-}
-
-// 6. Trouve le BM principal (celui du port d’attache avec le plus de services)
-const bmIdsOnPrimaryPort = allPortUsers
-  .filter(pu => pu.port_id === primaryPortId)
-  .map(pu => pu.user_id);
-
-const primaryCandidates = allBms.filter(bm => bmIdsOnPrimaryPort.includes(bm.id));
-
-let mainBM = null;
-
-if (primaryCandidates.length === 1) {
-  mainBM = primaryCandidates[0];
-} else {
-  const sortedPrimary = primaryCandidates
-    .sort((a, b) => (bmCountMap[b.id] || 0) - (bmCountMap[a.id] || 0));
-  mainBM = sortedPrimary[0];
-}
-
-const { data: primaryPortData, error: primaryPortError } = await supabase
-  .from('ports')
-  .select('name')
-  .eq('id', primaryPortId)
-  .single();
-
-if (primaryPortError) {
-  console.error('Erreur récupération nom du port d’attache :', primaryPortError);
-}
-
-
-// 7. Formater et stocker le BM principal
-setMainBoatManager(mainBM ? {
-  id: mainBM.id.toString(),
-  name: `${mainBM.first_name} ${mainBM.last_name}`,
-  email: mainBM.e_mail,
-  phone: mainBM.phone,
-  avatar: mainBM.avatar || avatars.neutral,
-  rating: mainBM.rating,
-  reviewCount: mainBM.review_count,
-  location: primaryPortData?.name || 'Port inconnu',
-} : null);
-
-// 8. Afficher les autres Boat Managers (hors principal)
-const otherBmRaw = allBms.filter(bm => !mainBM || bm.id !== mainBM.id);
-
-// Ajoute l’emplacement réel (port d’attache) pour chaque BM
-const otherBMsWithLocation = await Promise.all(
-  otherBmRaw.map(async (bm) => {
-    const { data: portLink, error: portLinkError } = await supabase
-      .from('user_ports')
-      .select('port_id')
-      .eq('user_id', bm.id)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-    let portName = 'Port inconnu';
-
-    if (portLink && portLink.length > 0) {
-      const { data: portData, error: portError } = await supabase
-        .from('ports')
-        .select('name')
-        .eq('id', portLink[0].port_id)
-        .single();
-
-      if (portData?.name) portName = portData.name;
-    }
-
-    return {
-      id: bm.id.toString(),
-      name: `${bm.first_name} ${bm.last_name}`,
-      email: bm.e_mail,
-      phone: bm.phone,
-      avatar: bm.avatar || avatars.neutral,
-      rating: bm.rating,
-      reviewCount: bm.review_count,
-      location: portName,
-    };
-  })
-);
-
-setOtherBoatManagers(otherBMsWithLocation);
-// --- End of Boat Manager selection logic ---
-
-
+        setAssociatedBoatManagers(associatedBMsWithLocation);
+        // --- End of Boat Manager selection logic ---
 
       } catch (e) {
         console.error('Unexpected error fetching profile data:', e);
@@ -729,115 +744,130 @@ setOtherBoatManagers(otherBMsWithLocation);
     logout();
     router.replace('/login');
   };
+// --- helpers upload avatar ---
 
-  const handleChoosePhoto = async () => {
+const handleChoosePhoto = async () => {
+  try {
     if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) {
-        Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie pour choisir une photo.');
+      const p = await requestMediaPermission();
+      if (!p.granted) {
+        Alert.alert('Permission requise', 'Autorisez l’accès à la galerie.');
         return;
       }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      // @ts-ignore compat
+     mediaTypes: ImagePicker.MediaTypeOptions.Images,
+     allowsEditing: true,
       aspect: [1, 1],
       quality: 1,
     });
-
-    if (!result.canceled && user?.id) {
-      const uri = result.assets[0].uri;
-      const fileName = `avatar_${user.id}_${Date.now()}.jpg`;
-      const response = await fetch(uri);
-      const blob = await response.blob();
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('avatars') // Assuming you have an 'avatars' bucket
-        .upload(fileName, blob, {
-          cacheControl: '3600',
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('Error uploading avatar:', uploadError);
-        Alert.alert('Erreur', `Échec du téléchargement de l'avatar: ${uploadData.path}`);
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(uploadData.path);
-      const newAvatarUrl = publicUrlData.publicUrl;
-
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ avatar: newAvatarUrl })
-        .eq('id', user.id);
-
-      if (updateError) {
-        console.error('Error updating user avatar URL:', updateError);
-        Alert.alert('Erreur', `Échec de la mise à jour de l'URL de l'avatar: ${updateError.message}`);
-      } else {
-        setLocalAvatar(newAvatarUrl);
-        Alert.alert('Succès', 'Photo de profil mise à jour.');
-      }
-    }
-    setShowPhotoModal(false);
-  };
-
-  const handleDeletePhoto = async () => {
-    if (!user?.id || localAvatar === avatars.neutral) {
-      Alert.alert('Info', 'Aucune photo personnalisée à supprimer.');
+    if (result.canceled || !user?.id) {
+      setShowPhotoModal(false);
       return;
     }
 
-    const fileName = localAvatar.split('/').pop();
+    const asset = result.assets[0];
 
-    if (fileName) {
-      const { error: deleteError } = await supabase.storage
-        .from('avatars')
-        .remove([fileName]);
+    // Normalize to JPEG (fixes HEIC/orientation/EXIF)
+    const manipulated = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+    );
+    if (!manipulated.base64) {
+      Alert.alert('Erreur', 'Conversion image échouée.');
+      return;
+    }
 
-      if (deleteError) {
-        console.error('Error deleting avatar from storage:', deleteError);
-        Alert.alert('Erreur', `Échec de la suppression de l'avatar du stockage: ${deleteError.message}`);
-        return;
+    // Convert base64 to Uint8Array
+    const bytes = Buffer.from(manipulated.base64, 'base64');
+
+    const path = `users/${user.id}/avatar.jpg`; // Fixed path for user avatar
+
+    // Upload to Supabase Storage
+    const { error: upErr } = await supabase
+      .storage
+      .from('avatars')
+      .upload(path, bytes, { contentType: 'image/jpeg', upsert: true }); // Use upsert to overwrite
+    if (upErr) throw upErr;
+
+    // Update user's avatar path in the database
+    const { error: dbErr } = await supabase
+      .from('users')
+      .update({ avatar: path })
+      .eq('id', user.id);
+    if (dbErr) throw dbErr;
+
+    setAvatarPath(path); // Update avatarPath state
+
+    // Get signed URL for immediate display
+    const { data: signedData, error: signedErr } = await supabase
+      .storage
+      .from('avatars')
+      .createSignedUrl(path, 60 * 60); // 1 hour validity
+    if (signedErr || !signedData?.signedUrl) throw signedErr || new Error('Signed URL manquante');
+
+    setLocalAvatar(signedData.signedUrl); // MODIFICATION ICI: Supprimer &v=${Date.now()}
+    Alert.alert('Succès', 'Photo de profil mise à jour.');
+  } catch (e: any) {
+    console.error('Upload avatar error:', e);
+    Alert.alert('Erreur', e?.message ?? 'Impossible de mettre à jour la photo.');
+  } finally {
+    setShowPhotoModal(false);
+  }
+};
+
+
+  const handleDeletePhoto = async () => {
+  if (!user?.id) {
+    Alert.alert('Erreur', 'Utilisateur non authentifié.');
+    return;
+  }
+
+  const path = `users/${user.id}/avatar.jpg`; // Fixed path for user avatar
+
+  // Supprimer l’objet si présent
+  await supabase.storage.from('avatars').remove([path]).catch(() => {});
+
+  // Vider la colonne avatar
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ avatar: '' }) // Set avatar to empty string in DB
+    .eq('id', user.id);
+
+  if (updateError) {
+    console.error('Error clearing avatar URL:', updateError);
+    Alert.alert('Erreur', `Impossible de mettre à jour votre profil: ${updateError.message}`);
+    return;
+  }
+  setAvatarPath(''); // Clear avatarPath state
+  setLocalAvatar(DEFAULT_AVATAR); // Set localAvatar to default
+  Alert.alert('Succès', 'Photo de profil supprimée.');
+};
+
+
+  // Fonction pour gérer l'erreur de chargement de l'image du bateau
+  const handleBoatImageError = useCallback(async (boatId: string, currentImageUrl: string) => {
+    console.log(`Erreur de chargement pour le bateau ${boatId}. Tentative de re-génération de l'URL.`);
+    // Extraire le chemin de stockage de l'URL actuelle
+    const imagePath = pathFromSignedBoatImageUrl(currentImageUrl);
+    if (imagePath) {
+      const newSignedUrl = await getSignedBoatImageUrl(imagePath);
+      if (newSignedUrl && newSignedUrl !== currentImageUrl) {
+        // Mettre à jour l'état des bateaux avec la nouvelle URL signée
+        setBoats(prevBoats => prevBoats.map(b =>
+          b.id === boatId ? { ...b, image: newSignedUrl } : b
+        ));
+        console.log(`URL du bateau ${boatId} mise à jour.`);
+      } else {
+        console.log(`Impossible de re-générer une nouvelle URL pour le bateau ${boatId}.`);
       }
-    }
-
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ avatar: avatars.neutral })
-      .eq('id', user.id);
-
-    if (updateError) {
-      console.error('Error updating user avatar URL to default:', updateError);
-      Alert.alert('Erreur', `Échec de la mise à jour de l'URL de l'avatar par défaut: ${updateError.message}`);
     } else {
-      setLocalAvatar(avatars.neutral);
-      Alert.alert('Succès', 'Photo de profil supprimée.');
+      console.log(`L'URL du bateau ${boatId} n'est pas une URL signée valide.`);
     }
-    setShowPhotoModal(false);
-  };
-
-  const handleSelectAvatar = async (type: keyof typeof avatars) => {
-    const newAvatarUrl = avatars[type];
-    if (!user?.id) return;
-
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ avatar: newAvatarUrl })
-      .eq('id', user.id);
-
-    if (updateError) {
-      console.error('Error updating user avatar URL:', updateError);
-      Alert.alert('Erreur', `Échec de la mise à jour de l'URL de l'avatar: ${updateError.message}`);
-    } else {
-      setLocalAvatar(newAvatarUrl);
-      Alert.alert('Succès', 'Avatar mis à jour.');
-    }
-    setShowAvatarModal(false);
-    setShowPhotoModal(false);
-  };
+  }, []); // Dépendances vides car setBoats est une fonction de mise à jour d'état
 
   const handleEditProfile = () => {
     setFormData({
@@ -854,17 +884,16 @@ setOtherBoatManagers(otherBMsWithLocation);
       Alert.alert('Erreur', 'Utilisateur non authentifié.');
       return;
     }
-
-    const { error } = await supabase
-      .from('users')
-      .update({
-        first_name: formData.firstName,
-        last_name: formData.lastName,
-        e_mail: formData.email,
-        phone: formData.phone,
-        avatar: localAvatar,
-      })
-      .eq('id', user.id);
+const { error } = await supabase
+  .from('users')
+  .update({
+    first_name: formData.firstName,
+    last_name: formData.lastName,
+    e_mail: formData.email,
+    phone: formData.phone,
+    avatar: avatarPath || '', // ✅ chemin du bucket
+  })
+  .eq('id', user.id);
 
     if (error) {
       console.error('Error updating profile:', error);
@@ -908,17 +937,31 @@ setOtherBoatManagers(otherBMsWithLocation);
   const displayedBoats = showAllBoats ? boats : boats.slice(0, 5);
   const displayedHistory = showAllHistory ? serviceHistory : serviceHistory.slice(0, 5);
   const displayedReviews = showAllReviews ? myReviews : myReviews.slice(0, 5);
-  const displayedOtherBMs = showAllOtherBMs ? otherBoatManagers : otherBoatManagers.slice(0, 2); // Top 2 other BMs
 
   return (
     <ScrollView style={styles.container}>
       {/* Profile Header */}
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
-          <Image 
-            source={{ uri: localAvatar }}
+          <Image
+            key={localAvatar} // Clé pour forcer le re-rendu si l'URL change
+            source={{ uri: localAvatar && localAvatar.trim() !== '' ? localAvatar : DEFAULT_AVATAR }}
             style={styles.avatar}
-          />
+            onError={async () => {
+              if (didRetryAvatarRef.current) {
+                setLocalAvatar(''); // => affichera DEFAULT_AVATAR
+                return;
+              }
+              didRetryAvatarRef.current = true;
+
+              if (avatarPath) {
+                const u = await getSignedAvatarUrl(avatarPath);
+                setLocalAvatar(u || ''); // MODIFICATION ICI: Supprimer &v=${Date.now()}
+              } else {
+                setLocalAvatar('');
+              }
+            }}
+/>
           <TouchableOpacity 
             style={styles.editPhotoButton}
             onPress={() => setShowPhotoModal(true)}
@@ -958,114 +1001,44 @@ setOtherBoatManagers(otherBMsWithLocation);
         </View>
       </View>
 
-      
-{/* Section : Votre Boat Manager */}
-{mainBoatManager && (
-  <View style={styles.boatManagerSection}>
-    <Text style={styles.sectionTitle}>Votre Boat Manager</Text>
-    <View style={styles.boatManagerCard}>
-      <View style={styles.boatManagerHeader}>
-        <Image source={{ uri: mainBoatManager.avatar }} style={styles.boatManagerAvatar} />
-        <View style={styles.boatManagerInfo}>
-          <Text style={styles.boatManagerName}>{mainBoatManager.name}</Text>
-          <View style={styles.ratingContainer}>
-            {[1, 2, 3, 4, 5].map((star) => (
-              <Star
-                key={star}
-                size={16}
-                fill={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : 'none'}
-                color={star <= Math.floor(mainBoatManager.rating || 0) ? '#FFC107' : '#D1D5DB'}
-              />
-            ))}
-            <Text style={styles.ratingText}>
-              {mainBoatManager.rating ? `${mainBoatManager.rating.toFixed(1)} (${mainBoatManager.reviewCount} avis)` : 'N/A'}
-            </Text>
-          </View>
-          <Text style={styles.boatManagerLocation}>{mainBoatManager.location}</Text>
+      {/* Section : Vos Boat Managers (MODIFIED) */}
+      {associatedBoatManagers.length > 0 && (
+        <View style={styles.boatManagerSection}>
+          <Text style={styles.sectionTitle}>Vos Boat Managers</Text>
+          {associatedBoatManagers.map((bm) => (
+            <TouchableOpacity 
+              key={bm.id} 
+              style={styles.boatManagerCard}
+              onPress={() => router.push(`/boat-manager/${bm.id}`)} // Navigate to BM profile
+            >
+              <View style={styles.boatManagerHeader}>
+                <Image
+  source={{ uri: bm.avatar && bm.avatar.trim() !== '' ? bm.avatar : DEFAULT_AVATAR }}
+  style={styles.boatManagerAvatar}
+/>
+                <View style={styles.boatManagerInfo}>
+                  <Text style={styles.boatManagerName}>{bm.name}</Text>
+                  <View style={styles.ratingContainer}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        size={16}
+                        fill={star <= Math.floor(bm.rating || 0) ? '#FFC107' : 'none'}
+                        color={star <= Math.floor(bm.rating || 0) ? '#FFC107' : '#D1D5DB'}
+                      />
+                    ))}
+                    <Text style={styles.ratingText}>
+                      {bm.rating ? `${bm.rating.toFixed(1)} (${bm.reviewCount} avis)` : 'N/A'}
+                    </Text>
+                  </View>
+                  <Text style={styles.boatManagerLocation}>{bm.location}</Text>
+                </View>
+              </View>
+              {/* Removed Contact Button */}
+            </TouchableOpacity>
+          ))}
         </View>
-      </View>
-      <TouchableOpacity 
-        style={styles.contactBoatManagerButton}
-        onPress={() => router.push(`/(tabs)/messages?client=${mainBoatManager.id}`)}
-      >
-        <MessageSquare size={20} color="white" />
-        <Text style={styles.contactBoatManagerText}>Contacter mon Boat Manager</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-)}
-
-{/* Section : Autres Boat Managers */}
-{otherBoatManagers.length > 0 && (
-  <View style={styles.boatManagerSection}>
-    <Text style={styles.sectionTitle}>Autres Boat Managers</Text>
-    {displayedOtherBMs.map((bm) => (
-      <View key={bm.id} style={styles.boatManagerCard}>
-        <View style={styles.boatManagerHeader}>
-          <Image source={{ uri: bm.avatar }} style={styles.boatManagerAvatar} />
-          <View style={styles.boatManagerInfo}>
-            <Text style={styles.boatManagerName}>{bm.name}</Text>
-            <View style={styles.ratingContainer}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Star
-                  key={star}
-                  size={16}
-                  fill={star <= Math.floor(bm.rating || 0) ? '#FFC107' : 'none'}
-                  color={star <= Math.floor(bm.rating || 0) ? '#FFC107' : '#D1D5DB'}
-                />
-              ))}
-              <Text style={styles.ratingText}>
-                {bm.rating ? `${bm.rating.toFixed(1)} (${bm.reviewCount} avis)` : 'N/A'}
-              </Text>
-            </View>
-            <Text style={styles.boatManagerLocation}>{bm.location}</Text>
-          </View>
-        </View>
-        <TouchableOpacity 
-          style={styles.contactBoatManagerButton}
-          onPress={() => router.push(`/(tabs)/messages?client=${bm.id}`)}
-        >
-          <MessageSquare size={20} color="white" />
-          <Text style={styles.contactBoatManagerText}>Contacter</Text>
-        </TouchableOpacity>
-      </View>
-    ))}
-
-    {otherBoatManagers.length > 2 && (
-      <TouchableOpacity
-        style={styles.showMoreButton}
-        onPress={() => setShowAllOtherBMs(!showAllOtherBMs)}
-      >
-        <Text style={styles.showMoreButtonText}>
-          {showAllOtherBMs ? 'Voir moins' : 'Voir plus'}
-        </Text>
-        {showAllOtherBMs ? <ChevronUp size={20} color="#0066CC" /> : <ChevronDown size={20} color="#0066CC" />}
-      </TouchableOpacity>
-    )}
-  </View>
-)}
-
-
-      {/* Settings Section (RE-ADDED) */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Paramètres</Text>
-        <TouchableOpacity 
-          style={styles.settingItem}
-          onPress={() => router.push('/profile/privacy')}
-        >
-          <Shield size={20} color="#0066CC" />
-          <Text style={styles.settingItemText}>Confidentialité</Text>
-          <ChevronRight size={20} color="#666" />
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.settingItem}
-          onPress={() => router.push('/profile/notifications')}
-        >
-          <Mail size={20} color="#0066CC" />
-          <Text style={styles.settingItemText}>Notifications</Text>
-          <ChevronRight size={20} color="#666" />
-        </TouchableOpacity>
-      </View>
+      )}
 
       {/* Tabs */}
       <View style={styles.tabs}>
@@ -1098,47 +1071,50 @@ setOtherBoatManagers(otherBMsWithLocation);
       {/* Tab Content */}
       {selectedTab === 'boats' ? (
         <View style={styles.boatsContainer}>
+          <View style={styles.boatsHeader}>
+            <Text style={styles.sectionTitle}>Mes bateaux</Text>
+            <TouchableOpacity 
+              style={styles.addBoatButton}
+              onPress={() => router.push('/boats/new')}
+            >
+              <Plus size={20} color="white" />
+              <Text style={styles.addBoatButtonText}>Ajouter</Text>
+            </TouchableOpacity>
+          </View>
           {displayedBoats.length > 0 ? (
             displayedBoats.map((boat) => (
-              <View key={boat.id} style={styles.boatCard}>
-                <Image source={{ uri: boat.image }} style={styles.boatImage} />
+              <TouchableOpacity
+                key={boat.id}
+                style={styles.boatCard}
+                activeOpacity={0.86}
+                onPress={() => router.push(`/boats/${boat.id}`)}
+              >
+                <Image
+                  key={boat.image} // Clé pour forcer le re-rendu si l'URL change
+                  source={{ uri: boat.image }}
+                  style={styles.boatImage}
+                  onError={({ nativeEvent: { error: imgError } }) => {
+                    console.log(`Error loading boat image for boat ${boat.id}:`, imgError);
+                    // Tenter de re-générer l'URL signée si l'image ne se charge pas
+                    handleBoatImageError(boat.id, boat.image);
+                  }}
+                />
                 <View style={styles.boatContent}>
                   <View style={styles.boatHeader}>
                     <View style={styles.boatInfo}>
                       <Text style={styles.boatName}>{boat.name}</Text>
                       <Text style={styles.boatType}>{boat.type}</Text>
                     </View>
-
-                    {/* Badge de statut retiré
-                  <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
-                      <View style={[styles.statusDot, { backgroundColor: getBoatStatusColor(boat.status) }]} />
-                      <Text style={[styles.boatStatusText, { color: getBoatStatusColor(boat.status) }]}>
-                        {getBoatStatusLabel(boat.status)}
-                      </Text>
-                    </View>
-                    */}
-                  </View> 
-
-                  <View style={styles.boatDetails}>
-                    {boat.lastService && (
-                      <View style={styles.boatDetailRow}>
-                        <Calendar size={16} color="#666" />
-                        <Text style={styles.boatDetailText}>
-                          Dernier service : {formatDate(boat.lastService)}
-                        </Text>
-                      </View>
-                    )}
                   </View>
-
-                  <TouchableOpacity 
-                    style={styles.boatButton}
-                    onPress={() => router.push(`/boats/${boat.id}`)}
-                  >
+                  <View style={styles.boatDetails}>
+                    {/* ... éventuels détails */}
+                  </View>
+                  <View style={styles.boatButton}>
                     <Text style={styles.boatButtonText}>Voir les détails</Text>
                     <ChevronRight size={20} color="#0066CC" />
-                  </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))
           ) : (
             <View style={styles.emptyState}>
@@ -1156,14 +1132,6 @@ setOtherBoatManagers(otherBMsWithLocation);
               {showAllBoats ? <ChevronUp size={20} color="#0066CC" /> : <ChevronDown size={20} color="#0066CC" />}
             </TouchableOpacity>
           )}
-          {/* Always show "Ajouter un bateau" button */}
-          <TouchableOpacity 
-            style={styles.addSomethingButton}
-            onPress={() => router.push('/boats/new')}
-          >
-            <Plus size={20} color="white" />
-            <Text style={styles.addSomethingButtonText}>Ajouter un bateau</Text>
-          </TouchableOpacity>
         </View>
       ) : selectedTab === 'history' ? (
         <View style={styles.historyContainer}>
@@ -1232,7 +1200,10 @@ setOtherBoatManagers(otherBMsWithLocation);
             myReviews.map((review) => (
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
-                  <Image source={{ uri: review.reviewedEntity.avatar }} style={styles.reviewedEntityAvatar} />
+                  <Image
+  source={{ uri: review.reviewedEntity.avatar && review.reviewedEntity.avatar.trim() !== '' ? review.reviewedEntity.avatar : DEFAULT_AVATAR }}
+  style={styles.reviewedEntityAvatar}
+/>
                   <View style={styles.reviewedEntityInfo}>
                     <Text style={styles.reviewedEntityName}>{review.reviewedEntity.name}</Text>
                     <Text style={styles.reviewedEntityType}>
@@ -1282,6 +1253,27 @@ setOtherBoatManagers(otherBMsWithLocation);
         </View>
       )}
 
+      {/* Settings Section (MOVED) */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Paramètres</Text>
+        <TouchableOpacity 
+          style={styles.settingItem}
+          onPress={() => router.push('/profile/privacy')}
+        >
+          <Shield size={20} color="#0066CC" />
+          <Text style={styles.settingItemText}>Confidentialité</Text>
+          <ChevronRight size={20} color="#666" />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.settingItem}
+          onPress={() => router.push('/profile/notifications')}
+        >
+          <Mail size={20} color="#0066CC" />
+          <Text style={styles.settingItemText}>Notifications</Text>
+          <ChevronRight size={20} color="#666" />
+        </TouchableOpacity>
+      </View>
+
       {/* Logout Button */}
       <TouchableOpacity 
         style={styles.logoutButton}
@@ -1298,19 +1290,13 @@ setOtherBoatManagers(otherBMsWithLocation);
         setFormData={setFormData}
         handleSaveProfile={handleSaveProfile}
       />
-      <PhotoModal 
-        visible={showPhotoModal}
-        onClose={() => setShowPhotoModal(false)}
-        onChoosePhoto={handleChoosePhoto}
-        onDeletePhoto={handleDeletePhoto}
-        hasCustomPhoto={localAvatar !== avatars.neutral}
-        onSelectAvatar={() => setShowAvatarModal(true)}
-      />
-      <AvatarModal 
-        visible={showAvatarModal}
-        onClose={() => setShowAvatarModal(false)}
-        onSelectAvatar={handleSelectAvatar}
-      />
+      <PhotoModal
+  visible={showPhotoModal}
+  onClose={() => setShowPhotoModal(false)}
+  onChoosePhoto={handleChoosePhoto}
+  onDeletePhoto={handleDeletePhoto}
+  hasCustomPhoto={Boolean(avatarPath)}
+/>
     </ScrollView>
   );
 }
@@ -1446,6 +1432,27 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 20,
   },
+  boatsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  addBoatButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    // backgroundColor: '#0066CC', // Removed background color
+    paddingVertical: 0, // Removed vertical padding
+    paddingHorizontal: 0, // Removed horizontal padding
+    borderRadius: 0, // Removed border radius
+  },
+  addBoatButtonText: {
+    color: '#0066CC', // Changed to blue
+    fontSize: 16,
+    fontWeight: '600',
+  },
   boatCard: {
     backgroundColor: 'white',
     borderRadius: 12,
@@ -1467,7 +1474,8 @@ const styles = StyleSheet.create({
   },
   boatImage: {
     width: '100%',
-    height: 200,
+    height: 120, // Reduced image height
+    resizeMode: 'cover',
   },
   boatContent: {
     padding: 16,
@@ -1485,7 +1493,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
-    marginBottom: 4,
   },
   boatType: {
     fontSize: 14,
@@ -1817,9 +1824,9 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: '#0066CC',
-        shadowOffset: { width: 0, height: 2 },
+        shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
-        shadowRadius: 4,
+        shadowRadius: 8,
       },
       android: {
         elevation: 2,
@@ -1934,6 +1941,7 @@ const styles = StyleSheet.create({
   },
   boatManagerCard: {
     gap: 16,
+    marginBottom: 16, // Add margin between multiple BM cards
   },
   boatManagerHeader: {
     flexDirection: 'row',
@@ -1986,13 +1994,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: '#0066CC',
-    paddingVertical: 12,
+    paddingVertical: 10, // Smaller padding
+    paddingHorizontal: 15, // Smaller padding
     borderRadius: 12,
     marginTop: 10,
   },
   contactBoatManagerText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 14, // Smaller font size
     fontWeight: '600',
   },
   showMoreButton: {

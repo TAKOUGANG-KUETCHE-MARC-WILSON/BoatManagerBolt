@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Save, Check, Ship, Anchor, Wrench, Zap, Droplets, Umbrella, Navigation, ShieldAlert, Utensils, Thermometer, Radio, Tv, Refrigerator, Wind, Compass, Waves, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { ArrowLeft, Save, Check, Ship, Anchor, Wrench, Zap, Droplets, Umbrella, Navigation, ShieldAlert, Utensils, Thermometer, Radio, Tv, Refrigerator, Wind, Compass, Waves, ChevronDown, ChevronUp, Info } from 'lucide-react-native';
 
 interface ChecklistItem {
   id: string;
@@ -311,7 +311,7 @@ export default function BoatInventoryScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity 
           style={styles.backButton}
@@ -372,12 +372,15 @@ export default function BoatInventoryScreen() {
                     
                     {item.checked && (
                       <View style={styles.detailsContainer}>
-                        <TextInput
-                          style={styles.detailsInput}
-                          placeholder="Ajouter des détails (optionnel)"
-                          value={item.details || ''}
-                          onChangeText={(text) => handleUpdateItemDetails(category.id, item.id, text)}
-                        />
+                        <View style={styles.inputWrapper}>
+                          <Info size={20} color="#666" />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Ajouter des détails (optionnel)"
+                            value={item.details || ''}
+                            onChangeText={(text) => handleUpdateItemDetails(category.id, item.id, text)}
+                          />
+                        </View>
                       </View>
                     )}
                   </View>
@@ -387,7 +390,7 @@ export default function BoatInventoryScreen() {
           </View>
         ))}
       </ScrollView>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -479,9 +482,9 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 2,
     borderColor: '#0066CC',
+    marginRight: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
   checkboxChecked: {
     backgroundColor: '#0066CC',
@@ -498,13 +501,25 @@ const styles = StyleSheet.create({
     marginLeft: 36,
     marginTop: 8,
   },
-  detailsInput: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    color: '#1a1a1a',
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-  }
+    borderColor: '#e0e0e0',
+    paddingHorizontal: 12,
+    height: 48,
+  },
+  input: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#1a1a1a',
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      },
+    }),
+  },
 });

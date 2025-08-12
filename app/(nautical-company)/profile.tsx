@@ -4,6 +4,9 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, 
 import { router } from 'expo-router';
 import { Ship, Users, Phone, Mail, Calendar, LogOut, MapPin, Image as ImageIcon, X, Plus, Pencil } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Buffer } from 'buffer';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
@@ -31,6 +34,64 @@ interface NauticalCompanyProfile {
   rating?: number;
   reviewCount?: number;
 }
+
+// Silhouette universelle
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Helper to extract path from a public URL or signed URL
+const getStoragePathFromUrl = (url: string, bucketName: string) => {
+  const publicMarker = `/storage/v1/object/public/${bucketName}/`;
+  const signedMarker = `/storage/v1/object/sign/${bucketName}/`;
+
+  let idx = url.indexOf(publicMarker);
+  if (idx !== -1) {
+    return url.substring(idx + publicMarker.length);
+  }
+
+  idx = url.indexOf(signedMarker);
+  if (idx !== -1) {
+    const pathWithToken = url.substring(idx + signedMarker.length);
+    const tokenIndex = pathWithToken.indexOf('?token=');
+    return tokenIndex !== -1 ? pathWithToken.substring(0, tokenIndex) : pathWithToken;
+  }
+  return null; // Not a recognized Supabase storage URL
+};
+
+// Helper to get a signed URL for an image
+const getSignedImageUrl = async (imagePath: string, bucketName: string) => {
+  if (!imagePath) return '';
+
+  // If it's already a public URL (e.g., default avatar or direct public access), return as is
+  if (imagePath.includes(`/storage/v1/object/public/${bucketName}/`)) {
+    return imagePath;
+  }
+
+  // Otherwise, generate a signed URL from the path
+  const { data, error } = await supabase
+    .storage
+    .from(bucketName)
+    .createSignedUrl(imagePath, 60 * 60); // Valid for 1 hour
+
+  if (error) {
+    console.error(`Error creating signed URL for ${bucketName} image:`, error);
+    return '';
+  }
+  return data?.signedUrl || '';
+};
+
+// Helper to delete image from Supabase Storage
+const deleteImageFromStorage = async (imageUrl: string, bucketName: string) => {
+  const filePath = getStoragePathFromUrl(imageUrl, bucketName);
+  if (filePath) {
+    const { error } = await supabase.storage
+      .from(bucketName)
+      .remove([filePath]);
+    if (error) {
+      console.warn(`Error deleting image from ${bucketName} storage:`, error);
+    }
+  }
+};
+
 
 // Extracted EditProfileModal component
 const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile }) => (
@@ -128,42 +189,46 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
 ));
 
 // Extracted PhotoModal component
-const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Photo de profil</Text>
+// --- REMPLACE TOUTE la définition de PhotoModal par ceci ---
+const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }) => {
+  if (!visible) return null;
 
-        <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
-          <ImageIcon size={24} color="#0066CC" />
-          <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
-        </TouchableOpacity>
-        
-        {hasPhoto && (
-          <TouchableOpacity 
-            style={[styles.modalOption, styles.deleteOption]} 
-            onPress={onDeletePhoto}
-          >
-            <X size={24} color="#ff4444" />
-            <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
-          </TouchableOpacity>
-        )}
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Photo de profil</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
 
-        <TouchableOpacity 
-          style={styles.modalCancelButton}
-          onPress={onClose}
-        >
-          <Text style={styles.modalCancelText}>Annuler</Text>
-        </TouchableOpacity>
+          <View style={{ padding: 16 }}>
+            <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
+              <ImageIcon size={24} color="#0066CC" />
+              <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
+            </TouchableOpacity>
+
+            {hasPhoto ? (
+              <TouchableOpacity style={[styles.modalOption, styles.deleteOption]} onPress={onDeletePhoto}>
+                <X size={24} color="#ff4444" />
+                <Text style={styles.modalOptionText}>Supprimer la photo</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: '#f0f0f0' }}>
+            <TouchableOpacity style={styles.modalCancelButton} onPress={onClose}>
+              <Text style={styles.modalCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
-    </View>
-  </Modal>
-));
+    </Modal>
+  );
+});
+
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -185,7 +250,7 @@ export default function ProfileScreen() {
     title: '',
   });
 
-  const defaultAvatar = 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop'; // Default image for nautical company
+  // defaultAvatar est déjà défini en dehors du composant
 
   useEffect(() => {
     const fetchProfileData = async () => {
@@ -210,6 +275,9 @@ export default function ProfileScreen() {
       if (userData) {
         const memberSinceDate = userData.created_at ? new Date(userData.created_at).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' }) : 'N/A';
         
+        // Get signed URL for the avatar
+        const avatarUrl = await getSignedImageUrl(userData.avatar || '', 'avatars');
+
         setCompanyProfile({
           id: userData.id.toString(),
           name: userData.company_name || 'N/A',
@@ -217,7 +285,7 @@ export default function ProfileScreen() {
           phone: userData.phone || 'N/A',
           address: userData.address || 'N/A',
           memberSince: memberSinceDate,
-          profileImage: userData.avatar || defaultAvatar,
+          profileImage: avatarUrl || DEFAULT_AVATAR, // Use signed URL or DEFAULT_AVATAR
           title: userData.job_title || 'N/A',
           rating: userData.rating || 0,
           reviewCount: userData.review_count || 0,
@@ -281,7 +349,9 @@ export default function ProfileScreen() {
     fetchProfileData();
   }, [user]);
 
-  const handleChoosePhoto = async () => {
+  // --- REMPLACE TOUTE la fonction handleChoosePhoto par ceci ---
+const handleChoosePhoto = async () => {
+  try {
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
       if (!permission.granted) {
@@ -297,78 +367,103 @@ export default function ProfileScreen() {
       quality: 1,
     });
 
-    if (!result.canceled && user?.id) {
-      const uri = result.assets[0].uri;
-      const fileName = `avatar_${user.id}_${Date.now()}.jpg`;
-      const response = await fetch(uri);
-      const blob = await response.blob();
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('avatars') // Assuming you have an 'avatars' bucket
-        .upload(fileName, blob, {
-          cacheControl: '3600',
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('Error uploading avatar:', uploadError);
-        Alert.alert('Erreur', `Échec du téléchargement de l'avatar: ${uploadError.message}`);
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(uploadData.path);
-      const newAvatarUrl = publicUrlData.publicUrl;
-
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ avatar: newAvatarUrl })
-        .eq('id', user.id);
-
-      if (updateError) {
-        console.error('Error updating user avatar URL:', updateError);
-        Alert.alert('Erreur', `Échec de la mise à jour de l'URL de l'avatar: ${updateError.message}`);
-      } else {
-        setCompanyProfile(prev => prev ? { ...prev, profileImage: newAvatarUrl } : null);
-        Alert.alert('Succès', 'Photo de profil mise à jour.');
-      }
+    if (result.canceled || !user?.id) {
+      setShowPhotoModal(false);
+      return;
     }
-    setShowPhotoModal(false);
-  };
 
-  const handleDeletePhoto = async () => {
-    if (!user?.id || !companyProfile?.profileImage || companyProfile.profileImage === defaultAvatar) {
+    // 1) Normaliser l'image (JPEG) et récupérer base64
+    const asset = result.assets[0];
+    const manipulated = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+    );
+    if (!manipulated.base64) {
+      Alert.alert('Erreur', 'Conversion image échouée.');
+      setShowPhotoModal(false);
+      return;
+    }
+
+    // 2) Upload (bytes) avec un chemin stable dans le bucket "avatars"
+    const bytes = Buffer.from(manipulated.base64, 'base64');
+    const filePath = `users/${user.id}/avatar.jpg`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, bytes, { contentType: 'image/jpeg', upsert: true });
+
+    if (uploadError) {
+      console.error('Error uploading avatar:', uploadError);
+      Alert.alert('Erreur', `Échec du téléchargement de l'avatar: ${uploadError.message}`);
+      setShowPhotoModal(false);
+      return;
+    }
+
+    // 3) Mettre à jour la BDD avec le CHEMIN brut (pas l'URL)
+    const { error: updateDbError } = await supabase
+      .from('users')
+      .update({ avatar: filePath })
+      .eq('id', user.id);
+
+    if (updateDbError) {
+      console.error('Error updating user avatar path in DB:', updateDbError);
+      Alert.alert('Erreur', `Échec de la mise à jour du chemin avatar: ${updateDbError.message}`);
+      setShowPhotoModal(false);
+      return;
+    }
+
+    // 4) Générer une URL signée fraîche pour l'affichage
+    const newSignedUrl = await getSignedImageUrl(filePath, 'avatars');
+    const signedWithBust = newSignedUrl ? `${newSignedUrl}&v=${Date.now()}` : DEFAULT_AVATAR;
+
+    setCompanyProfile(prev =>
+      prev ? { ...prev, profileImage: signedWithBust } : prev
+    );
+
+    Alert.alert('Succès', 'Photo de profil mise à jour.');
+  } catch (e: any) {
+    console.error('Upload avatar error:', e);
+    Alert.alert('Erreur', e?.message ?? 'Impossible de mettre à jour la photo.');
+  } finally {
+    setShowPhotoModal(false);
+  }
+};
+
+
+  // --- REMPLACE TOUTE la fonction handleDeletePhoto par ceci ---
+const handleDeletePhoto = async () => {
+  try {
+    if (!user?.id) {
       Alert.alert('Info', 'Aucune photo personnalisée à supprimer.');
       return;
     }
 
-    const fileName = companyProfile.profileImage.split('/').pop(); // Extract file name from URL
+    const filePath = `users/${user.id}/avatar.jpg`;
 
-    if (fileName) {
-      const { error: deleteError } = await supabase.storage
-        .from('avatars')
-        .remove([fileName]);
+    // supprimer dans le storage (ignore l'erreur si fichier absent)
+    await supabase.storage.from('avatars').remove([filePath]).catch(() => {});
 
-      if (deleteError) {
-        console.error('Error deleting avatar from storage:', deleteError);
-        Alert.alert('Erreur', `Échec de la suppression de l'avatar du stockage: ${deleteError.message}`);
-        return;
-      }
-    }
-
+    // vider la colonne en BDD
     const { error: updateError } = await supabase
       .from('users')
-      .update({ avatar: defaultAvatar }) // Set back to default
+      .update({ avatar: '' })
       .eq('id', user.id);
 
     if (updateError) {
-      console.error('Error updating user avatar URL to default:', updateError);
-      Alert.alert('Erreur', `Échec de la mise à jour de l'URL de l'avatar par défaut: ${updateError.message}`);
-    } else {
-      setCompanyProfile(prev => prev ? { ...prev, profileImage: defaultAvatar } : null);
-      Alert.alert('Succès', 'Photo de profil supprimée.');
+      console.error('Error updating user avatar to default:', updateError);
+      Alert.alert('Erreur', `Échec de la mise à jour de l'avatar: ${updateError.message}`);
+      return;
     }
+
+    // remettre le fallback local
+    setCompanyProfile(prev => prev ? { ...prev, profileImage: DEFAULT_AVATAR } : prev);
+    Alert.alert('Succès', 'Photo de profil supprimée.');
+  } finally {
     setShowPhotoModal(false);
-  };
+  }
+};
+
 
   const handleLogout = () => {
     logout();
@@ -445,8 +540,14 @@ export default function ProfileScreen() {
         <View style={styles.header}>
           <View style={styles.profileImageContainer}>
             <Image 
+              key={companyProfile.profileImage} // Use key to force re-render on image change
               source={{ uri: companyProfile.profileImage }}
               style={styles.profileImage}
+              onError={({ nativeEvent: { error: imgError } }) => {
+                console.log('Error loading profile image:', imgError);
+                // Fallback to default avatar if image fails to load
+                setCompanyProfile(prev => prev ? { ...prev, profileImage: DEFAULT_AVATAR } : null);
+              }}
             />
             <TouchableOpacity 
               style={styles.editPhotoButton}
@@ -571,7 +672,7 @@ export default function ProfileScreen() {
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
-        hasPhoto={companyProfile.profileImage !== defaultAvatar}
+        hasPhoto={companyProfile.profileImage !== DEFAULT_AVATAR}
       />
     </>
   );

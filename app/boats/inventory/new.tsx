@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 interface Document {
-  id: string;
+  id: string; // Client-side ID for list management
   name: string;
-  type: string;
-  date: string;
-  file: string;
+  type: string; // Mime type or custom type
+  date: string; // YYYY-MM-DD
+  uri: string; // Local URI for selected file
 }
 
 interface InventoryItemForm {
@@ -22,29 +23,31 @@ interface InventoryItemForm {
 }
 
 export default function NewInventoryItemScreen() {
-  const { boatId } = useLocalSearchParams();
+  const { boatId } = useLocalSearchParams<{ boatId: string }>();
   const [form, setForm] = useState<InventoryItemForm>({
     equipmentType: '',
     description: '',
-    installationDate: '',
+    installationDate: new Date().toISOString().split('T')[0], // Default to today
     installedBy: '',
     documents: [],
   });
-  const [errors, setErrors] = useState<Partial<Record<keyof InventoryItemForm, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<keyof InventoryItemForm, string>>>(
+    {}
+  );
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
-
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    setForm(prev => ({ ...prev, installationDate: today }));
-  }, []);
+  const [loading, setLoading] = useState(false);
 
   const validateForm = () => {
     const newErrors: Partial<Record<keyof InventoryItemForm, string>> = {};
 
-    if (!form.equipmentType.trim()) newErrors.equipmentType = 'Le type d\'équipement est requis';
-    if (!form.description.trim()) newErrors.description = 'La description est requise';
-    if (!form.installationDate.trim()) newErrors.installationDate = 'La date d\'installation est requise';
-    if (!form.installedBy.trim()) newErrors.installedBy = 'Le prestataire est requis';
+    if (!form.equipmentType.trim())
+      newErrors.equipmentType = 'Le type d\'équipement est requis';
+    if (!form.description.trim())
+      newErrors.description = 'La description est requise';
+    if (!form.installationDate.trim())
+      newErrors.installationDate = 'La date d\'installation est requise';
+    if (!form.installedBy.trim())
+      newErrors.installedBy = 'Le prestataire est requis';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -57,21 +60,22 @@ export default function NewInventoryItemScreen() {
         copyToCacheDirectory: true,
       });
 
-      if (result.canceled) {
+      if (result.canceled || !result.assets || result.assets.length === 0) {
         return;
       }
 
+      const file = result.assets[0];
       const newDocument: Document = {
-        id: `doc-${Date.now()}`,
-        name: result.assets[0].name,
-        type: result.assets[0].mimeType || 'unknown',
-        date: new Date().toISOString().split('T')[0],
-        file: result.assets[0].uri,
+        id: `doc-${Date.now()}`, // Client-side unique ID
+        name: file.name,
+        type: file.mimeType || 'unknown',
+        date: new Date().toISOString().split('T')[0], // Date of document addition
+        uri: file.uri, // Local URI
       };
 
       setForm(prev => ({
         ...prev,
-        documents: [...(prev.documents || []), newDocument],
+        documents: [...prev.documents, newDocument],
       }));
     } catch (error) {
       console.error('Error picking document:', error);
@@ -82,23 +86,98 @@ export default function NewInventoryItemScreen() {
   const handleRemoveDocument = (documentId: string) => {
     setForm(prev => ({
       ...prev,
-      documents: prev.documents?.filter(doc => doc.id !== documentId) || [],
+      documents: prev.documents.filter(doc => doc.id !== documentId),
     }));
   };
 
-  const handleSubmit = () => {
-    if (validateForm()) {
-      // In a real app, you would save this new inventory item to your backend
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return;
+    }
+
+    if (!boatId) {
+      Alert.alert('Erreur', 'ID du bateau manquant. Impossible d\'ajouter l\'équipement.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // 1. Insert the main inventory item
+      const { data: inventoryItem, error: inventoryError } = await supabase
+        .from('boat_inventory')
+        .insert({
+          boat_id: parseInt(boatId),
+          equipment_type: form.equipmentType,
+          description: form.description,
+          installation_date: form.installationDate,
+          installed_by: form.installedBy,
+        })
+        .select('id')
+        .single();
+
+      if (inventoryError) {
+        console.error('Error inserting inventory item:', inventoryError);
+        Alert.alert('Erreur', `Échec de l'ajout de l'équipement: ${inventoryError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Upload and insert associated documents
+      for (const doc of form.documents) {
+        const fileExtension = doc.name.split('.').pop();
+        const filePath = `inventory_documents/${boatId}/${inventoryItem.id}/${Date.now()}_${doc.name}`;
+        const response = await fetch(doc.uri);
+        const blob = await response.blob();
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('inventory_documents') // Your Supabase Storage bucket name
+          .upload(filePath, blob, {
+            contentType: doc.type,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error('Error uploading document file:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
+          // Continue to next document or handle as critical failure
+          continue;
+        }
+
+        const { data: publicUrlData } = supabase.storage.from('inventory_documents').getPublicUrl(uploadData.path);
+        const fileUrl = publicUrlData.publicUrl;
+
+        const { error: docInsertError } = await supabase
+          .from('boat_inventory_documents')
+          .insert({
+            inventory_item_id: inventoryItem.id,
+            name: doc.name,
+            type: doc.type,
+            date: doc.date,
+            file_url: fileUrl,
+          });
+
+        if (docInsertError) {
+          console.error('Error inserting inventory document record:', docInsertError);
+          Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
+          // Continue to next document or handle as critical failure
+        }
+      }
+
       Alert.alert(
         'Succès',
-        'L\'équipement a été ajouté avec succès',
+        'L\'équipement a été ajouté avec succès.',
         [
           {
             text: 'OK',
-            onPress: () => router.push(`/boats/${boatId || '1'}`)
+            onPress: () => router.push(`/boats/${boatId}`)
           }
         ]
       );
+    } catch (e) {
+      console.error('Unexpected error during submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -108,132 +187,143 @@ export default function NewInventoryItemScreen() {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Nouvel équipement</Text>
-      </View>
-
-      <View style={styles.form}>
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Type d'équipement</Text>
-          <View style={[styles.inputWrapper, errors.equipmentType && styles.inputWrapperError]}>
-            <Tool size={20} color={errors.equipmentType ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.input}
-              value={form.equipmentType}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, equipmentType: text }));
-                if (errors.equipmentType) setErrors(prev => ({ ...prev, equipmentType: undefined }));
-              }}
-              placeholder="ex: GPS, Pompe de cale, Gilet de sauvetage"
-            />
-          </View>
-          {errors.equipmentType && <Text style={styles.errorText}>{errors.equipmentType}</Text>}
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Description</Text>
-          <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
-            <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
-            <TextInput
-              style={styles.textArea}
-              value={form.description}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, description: text }));
-                if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
-              }}
-              placeholder="Description détaillée de l'équipement (marque, modèle, numéro de série...)"
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-          </View>
-          {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Date d'installation</Text>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
+      <ScrollView style={styles.scrollView}>
+        <View style={styles.header}>
           <TouchableOpacity
-            style={[styles.inputWrapper, errors.installationDate && styles.inputWrapperError]}
-            onPress={() => setDatePickerVisible(true)}
+            style={styles.backButton}
+            onPress={() => router.back()}
           >
-            <Calendar size={20} color={errors.installationDate ? '#ff4444' : '#666'} />
-            <Text style={styles.input}>
-              {form.installationDate || 'Sélectionner une date'}
-            </Text>
+            <ArrowLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
-          {errors.installationDate && <Text style={styles.errorText}>{errors.installationDate}</Text>}
+          <Text style={styles.title}>Nouvel équipement</Text>
         </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Installée par</Text>
-          <View style={[styles.inputWrapper, errors.installedBy && styles.inputWrapperError]}>
-            <User size={20} color={errors.installedBy ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.input}
-              value={form.installedBy}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, installedBy: text }));
-                if (errors.installedBy) setErrors(prev => ({ ...prev, installedBy: undefined }));
-              }}
-              placeholder="ex: Nautisme Pro, Moi-même"
-            />
+        <View style={styles.form}>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Type d'équipement</Text>
+            <View style={[styles.inputWrapper, errors.equipmentType && styles.inputWrapperError]}>
+              <Tool size={20} color={errors.equipmentType ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.equipmentType}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, equipmentType: text }));
+                  if (errors.equipmentType) setErrors(prev => ({ ...prev, equipmentType: undefined }));
+                }}
+                placeholder="ex: GPS, Pompe de cale, Gilet de sauvetage"
+              />
+            </View>
+            {errors.equipmentType && <Text style={styles.errorText}>{errors.equipmentType}</Text>}
           </View>
-          {errors.installedBy && <Text style={styles.errorText}>{errors.installedBy}</Text>}
-        </View>
 
-        <View style={styles.documentsSection}>
-          <View style={styles.documentsSectionHeader}>
-            <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Description</Text>
+            <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
+              <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
+              <TextInput
+                style={styles.textArea}
+                value={form.description}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, description: text }));
+                  if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
+                }}
+                placeholder="Description détaillée de l'équipement (marque, modèle, numéro de série...)"
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+            </View>
+            {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Date d'installation</Text>
             <TouchableOpacity
-              style={styles.addDocumentButton}
-              onPress={handleAddDocument}
+              style={[styles.inputWrapper, errors.installationDate && styles.inputWrapperError]}
+              onPress={() => setDatePickerVisible(true)}
             >
-              <Upload size={20} color="#0066CC" />
-              <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+              <Calendar size={20} color={errors.installationDate ? '#ff4444' : '#666'} />
+              <Text style={styles.input}>
+                {form.installationDate || 'Sélectionner une date'}
+              </Text>
             </TouchableOpacity>
+            {errors.installationDate && <Text style={styles.errorText}>{errors.installationDate}</Text>}
           </View>
 
-          {form.documents && form.documents.length > 0 ? (
-            <View style={styles.documentsList}>
-              {form.documents.map((document) => (
-                <View key={document.id} style={styles.documentItem}>
-                  <View style={styles.documentInfo}>
-                    <FileText size={20} color="#0066CC" />
-                    <View style={styles.documentDetails}>
-                      <Text style={styles.documentName}>{document.name}</Text>
-                      <Text style={styles.documentDate}>{document.date}</Text>
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.removeDocumentButton}
-                    onPress={() => handleRemoveDocument(document.id)}
-                  >
-                    <X size={16} color="#ff4444" />
-                  </TouchableOpacity>
-                </View>
-              ))}
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Installée par</Text>
+            <View style={[styles.inputWrapper, errors.installedBy && styles.inputWrapperError]}>
+              <User size={20} color={errors.installedBy ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.installedBy}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, installedBy: text }));
+                  if (errors.installedBy) setErrors(prev => ({ ...prev, installedBy: undefined }));
+                }}
+                placeholder="ex: Nautisme Pro, Moi-même"
+              />
             </View>
-          ) : (
-            <View style={styles.noDocuments}>
-              <Text style={styles.noDocumentsText}>Aucun document associé</Text>
-            </View>
-          )}
-        </View>
+            {errors.installedBy && <Text style={styles.errorText}>{errors.installedBy}</Text>}
+          </View>
 
-        <TouchableOpacity
-          style={styles.submitButton}
-          onPress={handleSubmit}
-        >
-          <Text style={styles.submitButtonText}>Ajouter l'équipement</Text>
-        </TouchableOpacity>
-      </View>
+          <View style={styles.documentsSection}>
+            <View style={styles.documentsSectionHeader}>
+              <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+              <TouchableOpacity
+                style={styles.addDocumentButton}
+                onPress={handleAddDocument}
+              >
+                <Upload size={20} color="#0066CC" />
+                <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+              </TouchableOpacity>
+            </View>
+
+            {form.documents && form.documents.length > 0 ? (
+              <View style={styles.documentsList}>
+                {form.documents.map((document) => (
+                  <View key={document.id} style={styles.documentItem}>
+                    <View style={styles.documentInfo}>
+                      <FileText size={20} color="#0066CC" />
+                      <View style={styles.documentDetails}>
+                        <Text style={styles.documentName}>{document.name}</Text>
+                        <Text style={styles.documentDate}>{document.date}</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.removeDocumentButton}
+                      onPress={() => handleRemoveDocument(document.id)}
+                    >
+                      <X size={16} color="#ff4444" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.noDocuments}>
+                <Text style={styles.noDocumentsText}>Aucun document associé</Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <Text style={styles.submitButtonText}>Ajouter l'équipement</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
 
       <DateTimePickerModal
         isVisible={isDatePickerVisible}
@@ -241,7 +331,7 @@ export default function NewInventoryItemScreen() {
         onConfirm={handleDateConfirm}
         onCancel={() => setDatePickerVisible(false)}
       />
-    </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -249,6 +339,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollView: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -357,6 +450,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    padding: 8,
   },
   addDocumentButtonText: {
     fontSize: 14,
@@ -419,6 +513,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#94a3b8',
   },
   submitButtonText: {
     color: 'white',

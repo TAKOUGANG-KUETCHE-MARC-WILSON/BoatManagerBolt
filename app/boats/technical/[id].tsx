@@ -1,107 +1,109 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload } from 'lucide-react-native';
+import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
-interface TechnicalRecord {
-  id: string;
+interface TechnicalRecordForm {
+  id?: string; // Optional for new records
   title: string;
   description: string;
   date: string;
   performedBy: string;
-  documents?: {
-    id: string;
+  documents: Array<{
+    id: string; // Client-side ID for list management
     name: string;
-    type: string;
-    date: string;
-    file: string;
-  }[];
+    type: string; // Mime type or custom type
+    date: string; // YYYY-MM-DD
+    uri: string; // Local URI or Supabase URL
+  }>;
 }
 
-// Sample technical records
-const mockTechnicalRecords: Record<string, TechnicalRecord> = {
-  't1': {
-    id: 't1',
-    title: 'Entretien moteur',
-    description: 'Révision complète du moteur et changement des filtres',
-    date: '2023-11-15',
-    performedBy: 'Nautisme Pro',
-    documents: [
-      {
-        id: 'td1',
-        name: 'Facture entretien moteur',
-        type: 'invoice',
-        date: '2023-11-15',
-        file: 'facture_entretien_moteur.pdf'
-      }
-    ]
-  },
-  't2': {
-    id: 't2',
-    title: 'Remplacement voile',
-    description: 'Remplacement de la grand-voile',
-    date: '2023-08-10',
-    performedBy: 'Marine Services',
-    documents: [
-      {
-        id: 'td2',
-        name: 'Facture voile',
-        type: 'invoice',
-        date: '2023-08-10',
-        file: 'facture_voile.pdf'
-      }
-    ]
-  },
-  't3': {
-    id: 't3',
-    title: 'Installation GPS',
-    description: 'Installation d\'un nouveau système GPS',
-    date: '2023-12-05',
-    performedBy: 'Nautisme Pro',
-    documents: [
-      {
-        id: 'td3',
-        name: 'Facture GPS',
-        type: 'invoice',
-        date: '2023-12-05',
-        file: 'facture_gps.pdf'
-      }
-    ]
-  }
-};
-
 export default function TechnicalRecordScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const isNewRecord = id === 'new';
-  const [form, setForm] = useState<TechnicalRecord>({
-    id: '',
+  const [form, setForm] = useState<TechnicalRecordForm>({
     title: '',
     description: '',
-    date: '',
+    date: new Date().toISOString().split('T')[0], // Default to today
     performedBy: '',
     documents: [],
   });
-  const [errors, setErrors] = useState<Partial<Record<keyof TechnicalRecord, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<keyof TechnicalRecordForm, string>>>({});
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isNewRecord && typeof id === 'string' && mockTechnicalRecords[id]) {
-      setForm(mockTechnicalRecords[id]);
-    } else if (isNewRecord) {
-      const today = new Date().toISOString().split('T')[0];
-      setForm({
-        id: `t${Date.now()}`,
-        title: '',
-        description: '',
-        date: today,
-        performedBy: '',
-        documents: [],
-      });
-    }
-  }, [id, isNewRecord]);
+    const fetchTechnicalRecord = async () => {
+      if (!boatId) {
+        setFetchError('ID du bateau manquant. Impossible de charger ou d\'ajouter un enregistrement technique.');
+        setLoading(false);
+        return;
+      }
+
+      if (!isNewRecord && typeof id === 'string') {
+        setLoading(true);
+        setFetchError(null);
+        try {
+          const { data: recordData, error: recordError } = await supabase
+            .from('boat_technical_records')
+            .select('*')
+            .eq('id', id)
+            .eq('boat_id', boatId)
+            .single();
+
+          if (recordError) {
+            if (recordError.code === 'PGRST116') { // No rows found
+              setFetchError('Enregistrement technique non trouvé.');
+            } else {
+              console.error('Error fetching technical record:', recordError);
+              setFetchError('Erreur lors du chargement de l\'enregistrement technique.');
+            }
+            setLoading(false);
+            return;
+          }
+
+          const { data: documentsData, error: documentsError } = await supabase
+            .from('boat_technical_record_documents')
+            .select('*')
+            .eq('technical_record_id', id);
+
+          if (documentsError) {
+            console.error('Error fetching technical record documents:', documentsError);
+            // Continue even if documents fail to load, main record is more important
+          }
+
+          setForm({
+            id: recordData.id.toString(),
+            title: recordData.title || '',
+            description: recordData.description || '',
+            date: recordData.date || '',
+            performedBy: recordData.performed_by || '',
+            documents: documentsData ? documentsData.map(doc => ({
+              id: doc.id.toString(),
+              name: doc.name,
+              type: doc.type,
+              date: doc.date,
+              uri: doc.file_url, // Use file_url as uri for existing documents
+            })) : [],
+          });
+        } catch (e) {
+          console.error('Unexpected error fetching technical record:', e);
+          setFetchError('Une erreur inattendue est survenue.');
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
+    };
+
+    fetchTechnicalRecord();
+  }, [id, boatId, isNewRecord]);
 
   const validateForm = () => {
-    const newErrors: Partial<Record<keyof TechnicalRecord, string>> = {};
+    const newErrors: Partial<Record<keyof TechnicalRecordForm, string>> = {};
     
     if (!form.title.trim()) newErrors.title = 'Le titre est requis';
     if (!form.description.trim()) newErrors.description = 'La description est requise';
@@ -119,16 +121,16 @@ export default function TechnicalRecordScreen() {
         copyToCacheDirectory: true,
       });
 
-      if (result.canceled) {
+      if (result.canceled || !result.assets || result.assets.length === 0) {
         return;
       }
 
       const newDocument = {
-        id: `td${Date.now()}`,
+        id: `doc-${Date.now()}`, // Client-side unique ID
         name: result.assets[0].name,
-        type: 'invoice',
+        type: result.assets[0].mimeType || 'application/octet-stream',
         date: new Date().toISOString().split('T')[0],
-        file: result.assets[0].uri,
+        uri: result.assets[0].uri,
       };
 
       setForm(prev => ({
@@ -137,7 +139,7 @@ export default function TechnicalRecordScreen() {
       }));
     } catch (error) {
       console.error('Error picking document:', error);
-      alert('Une erreur est survenue lors de la sélection du document');
+      Alert.alert('Erreur', 'Une erreur est survenue lors de la sélection du document');
     }
   };
 
@@ -148,191 +150,416 @@ export default function TechnicalRecordScreen() {
     }));
   };
 
-
-
-
-
-
-  const handleSubmit = () => {
-    if (validateForm()) {
-      // Here you would typically save the technical record
-      // For now, we'll just show a success message and navigate back
-      const message = isNewRecord 
-        ? 'L\'intervention a été ajoutée avec succès'
-        : 'L\'intervention a été mise à jour avec succès';
-      
-      // Get the boat ID from the URL or context
-      const boatId = '1'; // This would come from the route or context in a real app
-      
-      // Show success message and navigate back to the boat profile
-      alert(message);
-      router.push(`/boats/${boatId}`);
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return;
     }
-  };
 
-  const handleDelete = () => {
-    // Here you would typically delete the technical record
-    // For now, we'll just show a success message and navigate back
-    
-    // Get the boat ID from the URL or context
-    const boatId = '1'; // This would come from the route or context in a real app
-    
-    // Show confirmation dialog
-    if (Platform.OS === 'web') {
-      if (window.confirm('Êtes-vous sûr de vouloir supprimer cette intervention ?')) {
-        alert('L\'intervention a été supprimée avec succès');
-        router.push(`/boats/${boatId}`);
+    if (!boatId) {
+      Alert.alert('Erreur', 'ID du bateau manquant. Impossible d\'ajouter l\'équipement.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      let technicalRecordId: number;
+      
+      if (isNewRecord) {
+        const { data, error } = await supabase
+          .from('boat_technical_records')
+          .insert({
+            boat_id: parseInt(boatId),
+            title: form.title,
+            description: form.description,
+            date: form.date,
+            performed_by: form.performedBy,
+          })
+          .select('id')
+          .single();
+
+        if (error) {
+          console.error('Error inserting technical record:', error);
+          Alert.alert('Erreur', `Échec de l'ajout de l'intervention: ${error.message}`);
+          setLoading(false);
+          return;
+        }
+        technicalRecordId = data.id;
+      } else {
+        technicalRecordId = parseInt(id as string);
+        const { error } = await supabase
+          .from('boat_technical_records')
+          .update({
+            title: form.title,
+            description: form.description,
+            date: form.date,
+            performed_by: form.performedBy,
+          })
+          .eq('id', technicalRecordId);
+
+        if (error) {
+          console.error('Error updating technical record:', error);
+          Alert.alert('Erreur', `Échec de la mise à jour de l'intervention: ${error.message}`);
+          setLoading(false);
+          return;
+        }
       }
-    } else {
-      alert('L\'intervention a été supprimée avec succès');
-      router.push(`/boats/${boatId}`);
+
+      // Handle documents: upload new ones, keep existing ones, delete removed ones
+      const existingDocumentUris = form.documents
+        .filter(doc => doc.uri.startsWith('http')) // Filter documents that are already uploaded (have a URL)
+        .map(doc => doc.uri);
+
+      const documentsToDelete = (await supabase
+        .from('boat_technical_record_documents')
+        .select('id, file_url')
+        .eq('technical_record_id', technicalRecordId))
+        .data?.filter(dbDoc => !existingDocumentUris.includes(dbDoc.file_url)) || [];
+
+      // Delete removed documents from storage and database
+      for (const doc of documentsToDelete) {
+        const filePath = doc.file_url.split(supabase.storage.from('technical_record_documents').getPublicUrl('').data.publicUrl + '/')[1];
+        if (filePath) {
+          const { error: deleteFileError } = await supabase.storage
+            .from('technical_record_documents')
+            .remove([filePath]);
+          if (deleteFileError) console.warn('Error deleting old document file:', deleteFileError);
+        }
+        await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
+      }
+
+      // Upload new documents and insert/update records
+      for (const doc of form.documents) {
+        if (!doc.uri.startsWith('http')) { // Only upload new files (those with local URIs)
+          const fileExtension = doc.name.split('.').pop();
+          const filePath = `technical_record_documents/${boatId}/${technicalRecordId}/${Date.now()}_${doc.name}`;
+          const response = await fetch(doc.uri);
+          const blob = await response.blob();
+
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('technical_record_documents')
+            .upload(filePath, blob, {
+              contentType: doc.type,
+              upsert: false,
+            });
+
+          if (uploadError) {
+            console.error('Error uploading document file:', uploadError);
+            Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
+            continue;
+          }
+
+          const { data: publicUrlData } = supabase.storage.from('technical_record_documents').getPublicUrl(uploadData.path);
+          const fileUrl = publicUrlData.publicUrl;
+
+          const { error: docInsertError } = await supabase
+            .from('boat_technical_record_documents')
+            .insert({
+              technical_record_id: technicalRecordId,
+              name: doc.name,
+              type: doc.type,
+              date: doc.date,
+              file_url: fileUrl,
+            });
+
+          if (docInsertError) {
+            console.error('Error inserting document record:', docInsertError);
+            Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
+          }
+        }
+      }
+
+      Alert.alert(
+        'Succès',
+        isNewRecord ? 'L\'intervention a été ajoutée avec succès.' : 'L\'intervention a été mise à jour avec succès.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.push(`/boats/${boatId}`)
+          }
+        ]
+      );
+    } catch (e) {
+      console.error('Unexpected error during submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleDelete = async () => {
+    Alert.alert(
+      'Supprimer l\'intervention',
+      'Êtes-vous sûr de vouloir supprimer cette intervention ? Cette action est irréversible.',
+      [
+        {
+          text: 'Annuler',
+          style: 'cancel',
+        },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            setFetchError(null);
+            try {
+              // 1. Delete associated documents from storage and database
+              const { data: documentsData, error: fetchDocsError } = await supabase
+                .from('boat_technical_record_documents')
+                .select('id, file_url')
+                .eq('technical_record_id', id);
+
+              if (fetchDocsError) {
+                console.warn('Error fetching documents for deletion:', fetchDocsError);
+              } else if (documentsData) {
+                for (const doc of documentsData) {
+                  const filePath = doc.file_url.split(supabase.storage.from('technical_record_documents').getPublicUrl('').data.publicUrl + '/')[1];
+                  if (filePath) {
+                    const { error: deleteFileError } = await supabase.storage
+                      .from('technical_record_documents')
+                      .remove([filePath]);
+                    if (deleteFileError) console.warn('Error deleting document file from storage:', deleteFileError);
+                  }
+                  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
+                }
+              }
+
+              // 2. Delete the main technical record
+              const { error: deleteRecordError } = await supabase
+                .from('boat_technical_records')
+                .delete()
+                .eq('id', id);
+
+              if (deleteRecordError) {
+                console.error('Error deleting technical record:', deleteRecordError);
+                Alert.alert('Erreur', `Échec de la suppression de l'intervention: ${deleteRecordError.message}`);
+              } else {
+                Alert.alert(
+                  'Succès',
+                  'L\'intervention a été supprimée avec succès.',
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => router.push(`/boats/${boatId}`)
+                    }
+                  ]
+                );
+              }
+            } catch (e) {
+              console.error('Unexpected error during deletion:', e);
+              Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la suppression.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>
+            {isNewRecord ? 'Nouvelle intervention' : 'Modifier l\'intervention'}
+          </Text>
+        </View>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Chargement...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Erreur</Text>
+        </View>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{fetchError}</Text>
+          <TouchableOpacity 
+            style={styles.errorButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.errorButtonText}>Retour</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>
-          {isNewRecord ? 'Nouvelle intervention' : 'Modifier l\'intervention'}
-        </Text>
-      </View>
-
-      <View style={styles.form}>
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Titre de l'intervention</Text>
-          <View style={[styles.inputWrapper, errors.title && styles.inputWrapperError]}>
-            <Tool size={20} color={errors.title ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.input}
-              value={form.title}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, title: text }));
-                if (errors.title) setErrors(prev => ({ ...prev, title: undefined }));
-              }}
-              placeholder="ex: Entretien moteur, Remplacement voile"
-            />
-          </View>
-          {errors.title && <Text style={styles.errorText}>{errors.title}</Text>}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
+      <ScrollView style={styles.scrollView}>
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>
+            {isNewRecord ? 'Nouvelle intervention' : 'Modifier l\'intervention'}
+          </Text>
         </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Description</Text>
-          <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
-            <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
-            <TextInput
-              style={styles.textArea}
-              value={form.description}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, description: text }));
-                if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
-              }}
-              placeholder="Description détaillée de l'intervention"
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
+        <View style={styles.form}>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Titre de l'intervention</Text>
+            <View style={[styles.inputWrapper, errors.title && styles.inputWrapperError]}>
+              <Tool size={20} color={errors.title ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.title}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, title: text }));
+                  if (errors.title) setErrors(prev => ({ ...prev, title: undefined }));
+                }}
+                placeholder="ex: Entretien moteur, Remplacement voile"
+              />
+            </View>
+            {errors.title && <Text style={styles.errorText}>{errors.title}</Text>}
           </View>
-          {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
-        </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Date de l'intervention</Text>
-          <View style={[styles.inputWrapper, errors.date && styles.inputWrapperError]}>
-            <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.input}
-              value={form.date}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, date: text }));
-                if (errors.date) setErrors(prev => ({ ...prev, date: undefined }));
-              }}
-              placeholder="AAAA-MM-JJ"
-            />
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Description</Text>
+            <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
+              <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
+              <TextInput
+                style={styles.textArea}
+                value={form.description}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, description: text }));
+                  if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
+                }}
+                placeholder="Description détaillée de l'intervention"
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+            </View>
+            {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
           </View>
-          {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
-        </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Réalisée par</Text>
-          <View style={[styles.inputWrapper, errors.performedBy && styles.inputWrapperError]}>
-            <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.input}
-              value={form.performedBy}
-              onChangeText={(text) => {
-                setForm(prev => ({ ...prev, performedBy: text }));
-                if (errors.performedBy) setErrors(prev => ({ ...prev, performedBy: undefined }));
-              }}
-              placeholder="ex: Nautisme Pro, Moi-même"
-            />
-          </View>
-          {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
-        </View>
-
-        <View style={styles.documentsSection}>
-          <View style={styles.documentsSectionHeader}>
-            <Text style={styles.documentsSectionTitle}>Documents associés</Text>
-            <TouchableOpacity 
-              style={styles.addDocumentButton}
-              onPress={handleAddDocument}
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Date de l'intervention</Text>
+            <TouchableOpacity
+              style={[styles.inputWrapper, errors.date && styles.inputWrapperError]}
+              onPress={() => { /* Implement date picker logic here */ }}
             >
-              <Upload size={20} color="#0066CC" />
-              <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+              <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.date}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, date: text }));
+                  if (errors.date) setErrors(prev => ({ ...prev, date: undefined }));
+                }}
+                placeholder="AAAA-MM-JJ"
+              />
             </TouchableOpacity>
+            {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
           </View>
 
-          {form.documents && form.documents.length > 0 ? (
-            <View style={styles.documentsList}>
-              {form.documents.map((document) => (
-                <View key={document.id} style={styles.documentItem}>
-                  <View style={styles.documentInfo}>
-                    <FileText size={20} color="#0066CC" />
-                    <View style={styles.documentDetails}>
-                      <Text style={styles.documentName}>{document.name}</Text>
-                      <Text style={styles.documentDate}>{document.date}</Text>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Réalisée par</Text>
+            <View style={[styles.inputWrapper, errors.performedBy && styles.inputWrapperError]}>
+              <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.performedBy}
+                onChangeText={(text) => {
+                  setForm(prev => ({ ...prev, performedBy: text }));
+                  if (errors.performedBy) setErrors(prev => ({ ...prev, performedBy: undefined }));
+                }}
+                placeholder="ex: Nautisme Pro, Moi-même"
+              />
+            </View>
+            {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
+          </View>
+
+          <View style={styles.documentsSection}>
+            <View style={styles.documentsSectionHeader}>
+              <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+              <TouchableOpacity
+                style={styles.addDocumentButton}
+                onPress={handleAddDocument}
+              >
+                <Upload size={20} color="#0066CC" />
+                <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+              </TouchableOpacity>
+            </View>
+
+            {form.documents && form.documents.length > 0 ? (
+              <View style={styles.documentsList}>
+                {form.documents.map((document) => (
+                  <View key={document.id} style={styles.documentItem}>
+                    <View style={styles.documentInfo}>
+                      <FileText size={20} color="#0066CC" />
+                      <View style={styles.documentDetails}>
+                        <Text style={styles.documentName}>{document.name}</Text>
+                        <Text style={styles.documentDate}>{document.date}</Text>
+                      </View>
                     </View>
+                    <TouchableOpacity
+                      style={styles.removeDocumentButton}
+                      onPress={() => handleRemoveDocument(document.id)}
+                    >
+                      <X size={16} color="#ff4444" />
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity 
-                    style={styles.removeDocumentButton}
-                    onPress={() => handleRemoveDocument(document.id)}
-                  >
-                    <Text style={styles.removeDocumentButtonText}>Supprimer</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.noDocuments}>
-              <Text style={styles.noDocumentsText}>Aucun document associé</Text>
-            </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.noDocuments}>
+                <Text style={styles.noDocumentsText}>Aucun document associé</Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <Text style={styles.submitButtonText}>
+                {isNewRecord ? 'Ajouter l\'intervention' : 'Enregistrer les modifications'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {!isNewRecord && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={handleDelete}
+            >
+              <Text style={styles.deleteButtonText}>Supprimer l'intervention</Text>
+            </TouchableOpacity>
           )}
         </View>
-
-        <TouchableOpacity 
-          style={styles.submitButton}
-          onPress={handleSubmit}
-        >
-          <Text style={styles.submitButtonText}>
-            {isNewRecord ? 'Ajouter l\'intervention' : 'Enregistrer les modifications'}
-          </Text>
-        </TouchableOpacity>
-
-        {!isNewRecord && (
-          <TouchableOpacity 
-            style={styles.deleteButton}
-            onPress={handleDelete}
-          >
-            <Text style={styles.deleteButtonText}>Supprimer l'intervention</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -340,6 +567,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollView: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -391,6 +621,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1a1a1a',
     height: '100%',
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      },
+    }),
   },
   textAreaWrapper: {
     backgroundColor: 'white',
@@ -443,6 +678,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    padding: 8,
   },
   addDocumentButtonText: {
     fontSize: 14,
@@ -505,6 +741,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#94a3b8',
   },
   submitButtonText: {
     color: 'white',

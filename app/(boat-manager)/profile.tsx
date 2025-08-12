@@ -1,11 +1,76 @@
-import { useState, useEffect, memo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch } from 'react-native';
+import { useState, useEffect, memo, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch,Linking, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Buffer } from 'buffer';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
+
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (isHttpUrl(value)) return value;
+
+  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+
+// Helper to extract path from a public URL
+const pathFromPublicUrl = (url: string) => {
+  const marker = '/storage/v1/object/public/avatars/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return url.slice(idx + marker.length); // ex: users/<id>/<file>.jpg
+};
+
+// Helper to determine MIME type from extension (simplified)
+const mimeFromExt = (ext: string) => {
+  switch (ext.toLowerCase()) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'webp':
+      return 'image/webp';
+    case 'heic':
+    case 'heif':
+      return 'image/heic';
+    default:
+      return 'image/jpeg'; // Default to JPEG
+  }
+};
+
+// Helper to determine extension from URI or MIME type
+const extFromUriOrMime = (uri?: string, mime?: string) => {
+  if (uri && uri.includes('.')) {
+    const guess = uri.split('.').pop()!.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'].includes(guess)) return guess;
+  }
+  if (mime) {
+    const m = mime.split('/')[1];
+    if (m) return m.toLowerCase();
+  }
+  return 'jpg'; // Default extension
+};
+
+
+// Silhouette universelle, tu peux changer le lien pour la tienne
+export const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Interfaces pour les données récupérées
 interface Service {
   id: string;
   name: string;
@@ -33,12 +98,6 @@ const serviceIconsMap = {
   'Accès': Key,
   'Administratif': FileText,
   // Add other service types and their icons as needed
-};
-
-const avatars = {
-  male: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-  female: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-  neutral: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop',
 };
 
 // Extracted EditProfileModal component
@@ -139,10 +198,10 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
       </View>
     </View>
   </Modal>
-))
+));
 
 // Extracted PhotoModal component
-const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto, onSelectAvatar }) => (
+const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto }) => (
   <Modal
     visible={visible}
     transparent
@@ -156,11 +215,6 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
         <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
           <ImageIcon size={24} color="#0066CC" />
           <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.modalOption} onPress={onSelectAvatar}>
-          <User size={24} color="#0066CC" />
-          <Text style={styles.modalOptionText}>Choisir un avatar</Text>
         </TouchableOpacity>
         
         {hasCustomPhoto && (
@@ -182,9 +236,9 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
       </View>
     </View>
   </Modal>
-))
+));
 
-// Extracted AvatarModal component
+// Extracted AvatarModal component (unchanged)
 const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
   <Modal
     visible={visible}
@@ -194,41 +248,17 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
   >
     <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Choisir un avatar</Text>
-        
+        <Text style={styles.modalTitle}>Réinitialiser la photo</Text>
         <TouchableOpacity 
           style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('male')}
+          onPress={() => onSelectAvatar(DEFAULT_AVATAR)}
         >
           <Image 
-            source={{ uri: avatars.male }} 
+            source={{ uri: DEFAULT_AVATAR }} 
             style={styles.avatarPreview} 
           />
-          <Text style={styles.avatarOptionText}>Avatar Homme</Text>
+          <Text style={styles.avatarOptionText}>Remettre la silhouette</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('female')}
-        >
-          <Image 
-            source={{ uri: avatars.female }} 
-            style={styles.avatarPreview} 
-          />
-          <Text style={styles.avatarOptionText}>Avatar Femme</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.avatarOption} 
-          onPress={() => onSelectAvatar('neutral')}
-        >
-          <Image 
-            source={{ uri: avatars.neutral }} 
-            style={styles.avatarPreview} 
-          />
-          <Text style={styles.avatarOptionText}>Avatar Neutre</Text>
-        </TouchableOpacity>
-
         <TouchableOpacity 
           style={styles.modalCancelButton}
           onPress={onClose}
@@ -238,17 +268,35 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
       </View>
     </View>
   </Modal>
-))
+));
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+
+  const didRetryAvatarRef = useRef(false);
+  // 1️⃣ Redirection via useEffect, pas dans le rendu !
+  useEffect(() => {
+    if (!user?.id) {
+      router.replace('/login');
+    }
+  }, [user]);
+
+  // 2️⃣ Affiche rien le temps que ça redirige
+  if (!user?.id) {
+    return null;
+  }
+
   const [selectedTab, setSelectedTab] = useState<'services' | 'ports'>('services');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  const [localAvatar, setLocalAvatar] = useState(user?.avatar || avatars.neutral);
+  const [avatarPath, setAvatarPath] = useState<string>('');      // ce qui est stocké en BDD (chemin)
+  const [localAvatar, setLocalAvatar] = useState<string>('');    // URL signée pour <Image />
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<BoatManagerProfile>({
     title: '',
@@ -271,22 +319,40 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     const fetchProfileData = async () => {
-      if (!user?.id) return;
+      setLoading(true);
+      setError(null);
 
-      // Fetch user profile details
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('first_name, last_name, e_mail, phone, avatar, job_title, experience, certification, bio, created_at')
-        .eq('id', user.id)
-        .single();
+      try {
+        // Fetch user profile details
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('first_name, last_name, e_mail, phone, avatar, job_title, experience, certification, bio, created_at')
+          .eq('id', user.id)
+          .single();
 
-      if (userError) {
-        console.error('Error fetching user profile:', userError);
-        return;
-      }
+        if (userError) {
+          console.error('Error fetching user profile:', userError);
+          setError('Échec du chargement du profil utilisateur.');
+          return;
+        }
 
-      if (userData) {
-        setLocalAvatar(userData.avatar || avatars.neutral);
+        // Normalise ce qui vient de la BDD
+        let path = '';
+        if (userData.avatar) {
+          if (isHttpUrl(userData.avatar)) {
+            // L'ancienne valeur est une URL "public/avatars/...": extraire le path
+            path = pathFromPublicUrl(userData.avatar) || '';
+          } else {
+            // Déjà un chemin de bucket du type "users/<id>/avatar.jpg"
+            path = userData.avatar;
+          }
+        }
+        setAvatarPath(path);
+
+        // Construit l'URL signée si on a un chemin
+        const signed = await getSignedAvatarUrl(path);
+        setLocalAvatar(signed || '');
+
         setProfile(prev => ({
           ...prev,
           title: userData.job_title || '',
@@ -300,71 +366,76 @@ export default function ProfileScreen() {
           bio: userData.bio || '',
           certifications: (userData.certification || []).join(', '),
         });
-      }
 
-      // Fetch managed ports and boat counts
-      const { data: userPortsData, error: userPortsError } = await supabase
-        .from('user_ports')
-        .select('port_id')
-        .eq('user_id', user.id);
+        // Fetch managed ports and boat counts
+        const { data: userPortsData, error: userPortsError } = await supabase
+          .from('user_ports')
+          .select('port_id')
+          .eq('user_id', user.id);
 
-      if (userPortsError) {
-        console.error('Error fetching user ports:', userPortsError);
-        return;
-      }
-
-      const portIds = userPortsData.map(p => p.port_id);
-      if (portIds.length > 0) {
-        const { data: portsData, error: portsError } = await supabase
-          .from('ports')
-          .select('id, name');
-
-        if (portsError) {
-          console.error('Error fetching ports:', portsError);
+        if (userPortsError) {
+          console.error('Error fetching user ports:', userPortsError);
           return;
         }
 
-        const fetchedPorts = await Promise.all(portsData
-          .filter(p => portIds.includes(p.id))
-          .map(async (port) => {
-            const { count: boatCount, error: boatCountError } = await supabase
-              .from('boat')
-              .select('id', { count: 'exact' })
-              .eq('id_port', port.id);
+        const portIds = userPortsData.map(p => p.port_id);
+        if (portIds.length > 0) {
+          const { data: portsData, error: portsError } = await supabase
+            .from('ports')
+            .select('id, name');
 
-            if (boatCountError) {
-              console.error(`Error fetching boat count for port ${port.name}:`, boatCountError);
-            }
+          if (portsError) {
+            console.error('Error fetching ports:', portsError);
+            return;
+          }
 
-            return {
-              id: port.id.toString(),
-              name: port.name,
-              boatCount: boatCount || 0,
-            };
-          })
-        );
-        setProfile(prev => ({ ...prev, ports: fetchedPorts }));
-      }
+          const fetchedPorts = await Promise.all(portsData
+            .filter(p => portIds.includes(p.id))
+            .map(async (port) => {
+              const { count: boatCount, error: boatCountError } = await supabase
+                .from('boat')
+                .select('id', { count: 'exact' })
+                .eq('id_port', port.id);
 
-      // Fetch services offered by the boat manager
-      const { data: userCategories, error: userCategoriesError } = await supabase
-        .from('user_categorie_service')
-        .select('categorie_service(id, description1, description2)')
-        .eq('user_id', user.id);
+              if (boatCountError) {
+                console.error(`Error fetching boat count for port ${port.name}:`, boatCountError);
+              }
 
-      if (userCategoriesError) {
-        console.error('Error fetching user service categories:', userCategoriesError);
-        return;
-      }
+              return {
+                id: port.id.toString(),
+                name: port.name,
+                boatCount: boatCount || 0,
+              };
+            })
+          );
+          setProfile(prev => ({ ...prev, ports: fetchedPorts }));
+        }
 
-      if (userCategories) {
-        const fetchedServices: Service[] = userCategories.map(uc => ({
-          id: uc.categorie_service.id.toString(),
-          name: uc.categorie_service.description1,
-          description: uc.categorie_service.description2 || '',
-          icon: serviceIconsMap[uc.categorie_service.description1] || Ship, // Default to Ship icon if not found
-        }));
-        setServices(fetchedServices);
+        // Fetch services offered by the boat manager
+        const { data: userCategories, error: userCategoriesError } = await supabase
+          .from('user_categorie_service')
+          .select('categorie_service(id, description1, description2)')
+          .eq('user_id', user.id);
+
+        if (userCategoriesError) {
+          console.error('Error fetching user service categories:', userCategoriesError);
+          return;
+        }
+
+        if (userCategories) {
+          const fetchedServices: Service[] = userCategories.map(uc => ({
+            id: uc.categorie_service.id.toString(),
+            name: uc.categorie_service.description1,
+            description: uc.categorie_service.description2 || '',
+            icon: serviceIconsMap[uc.categorie_service.description1] || Ship, // Default to Ship icon if not found
+          }));
+          setServices(fetchedServices);
+        }
+      } catch (e) {
+        console.error('Unexpected error fetching profile data:', e);
+        setError('Une erreur inattendue est survenue lors du chargement du profil.');
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -377,39 +448,111 @@ export default function ProfileScreen() {
   };
 
   const handleChoosePhoto = async () => {
-    if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) {
-        Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie pour choisir une photo.');
+    try {
+      if (!mediaPermission?.granted) {
+        const p = await requestMediaPermission();
+        if (!p.granted) {
+          Alert.alert('Permission requise', 'Autorisez l’accès à la galerie.');
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 1,
+      });
+      if (result.canceled || !user?.id) {
+        setShowPhotoModal(false);
         return;
       }
-    }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 1,
-    });
+      const asset = result.assets[0];
 
-    if (!result.canceled) {
-      setLocalAvatar(result.assets[0].uri); // Update local avatar state
-      // In a real app, you would also upload this to Supabase Storage and update the user's avatar URL in the database
+      // Normalize to JPEG (fixes HEIC/orientation/EXIF)
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [],
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      if (!manipulated.base64) {
+        Alert.alert('Erreur', 'Conversion image échouée.');
+        return;
+      }
+
+      // Convert base64 to Uint8Array
+      const bytes = Buffer.from(manipulated.base64, 'base64');
+
+      const path = `users/${user.id}/avatar.jpg`; // Fixed path for user avatar
+
+      // Upload to Supabase Storage
+      const { error: upErr } = await supabase
+        .storage
+        .from('avatars')
+        .upload(path, bytes, { contentType: 'image/jpeg', upsert: true }); // Use upsert to overwrite
+      if (upErr) throw upErr;
+
+      // Update user's avatar path in the database
+      const { error: dbErr } = await supabase
+        .from('users')
+        .update({ avatar: path })
+        .eq('id', user.id);
+      if (dbErr) throw dbErr;
+
+      setAvatarPath(path); // Update avatarPath state
+
+      // Get signed URL for immediate display
+      const { data: signedData, error: signedErr } = await supabase
+        .storage
+        .from('avatars')
+        .createSignedUrl(path, 60 * 60); // 1 hour validity
+      if (signedErr || !signedData?.signedUrl) throw signedErr || new Error('Signed URL manquante');
+
+      setLocalAvatar(`${signedData.signedUrl}&v=${Date.now()}`); // Update localAvatar with cache-busting
+      Alert.alert('Succès', 'Photo de profil mise à jour.');
+    } catch (e: any) {
+      console.error('Upload avatar error:', e);
+      Alert.alert('Erreur', e?.message ?? 'Impossible de mettre à jour la photo.');
+    } finally {
+      setShowPhotoModal(false);
     }
-    setShowPhotoModal(false);
   };
 
-  const handleDeletePhoto = () => {
-    setLocalAvatar(avatars.neutral); // Set to default neutral avatar
-    // In a real app, you would also remove the avatar from Supabase Storage and update the user's avatar URL to null/default in the database
-    setShowPhotoModal(false);
+  const handleDeletePhoto = async () => {
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      return;
+    }
+
+    const path = `users/${user.id}/avatar.jpg`; // Fixed path for user avatar
+
+    // Supprimer l’objet si présent
+    await supabase.storage.from('avatars').remove([path]).catch(() => {});
+
+    // Vider la colonne avatar
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ avatar: '' }) // Set avatar to empty string in DB
+      .eq('id', user.id);
+
+    if (updateError) {
+      console.error('Error clearing avatar URL:', updateError);
+      Alert.alert('Erreur', `Impossible de mettre à jour votre profil: ${updateError.message}`);
+      return;
+    }
+    setAvatarPath(''); // Clear avatarPath state
+    setLocalAvatar(DEFAULT_AVATAR); // Set localAvatar to default
+    Alert.alert('Succès', 'Photo de profil supprimée.');
   };
 
-  const handleSelectAvatar = (type: keyof typeof avatars) => {
-    setLocalAvatar(avatars[type]);
-    // In a real app, you would also update the user's avatar URL in the database
+  const handleSelectAvatar = async () => {
+    if (!user?.id) return;
+    await supabase.from('users').update({ avatar: '' }).eq('id', user.id);
+    setLocalAvatar(DEFAULT_AVATAR);
+    Alert.alert('Photo de profil réinitialisée.');
     setShowAvatarModal(false);
-    setShowPhotoModal(false); // Close PhotoModal after selecting avatar
+    setShowPhotoModal(false);
   };
 
   const handleEditProfile = () => {
@@ -440,7 +583,7 @@ export default function ProfileScreen() {
         experience: formData.experience,
         bio: formData.bio,
         certification: certificationsArray,
-        avatar: localAvatar, // Save the selected avatar URL
+        // avatar: localAvatar, // This is handled by handleChoosePhoto/handleDeletePhoto
       })
       .eq('id', user.id);
 
@@ -470,14 +613,46 @@ export default function ProfileScreen() {
     }
   };
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement du profil...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
+
   return (
     <ScrollView style={styles.container}>
       {/* Profile Header */}
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
-          <Image 
-            source={{ uri: localAvatar }} // Use localAvatar here
+          <Image
+            key={localAvatar}
+            source={{ uri: localAvatar && localAvatar.trim() !== '' ? localAvatar : DEFAULT_AVATAR }}
             style={styles.avatar}
+            onError={async () => {
+              if (didRetryAvatarRef.current) {
+                setLocalAvatar(''); // => affichera DEFAULT_AVATAR
+                return;
+              }
+              didRetryAvatarRef.current = true;
+
+              if (avatarPath) {
+                const u = await getSignedAvatarUrl(avatarPath);
+                setLocalAvatar(u ? `${u}&v=${Date.now()}` : '');
+              } else {
+                setLocalAvatar('');
+              }
+            }}
           />
           <TouchableOpacity 
             style={styles.editPhotoButton}
@@ -644,14 +819,9 @@ export default function ProfileScreen() {
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
         onDeletePhoto={handleDeletePhoto}
-        hasCustomPhoto={localAvatar !== avatars.neutral}
-        onSelectAvatar={() => setShowAvatarModal(true)}
+        hasCustomPhoto={localAvatar && localAvatar.trim() !== ''}
       />
-      <AvatarModal 
-        visible={showAvatarModal}
-        onClose={() => setShowAvatarModal(false)}
-        onSelectAvatar={handleSelectAvatar}
-      />
+      {/* AvatarModal is removed as per previous request */}
     </ScrollView>
   );
 }
@@ -660,6 +830,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 10,
   },
   header: {
     backgroundColor: 'white',
@@ -1017,9 +1197,9 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: '#0066CC',
-        shadowOffset: { width: 0, height: 2 },
+        shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
-        shadowRadius: 4,
+        shadowRadius: 8,
       },
       android: {
         elevation: 2,

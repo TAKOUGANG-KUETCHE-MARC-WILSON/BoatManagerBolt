@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Image as ImageIcon, X, MapPin, Search, User, Phone, Mail, Info, Check } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { ArrowLeft, Image as ImageIcon, X, MapPin, Search, User, Phone, Mail, Info, Check, Ship, Calendar, Wrench, Clock, Ruler } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker'; // Keep this for other ImagePicker functions
 import { useAuth } from '@/context/AuthContext';
 import PortSelectionModal from '@/components/PortSelectionModal';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import * as FileSystem from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Buffer } from 'buffer';
+
 
 interface BoatForm {
   photo: string;
@@ -19,6 +23,7 @@ interface BoatForm {
   length: string;
   homePort: string; // Display name for the port
   portId: string; // ID for the port in the database
+  place_de_port: string; // Added place_de_port
 }
 
 interface BoatManagerDetails {
@@ -90,6 +95,7 @@ export default function NewBoatScreen() {
     length: '',
     homePort: '',
     portId: '',
+    place_de_port: '', // Initialize place_de_port
   });
   const [errors, setErrors] = useState<Partial<BoatForm>>({});
   const [showPhotoModal, setShowPhotoModal] = useState(false);
@@ -121,7 +127,7 @@ export default function NewBoatScreen() {
           // Fetch boat manager's profile details
           const { data: bmProfile, error: bmProfileError } = await supabase
             .from('users')
-            .select('id, first_name, last_name, e_mail, phone, avatar')
+            .select('first_name, last_name, e_mail, phone, avatar')
             .eq('id', boatManagerId)
             .eq('profile', 'boat_manager') // Ensure it's a boat manager
             .single();
@@ -156,26 +162,71 @@ export default function NewBoatScreen() {
   }, [form.portId]);
 
   const handleChoosePhoto = async () => {
+  try {
     if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) return;
+      const permissionResponse = await requestMediaPermission();
+      if (!permissionResponse.granted) {
+        Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie.');
+        setShowPhotoModal(false);
+        return;
+      }
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    const pickerResult = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, // ✅ corrigé l’avertissement
       allowsEditing: true,
       aspect: [16, 9],
       quality: 1,
     });
 
-    if (!result.canceled) {
-      setForm(prev => ({ ...prev, photo: result.assets[0].uri }));
+    if (pickerResult.canceled || !pickerResult.assets?.length) {
+      setShowPhotoModal(false);
+      return;
     }
-    setShowPhotoModal(false);
-  };
 
-  const handleDeletePhoto = () => {
-    setForm(prev => ({ ...prev, photo: '' }));
+    const asset = pickerResult.assets[0];
+
+    // ⚙️ manipulation de l'image
+    const manipulatedImage = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [],
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+    );
+
+    // Store the local URI for immediate preview
+    setForm(prev => ({ ...prev, photo: manipulatedImage.uri }));
+    
+  } catch (e) {
+    console.error('Erreur image:', e);
+    Alert.alert('Erreur', 'Impossible de sélectionner l’image.');
+  } finally {
+    setShowPhotoModal(false);
+  }
+};
+
+
+  const handleDeletePhoto = async () => {
+    // Check if the current photo URL is from Supabase Storage
+    if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
+      try {
+        // Extract the file path from the public URL
+        const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
+        if (filePath) {
+          const { error } = await supabase.storage
+            .from('boat.images')
+            .remove([filePath]);
+          if (error) {
+            console.error('Error deleting image from storage:', error);
+            Alert.alert('Erreur', `Échec de la suppression de l'image du stockage: ${error.message}`);
+            return;
+          }
+        }
+      } catch (e: any) {
+        console.error('Error processing image deletion:', e.message || e);
+        Alert.alert('Erreur', `Une erreur est survenue lors de la suppression de l'image: ${e.message || 'Veuillez réessayer.'}`);
+      }
+    }
+    setForm(prev => ({ ...prev, photo: '' })); // Reset to empty string
   };
 
   const handleSelectPort = (port: { id: string; name: string }) => {
@@ -204,7 +255,9 @@ export default function NewBoatScreen() {
     if (!form.type.trim()) newErrors.type = 'Le type est requis';
     if (!form.manufacturer.trim()) newErrors.manufacturer = 'Le constructeur est requis';
     if (!form.length.trim()) newErrors.length = 'La longueur est requise';
-    if (!form.portId) newErrors.homePort = 'Le port d\'attache est requis';
+    if (!form.homePort.trim()) newErrors.homePort = 'Le port d\'attache est requis'; // Validate homePort text input
+    if (!form.portId) newErrors.portId = 'Le port d\'attache est requis'; // Validate portId selection
+    if (!form.place_de_port.trim()) newErrors.place_de_port = 'La place de port est requise'; // Validate place_de_port
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -218,6 +271,47 @@ export default function NewBoatScreen() {
       }
 
       setIsLoading(true);
+      let finalImageUrl = form.photo;
+
+      // If photo is a local URI, upload it to Supabase
+      if (form.photo && !form.photo.startsWith('http')) {
+        try {
+          const fileName = `boat_images/${user.id}/${Date.now()}.jpeg`;
+          const contentType = 'image/jpeg';
+
+          const base64 = await FileSystem.readAsStringAsync(form.photo, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          const fileBuffer = Buffer.from(base64, 'base64');
+
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('boat.images')
+            .upload(fileName, fileBuffer, {
+              contentType,
+              upsert: false,
+            });
+
+          if (uploadError) {
+            console.error('Erreur upload Supabase:', uploadError);
+            Alert.alert('Erreur', `Échec de l'envoi de l'image: ${uploadError.message}`);
+            setIsLoading(false);
+            return;
+          }
+
+          const { data: publicUrlData } = supabase.storage
+            .from('boat.images')
+            .getPublicUrl(uploadData.path);
+
+          finalImageUrl = publicUrlData.publicUrl;
+          setForm(prev => ({ ...prev, photo: finalImageUrl })); // Update form state with public URL
+          
+        } catch (e) {
+          console.error('Erreur lors du téléchargement de l\'image:', e);
+          Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement de l\'image.');
+          setIsLoading(false);
+          return;
+        }
+      }
 
       try {
         const { data, error } = await supabase
@@ -229,11 +323,12 @@ export default function NewBoatScreen() {
             modele: form.model,
             annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null, // Assuming YYYY format, set to Jan 1st
             type_moteur: form.engine,
-            temps_moteur: form.engineHours,
+            temps_moteur: form.engineHours ? form.engineHours : null, // Ensure correct type for DB
             longueur: form.length,
-            image: form.photo,
+            image: finalImageUrl, // Use the final image URL
             id_port: parseInt(form.portId),
             constructeur: form.manufacturer,
+            place_de_port: form.place_de_port, // Include place_de_port
             // 'etat' is not in the form, assuming it has a default value in DB or is nullable
           })
           .select('id')
@@ -264,195 +359,239 @@ export default function NewBoatScreen() {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Nouveau bateau</Text>
-      </View>
-
-      <View style={styles.form}>
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Nom du bateau</Text>
-          <TextInput
-            style={[styles.input, errors.name && styles.inputError]}
-            value={form.name}
-            onChangeText={(text) => setForm(prev => ({ ...prev, name: text }))}
-            placeholder="ex: Le Grand Bleu"
-          />
-          {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
+      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Nouveau bateau</Text>
         </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Type de bateau</Text>
-          <TextInput
-            style={[styles.input, errors.type && styles.inputError]}
-            value={form.type}
-            onChangeText={(text) => setForm(prev => ({ ...prev, type: text }))}
-            placeholder="ex: Voilier, Yacht, Catamaran"
-          />
-          {errors.type && <Text style={styles.errorText}>{errors.type}</Text>}
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Constructeur</Text>
-          <TextInput
-            style={[styles.input, errors.manufacturer && styles.inputError]}
-            value={form.manufacturer}
-            onChangeText={(text) => setForm(prev => ({ ...prev, manufacturer: text }))}
-            placeholder="ex: Bénéteau, Jeanneau"
-          />
-          {errors.manufacturer && <Text style={styles.errorText}>{errors.manufacturer}</Text>}
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Modèle</Text>
-          <TextInput
-            style={styles.input}
-            value={form.model}
-            onChangeText={(text) => setForm(prev => ({ ...prev, model: text }))}
-            placeholder="ex: Oceanis 45"
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Année de construction</Text>
-          <TextInput
-            style={styles.input}
-            value={form.constructionYear}
-            onChangeText={(text) => setForm(prev => ({ ...prev, constructionYear: text }))}
-            placeholder="ex: 2020"
-            keyboardType="numeric"
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Moteur</Text>
-          <TextInput
-            style={styles.input}
-            value={form.engine}
-            onChangeText={(text) => setForm(prev => ({ ...prev, engine: text }))}
-            placeholder="ex: Volvo Penta D2-50"
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Heures moteur</Text>
-          <TextInput
-            style={styles.input}
-            value={form.engineHours}
-            onChangeText={(text) => setForm(prev => ({ ...prev, engineHours: text }))}
-            placeholder="ex: 500"
-            keyboardType="numeric"
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Longueur</Text>
-          <TextInput
-            style={[styles.input, errors.length && styles.inputError]}
-            value={form.length}
-            onChangeText={(text) => setForm(prev => ({ ...prev, length: text }))}
-            placeholder="ex: 12m"
-          />
-          {errors.length && <Text style={styles.errorText}>{errors.length}</Text>}
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Port d'attache</Text>
-          <View style={[styles.inputWrapper, errors.homePort && styles.inputWrapperError]}>
-            <MapPin size={20} color={errors.homePort ? '#ff4444' : '#666'} />
-            <TextInput
-              style={styles.portInput}
-              placeholder="Port d'attache"
-              value={portSearch}
-              onChangeText={handlePortInputChange}
-              onFocus={() => setShowPortModal(true)}
-            />
-            {portSearch.length > 0 && (
-              <TouchableOpacity
-                style={styles.clearButton}
-                onPress={() => {
-                  setPortSearch('');
-                  setForm(prev => ({ ...prev, portId: '', homePort: '' }));
-                  setSelectedBoatManagerDetails(null);
-                }}
-              >
-                <Text style={styles.clearButtonText}>×</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
-        </View>
-
-        {selectedBoatManagerDetails && (
-          <View style={styles.boatManagerInfo}>
-            <View style={styles.boatManagerHeader}>
-              <Info size={20} color="#0066CC" />
-              <Text style={styles.boatManagerTitle}>Boat Manager assigné</Text>
-            </View>
-            <View style={styles.boatManagerDetails}>
-              <View style={styles.boatManagerRow}>
-                <User size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.firstName} {selectedBoatManagerDetails.lastName}</Text>
-              </View>
-              <View style={styles.boatManagerRow}>
-                <Phone size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.phone}</Text>
-              </View>
-              <View style={styles.boatManagerRow}>
-                <Mail size={16} color="#666" />
-                <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.email}</Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Moved photo section to the bottom */}
-        <TouchableOpacity 
-          style={styles.photoContainer}
-          onPress={() => setShowPhotoModal(true)}
-        >
-          {form.photo ? (
-            <>
-              <Image 
-                source={{ uri: form.photo }}
-                style={styles.photoPreview}
+        <View style={styles.form}>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Nom du bateau</Text>
+            <View style={[styles.inputWrapper, errors.name && styles.inputWrapperError]}>
+              <Ship size={20} color={errors.name ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.name}
+                onChangeText={(text) => setForm(prev => ({ ...prev, name: text }))}
+                placeholder="ex: Le Grand Bleu"
               />
-              <TouchableOpacity
-                style={styles.deletePhotoButton}
-                onPress={handleDeletePhoto}
-              >
-                <X size={20} color="white" />
-              </TouchableOpacity>
-            </>
-          ) : (
-            <View style={styles.photoPlaceholder}>
-              <ImageIcon size={32} color="#666" />
-              <Text style={styles.photoText}>Ajouter une photo</Text>
+            </View>
+            {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Type de bateau</Text>
+            <View style={[styles.inputWrapper, errors.type && styles.inputWrapperError]}>
+              <Ship size={20} color={errors.type ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.type}
+                onChangeText={(text) => setForm(prev => ({ ...prev, type: text }))}
+                placeholder="ex: Voilier, Yacht, Catamaran"
+              />
+            </View>
+            {errors.type && <Text style={styles.errorText}>{errors.type}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Constructeur</Text>
+            <View style={[styles.inputWrapper, errors.manufacturer && styles.inputWrapperError]}>
+              <Info size={20} color={errors.manufacturer ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.manufacturer}
+                onChangeText={(text) => setForm(prev => ({ ...prev, manufacturer: text }))}
+                placeholder="ex: Bénéteau, Jeanneau"
+              />
+            </View>
+            {errors.manufacturer && <Text style={styles.errorText}>{errors.manufacturer}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Modèle</Text>
+            <View style={styles.inputWrapper}>
+              <Info size={20} color="#666" />
+              <TextInput
+                style={styles.input}
+                value={form.model}
+                onChangeText={(text) => setForm(prev => ({ ...prev, model: text }))}
+                placeholder="ex: Oceanis 45"
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Année de construction</Text>
+            <View style={styles.inputWrapper}>
+              <Calendar size={20} color="#666" />
+              <TextInput
+                style={styles.input}
+                value={form.constructionYear}
+                onChangeText={(text) => setForm(prev => ({ ...prev, constructionYear: text }))}
+                placeholder="ex: 2020"
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Moteur</Text>
+            <View style={styles.inputWrapper}>
+              <Wrench size={20} color="#666" />
+              <TextInput
+                style={styles.input}
+                value={form.engine}
+                onChangeText={(text) => setForm(prev => ({ ...prev, engine: text }))}
+                placeholder="ex: Volvo Penta D2-50"
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Heures moteur</Text>
+            <View style={styles.inputWrapper}>
+              <Clock size={20} color="#666" />
+              <TextInput
+                style={styles.input}
+                value={form.engineHours}
+                onChangeText={(text) => setForm(prev => ({ ...prev, engineHours: text }))}
+                placeholder="ex: 500"
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Longueur</Text>
+            <View style={[styles.inputWrapper, errors.length && styles.inputWrapperError]}>
+              <Ruler size={20} color={errors.length ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.length}
+                onChangeText={(text) => setForm(prev => ({ ...prev, length: text }))}
+                placeholder="ex: 12m"
+              />
+            </View>
+            {errors.length && <Text style={styles.errorText}>{errors.length}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Port d'attache</Text>
+            <View style={[styles.inputWrapper, errors.homePort && styles.inputWrapperError]}>
+              <MapPin size={20} color={errors.homePort ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.portInput}
+                placeholder="Port d'attache"
+                value={portSearch}
+                onChangeText={handlePortInputChange}
+                onFocus={() => setShowPortModal(true)}
+              />
+              {portSearch.length > 0 && (
+                <TouchableOpacity
+                  style={styles.clearButton}
+                  onPress={() => {
+                    setPortSearch('');
+                    setForm(prev => ({ ...prev, portId: '', homePort: '' }));
+                    setSelectedBoatManagerDetails(null);
+                  }}
+                >
+                  <Text style={styles.clearButtonText}>×</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Place de port</Text>
+            <View style={[styles.inputWrapper, errors.place_de_port && styles.inputWrapperError]}>
+              <MapPin size={20} color={errors.place_de_port ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={form.place_de_port}
+                onChangeText={(text) => setForm(prev => ({ ...prev, place_de_port: text }))}
+                placeholder="ex: A12, Ponton B"
+              />
+            </View>
+            {errors.place_de_port && <Text style={styles.errorText}>{errors.place_de_port}</Text>}
+          </View>
+
+          {selectedBoatManagerDetails && (
+            <View style={styles.boatManagerInfo}>
+              <View style={styles.boatManagerHeader}>
+                <Info size={20} color="#0066CC" />
+                <Text style={styles.boatManagerTitle}>Boat Manager assigné</Text>
+              </View>
+              <View style={styles.boatManagerDetails}>
+                <View style={styles.boatManagerRow}>
+                  <User size={16} color="#666" />
+                  <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.firstName} {selectedBoatManagerDetails.lastName}</Text>
+                </View>
+                <View style={styles.boatManagerRow}>
+                  <Phone size={16} color="#666" />
+                  <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.phone}</Text>
+                </View>
+                <View style={styles.boatManagerRow}>
+                  <Mail size={16} color="#666" />
+                  <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.email}</Text>
+                </View>
+              </View>
             </View>
           )}
-        </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator color="white" size="small" />
-          ) : (
-            <>
-              <Check size={20} color="white" />
-              <Text style={styles.submitButtonText}>Enregistrer</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
+          {/* Moved photo section to the bottom */}
+          <TouchableOpacity 
+            style={styles.photoContainer}
+            onPress={() => setShowPhotoModal(true)}
+          >
+            {form.photo ? (
+              <>
+                <Image 
+                  source={{ uri: form.photo }}
+                  style={styles.photoPreview}
+                />
+                <TouchableOpacity
+                  style={styles.deletePhotoButton}
+                  onPress={handleDeletePhoto}
+                >
+                  <X size={20} color="white" />
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={styles.photoPlaceholder}>
+                <ImageIcon size={32} color="#666" />
+                <Text style={styles.photoText}>Ajouter une photo</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <>
+                <Check size={20} color="white" />
+                <Text style={styles.submitButtonText}>Enregistrer</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
 
       <PhotoModal 
         visible={showPhotoModal}
@@ -470,7 +609,7 @@ export default function NewBoatScreen() {
         searchQuery={portSearch}
         onSearchQueryChange={setPortSearch}
       />
-    </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -478,6 +617,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  contentContainer: {
+    flexGrow: 1,
   },
   header: {
     flexDirection: 'row',
@@ -552,18 +694,46 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 4,
   },
-  input: {
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    color: '#1a1a1a',
+    paddingHorizontal: 12,
+    height: 48,
   },
-  inputError: {
+  inputWrapperError: {
     borderColor: '#ff4444',
     backgroundColor: '#fff5f5',
+  },
+  input: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#1a1a1a',
+    height: '100%',
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      },
+    }),
+  },
+  portInput: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#1a1a1a',
+    height: '100%',
+  },
+  clearButton: {
+    padding: 4,
+  },
+  clearButtonText: {
+    fontSize: 20,
+    color: '#666',
+    fontWeight: 'bold',
   },
   errorText: {
     color: '#ff4444',
@@ -666,31 +836,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  portInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#1a1a1a',
-    height: '100%',
-  },
-  clearButton: {
-    padding: 4,
-  },
-  clearButtonText: {
-    fontSize: 20,
-    color: '#666',
-    fontWeight: 'bold',
   },
   boatManagerInfo: {
     backgroundColor: '#f0f7ff',

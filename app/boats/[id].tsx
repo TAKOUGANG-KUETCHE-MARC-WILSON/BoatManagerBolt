@@ -1,13 +1,16 @@
-import { useState, useEffect, useCallback, memo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput } from 'react-native';
+import { useState, useEffect, useCallback, memo } from 'react'; // Ajoutez useCallback
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Image as ImageIcon, X, FileText, Calendar, PenTool as Tool, Clipboard, Plus, Download, Upload, ChevronRight, Check, Radio, Briefcase, Anchor, Sailboat, Fish, Users, Chrome as Home, Trophy, CircleHelp as HelpCircle } from 'lucide-react-native';
+import { ArrowLeft, Image as ImageIcon, X, FileText, Calendar, PenTool as Tool, ClipboardList, Plus, Download, Upload, ChevronRight, Check, Radio, Briefcase, Anchor, Sailboat, Fish, Users, Chrome as Home, Trophy, CircleHelp as HelpCircle, Wrench, Ship, MapPin, Tag, Info, Clock, Settings, BookText, Edit } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import CustomDateTimePicker from '@/components/CustomDateTimePicker'; // Import CustomDateTimePicker
+import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput, ActivityIndicator } from 'react-native'; // Assurez-vous que tous les imports sont là
 
 interface BoatDetails {
-  photo: string;
+  id: string;
   name: string;
   type: string;
   manufacturer: string;
@@ -17,14 +20,16 @@ interface BoatDetails {
   engineHours: string;
   length: string;
   homePort: string;
+  photo: string;
+  place_de_port: string; // Added place_de_port
 }
 
-interface Document {
+interface UserDocument {
   id: string;
   name: string;
   type: string;
   date: string;
-  file: string;
+  file_url: string;
 }
 
 interface TechnicalRecord {
@@ -33,7 +38,7 @@ interface TechnicalRecord {
   description: string;
   date: string;
   performedBy: string;
-  documents?: Document[];
+  documents?: UserDocument[]; // Assuming technical records can have documents
 }
 
 interface InventoryItem {
@@ -42,8 +47,8 @@ interface InventoryItem {
   name: string;
   brand?: string;
   model?: string;
-  serialNumber?: string;
-  purchaseDate?: string;
+  serial_number?: string; // Changed from serialNumber to serial_number
+  purchase_date?: string; // Changed from purchaseDate to purchase_date
   notes?: string;
 }
 
@@ -64,219 +69,9 @@ interface UsageType {
   };
 }
 
-// This would typically come from your API or database
-const boatsData = {
-  '1': {
-    photo: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-    name: 'Le Grand Bleu',
-    type: 'Voilier',
-    manufacturer: 'Bénéteau',
-    model: 'Oceanis 45',
-    constructionYear: '2020',
-    engine: 'Volvo Penta D2-50',
-    engineHours: '500',
-    length: '12m',
-    homePort: 'Port de Marseille',
-  },
-  '2': {
-    photo: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop',
-    name: 'Le Petit Prince',
-    type: 'Yacht',
-    manufacturer: 'Jeanneau',
-    model: 'Sun Odyssey 410',
-    constructionYear: '2022',
-    engine: 'Yanmar 4JH45',
-    engineHours: '200',
-    length: '15m',
-    homePort: 'Port de Nice',
-  },
-};
-
-// Sample documents
-const mockDocuments: Record<string, Document[]> = {
-  '1': [
-    {
-      id: 'd1',
-      name: 'Acte de francisation',
-      type: 'administrative',
-      date: '2020-05-15',
-      file: 'acte_francisation.pdf'
-    },
-    {
-      id: 'd2',
-      name: 'Assurance',
-      type: 'administrative',
-      date: '2024-01-10',
-      file: 'assurance_2024.pdf'
-    },
-    {
-      id: 'd3',
-      name: 'Place de port',
-      type: 'administrative',
-      date: '2024-01-05',
-      file: 'place_port_2024.pdf'
-    }
-  ],
-  '2': [
-    {
-      id: 'd4',
-      name: 'Acte de francisation',
-      type: 'administrative',
-      date: '2022-03-20',
-      file: 'acte_francisation.pdf'
-    },
-    {
-      id: 'd5',
-      name: 'Assurance',
-      type: 'administrative',
-      date: '2024-01-15',
-      file: 'assurance_2024.pdf'
-    }
-  ]
-};
-
-// Sample technical records
-const mockTechnicalRecords: Record<string, TechnicalRecord[]> = {
-  '1': [
-    {
-      id: 't1',
-      title: 'Entretien moteur',
-      description: 'Révision complète du moteur et changement des filtres',
-      date: '2023-11-15',
-      performedBy: 'Nautisme Pro',
-      documents: [
-        {
-          id: 'td1',
-          name: 'Facture entretien moteur',
-          type: 'invoice',
-          date: '2023-11-15',
-          file: 'facture_entretien_moteur.pdf'
-        }
-      ]
-    },
-    {
-      id: 't2',
-      title: 'Remplacement voile',
-      description: 'Remplacement de la grand-voile',
-      date: '2023-08-10',
-      performedBy: 'Marine Services',
-      documents: [
-        {
-          id: 'td2',
-          name: 'Facture voile',
-          type: 'invoice',
-          date: '2023-08-10',
-          file: 'facture_voile.pdf'
-        }
-      ]
-    }
-  ],
-  '2': [
-    {
-      id: 't3',
-      title: 'Installation GPS',
-      description: 'Installation d\'un nouveau système GPS',
-      date: '2023-12-05',
-      performedBy: 'Nautisme Pro',
-      documents: [
-        {
-          id: 'td3',
-          name: 'Facture GPS',
-          type: 'invoice',
-          date: '2023-12-05',
-          file: 'facture_gps.pdf'
-        }
-      ]
-    }
-  ]
-};
-
-// Sample inventory items
-const mockInventory: Record<string, InventoryItem[]> = {
-  '1': [
-    {
-      id: 'i1',
-      category: 'Navigation',
-      name: 'GPS',
-      brand: 'Garmin',
-      model: 'GPSMAP 1243xsv',
-      serialNumber: 'GAR123456',
-      purchaseDate: '2020-06-15',
-      notes: 'Installé sur le tableau de bord'
-    },
-    {
-      id: 'i2',
-      category: 'Sécurité',
-      name: 'Gilets de sauvetage',
-      brand: 'Plastimo',
-      purchaseDate: '2020-05-20',
-      notes: '6 gilets adultes'
-    },
-    {
-      id: 'i3',
-      category: 'Moteur',
-      name: 'Hélice de secours',
-      brand: 'Volvo',
-      model: 'P2-50',
-      purchaseDate: '2021-03-10'
-    }
-  ],
-  '2': [
-    {
-      id: 'i4',
-      category: 'Navigation',
-      name: 'Radar',
-      brand: 'Raymarine',
-      model: 'Quantum 2',
-      serialNumber: 'RAY987654',
-      purchaseDate: '2022-04-10'
-    },
-    {
-      id: 'i5',
-      category: 'Confort',
-      name: 'Climatisation',
-      brand: 'Webasto',
-      model: 'BlueCool S',
-      serialNumber: 'WEB456789',
-      purchaseDate: '2022-05-15'
-    }
-  ]
-};
-
-// Sample usage type data
-const mockUsageTypes: Record<string, UsageType> = {
-  '1': {
-    legalNature: 'personal',
-    ownershipStatus: 'full_ownership',
-    usagePurposes: {
-      leisure: true,
-      fishing: false,
-      cruising: true,
-      charter: false,
-      competition: false,
-      permanentHousing: false,
-      other: false
-    }
-  },
-  '2': {
-    legalNature: 'professional',
-    ownershipStatus: 'financial_lease',
-    leaseType: 'Crédit-bail',
-    leaseEndDate: '15-05-2027',
-    usagePurposes: {
-      leisure: false,
-      fishing: false,
-      cruising: false,
-      charter: true,
-      competition: false,
-      permanentHousing: false,
-      other: false
-    }
-  }
-};
-
 // Extracted and memoized UsageTypeTab component
 const UsageTypeTab = memo(({
+  boatId, // Pass boatId to save usage type
   usageType,
   setUsageType,
   leaseType,
@@ -285,9 +80,9 @@ const UsageTypeTab = memo(({
   setLeaseEndDate,
   otherUsageDescription,
   setOtherUsageDescription,
-  handleToggleUsagePurpose,
-  handleSaveUsageType,
 }) => {
+  const [isLeaseEndDatePickerVisible, setIsLeaseEndDatePickerVisible] = useState(false);
+
   const handleSetLegalNature = useCallback((nature: 'personal' | 'professional') => {
     setUsageType(prev => ({
       ...prev,
@@ -302,13 +97,69 @@ const UsageTypeTab = memo(({
     }));
   }, [setUsageType]);
 
+  const handleToggleUsagePurpose = useCallback((purpose: keyof UsageType['usagePurposes']) => {
+    setUsageType(prev => ({
+      ...prev,
+      usagePurposes: {
+        ...prev.usagePurposes,
+        [purpose]: !prev.usagePurposes[purpose]
+      }
+    }));
+  }, [setUsageType]);
+
+  const handleSaveUsageType = useCallback(async () => {
+    if (!boatId) {
+      Alert.alert('Erreur', 'ID du bateau manquant pour enregistrer les informations d\'utilisation.');
+      return;
+    }
+
+    const updatedUsageType: UsageType = {
+      ...usageType,
+      leaseType: usageType.ownershipStatus === 'financial_lease' ? leaseType : undefined,
+      leaseEndDate: usageType.ownershipStatus === 'financial_lease' ? leaseEndDate : undefined,
+      usagePurposes: {
+        ...usageType.usagePurposes,
+        otherDescription: usageType.usagePurposes.other ? otherUsageDescription : undefined
+      }
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('boat_usage_types')
+        .upsert(
+          {
+            boat_id: parseInt(boatId),
+            legal_nature: updatedUsageType.legalNature,
+            ownership_status: updatedUsageType.ownershipStatus,
+            lease_type: updatedUsageType.leaseType,
+            lease_end_date: updatedUsageType.leaseEndDate,
+            usage_purposes: updatedUsageType.usagePurposes,
+            other_description: updatedUsageType.usagePurposes.otherDescription,
+          },
+          { onConflict: 'boat_id' } // Upsert based on boat_id
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error saving usage type:', error);
+        Alert.alert('Erreur', `Échec de l'enregistrement des informations d'utilisation: ${error.message}`);
+      } else {
+        Alert.alert('Succès', 'Les informations d\'utilisation ont été enregistrées avec succès.');
+      }
+    } catch (e) {
+      console.error('Unexpected error saving usage type:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'enregistrement.');
+    }
+  }, [boatId, usageType, leaseType, leaseEndDate, otherUsageDescription]);
+
   return (
     <View style={styles.tabContent}>
       {/* Legal Nature Section */}
       <View style={styles.usageSection}>
         <Text style={styles.usageSectionTitle}>Nature juridique de l'utilisation</Text>
         <View style={styles.optionsContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetLegalNature('personal')}
           >
@@ -323,8 +174,8 @@ const UsageTypeTab = memo(({
             </View>
             <Text style={styles.optionText}>Particulier</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetLegalNature('professional')}
           >
@@ -341,12 +192,12 @@ const UsageTypeTab = memo(({
           </TouchableOpacity>
         </View>
       </View>
-      
+
       {/* Ownership Status Section */}
       <View style={styles.usageSection}>
         <Text style={styles.usageSectionTitle}>Statut de l'utilisateur</Text>
         <View style={styles.optionsContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetOwnershipStatus('full_ownership')}
           >
@@ -361,8 +212,8 @@ const UsageTypeTab = memo(({
             </View>
             <Text style={styles.optionText}>Pleine propriété</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetOwnershipStatus('joint_ownership')}
           >
@@ -377,8 +228,8 @@ const UsageTypeTab = memo(({
             </View>
             <Text style={styles.optionText}>Indivision</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetOwnershipStatus('financial_lease')}
           >
@@ -393,7 +244,7 @@ const UsageTypeTab = memo(({
             </View>
             <Text style={styles.optionText}>Location financière</Text>
           </TouchableOpacity>
-          
+
           {usageType.ownershipStatus === 'financial_lease' && (
             <View style={styles.leaseDetailsContainer}>
               <View style={styles.leaseDetailRow}>
@@ -407,25 +258,30 @@ const UsageTypeTab = memo(({
               </View>
               <View style={styles.leaseDetailRow}>
                 <Text style={styles.leaseDetailLabel}>Échéance:</Text>
-                <TextInput
-                  style={styles.leaseDetailInput}
-                  value={leaseEndDate}
-                  onChangeText={setLeaseEndDate}
-                  placeholder="JJ-MM-AAAA"
-                  keyboardType="numeric"
-                  inputMode="numeric"
+                <TouchableOpacity onPress={() => setIsLeaseEndDatePickerVisible(true)} style={styles.leaseDetailInput}>
+                  <Text>{leaseEndDate || 'JJ-MM-AAAA'}</Text>
+                </TouchableOpacity>
+                <CustomDateTimePicker
+                  isVisible={isLeaseEndDatePickerVisible}
+                  mode="date"
+                  value={leaseEndDate ? new Date(leaseEndDate) : new Date()}
+                  onConfirm={(date) => {
+                    setLeaseEndDate(date.toISOString().split('T')[0]);
+                    setIsLeaseEndDatePickerVisible(false);
+                  }}
+                  onCancel={() => setIsLeaseEndDatePickerVisible(false)}
                 />
               </View>
             </View>
           )}
         </View>
       </View>
-      
+
       {/* Usage Purposes Section */}
       <View style={styles.usageSection}>
         <Text style={styles.usageSectionTitle}>Utilisation</Text>
         <View style={styles.optionsContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('leisure')}
           >
@@ -443,8 +299,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Loisir</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('fishing')}
           >
@@ -462,8 +318,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Pêche</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('cruising')}
           >
@@ -481,8 +337,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Promenade</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('charter')}
           >
@@ -500,8 +356,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Charter/Location</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('competition')}
           >
@@ -519,8 +375,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Compétition</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('permanentHousing')}
           >
@@ -538,8 +394,8 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Habitat permanent</Text>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('other')}
           >
@@ -557,7 +413,7 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Autre</Text>
             </View>
           </TouchableOpacity>
-          
+
           {usageType.usagePurposes.other && (
             <View style={styles.otherUsageContainer}>
               <TextInput
@@ -571,14 +427,15 @@ const UsageTypeTab = memo(({
           )}
         </View>
       </View>
-      
-      <TouchableOpacity 
+
+      <TouchableOpacity
         style={styles.saveUsageButton}
         onPress={handleSaveUsageType}
       >
         <Text style={styles.saveUsageButtonText}>Enregistrer</Text>
       </TouchableOpacity>
     </View>
+
   );
 });
 
@@ -587,7 +444,7 @@ export default function BoatProfileScreen() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'general' | 'documents' | 'technical' | 'inventory' | 'usage'>('general');
   const [boatDetails, setBoatDetails] = useState<BoatDetails | null>(null);
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const [documents, setDocuments] = useState<UserDocument[]>([]);
   const [technicalRecords, setTechnicalRecords] = useState<TechnicalRecord[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [usageType, setUsageType] = useState<UsageType>({
@@ -603,92 +460,210 @@ export default function BoatProfileScreen() {
       other: false
     }
   });
-  
+
   const [showAddDocumentModal, setShowAddDocumentModal] = useState(false);
   const [showAddTechnicalRecordModal, setShowAddTechnicalRecordModal] = useState(false);
   const [showAddInventoryItemModal, setShowAddInventoryItemModal] = useState(false);
   const [leaseType, setLeaseType] = useState('');
   const [leaseEndDate, setLeaseEndDate] = useState('');
   const [otherUsageDescription, setOtherUsageDescription] = useState('');
-  
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Load boat data based on ID
-    if (id && typeof id === 'string' && boatsData[id]) {
-      setBoatDetails(boatsData[id]);
-      setDocuments(mockDocuments[id] || []);
-      setTechnicalRecords(mockTechnicalRecords[id] || []);
-      setInventory(mockInventory[id] || []);
-      setUsageType(mockUsageTypes[id] || {
-        legalNature: null,
-        ownershipStatus: null,
-        usagePurposes: {
-          leisure: false,
-          fishing: false,
-          cruising: false,
-          charter: false,
-          competition: false,
-          permanentHousing: false,
-          other: false
-        }
-      });
-      
-      // Set lease details if available
-      if (mockUsageTypes[id]?.leaseType) {
-        setLeaseType(mockUsageTypes[id].leaseType || '');
-      }
-      if (mockUsageTypes[id]?.leaseEndDate) {
-        setLeaseEndDate(mockUsageTypes[id].leaseEndDate || '');
-      }
-      
-      // Set other usage description if available
-      if (mockUsageTypes[id]?.usagePurposes.other && mockUsageTypes[id]?.usagePurposes.otherDescription) {
-        setOtherUsageDescription(mockUsageTypes[id].usagePurposes.otherDescription || '');
-      }
+  // Move fetchBoatData outside useEffect to be reusable and memoized
+  const fetchBoatData = useCallback(async () => {
+    if (!id || typeof id !== 'string') {
+      setFetchError('ID du bateau manquant.');
+      setLoading(false);
+      return;
     }
-  }, [id]);
 
-  const handleEditBoat = () => {
-    if (id) {
-      router.push(`/boats/edit/${id}`);
-    }
-  };
-
-  const handleAddDocument = async () => {
+    setLoading(true);
+    setFetchError(null);
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
+      // Fetch main boat details
+      const { data: boatData, error: boatError } = await supabase
+        .from('boat')
+        .select(`
+            id,
+            name,
+            type,
+            constructeur,
+            modele,
+            annee_construction,
+            type_moteur,
+            temps_moteur,
+            longueur,
+            image,
+            id_port,
+            ports(name),
+            place_de_port
+          `)
+        .eq('id', id)
+        .single();
 
-      if (result.canceled) {
+      if (boatError) {
+        if (boatError.code === 'PGRST116') {
+          setFetchError('Bateau non trouvé.');
+        } else {
+          console.error('Error fetching boat:', boatError);
+          setFetchError('Erreur lors du chargement du bateau.');
+        }
+        setLoading(false);
         return;
       }
 
-      const newDocument: Document = {
-        id: `d${Date.now()}`,
-        name: result.assets[0].name,
-        type: 'administrative',
-        date: new Date().toISOString().split('T')[0],
-        file: result.assets[0].uri,
-      };
+      if (boatData) {
+        let signedPhotoUrl = '';
+        if (
+          boatData.image &&
+          boatData.image.includes('/storage/v1/object/public/boat.images/')
+        ) {
+          const storagePrefix = '/storage/v1/object/public/boat.images/';
+          const idx = boatData.image.indexOf(storagePrefix);
+          if (idx !== -1) {
+            const path = boatData.image.substring(idx + storagePrefix.length);
+            const { data: signedUrlData, error: signedUrlError } = await supabase
+              .storage
+              .from('boat.images')
+              .createSignedUrl(path, 60 * 60);
+            if (!signedUrlError) {
+              signedPhotoUrl = signedUrlData?.signedUrl ?? '';
+            }
+          }
+        }
+        setBoatDetails({
+          id: boatData.id.toString(),
+          name: boatData.name || 'N/A',
+          type: boatData.type || 'N/A',
+          manufacturer: boatData.constructeur || 'N/A',
+          model: boatData.modele || 'N/A',
+          constructionYear: boatData.annee_construction ? new Date(boatData.annee_construction).getFullYear().toString() : 'N/A',
+          engine: boatData.type_moteur || 'N/A',
+          engineHours: boatData.temps_moteur || 'N/A',
+          length: boatData.longueur || 'N/A',
+          homePort: boatData.ports?.name || 'N/A',
+          photo: signedPhotoUrl ||
+            boatData.image ||
+            'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+          place_de_port: boatData.place_de_port || 'N/A',
+        });
 
-      setDocuments(prev => [...prev, newDocument]);
-      setShowAddDocumentModal(false);
-      
-      Alert.alert('Succès', 'Document ajouté avec succès');
-    } catch (error) {
-      console.error('Error picking document:', error);
-      Alert.alert('Erreur', 'Une erreur est survenue lors de la sélection du document.');
+        // Fetch inventory items
+        const { data: inventoryData, error: inventoryError } = await supabase
+          .from('boat_inventory')
+          .select('id, name, category, description, brand, model, serial_number, purchase_date, notes')
+          .eq('boat_id', id);
+
+        if (inventoryError) {
+          console.error('Error fetching inventory:', inventoryError);
+        } else {
+          setInventory(inventoryData.map(item => ({
+            id: item.id.toString(),
+            name: item.name,
+            category: item.category || 'Général',
+            description: item.description,
+            brand: item.brand || undefined,
+            model: item.model || undefined,
+            serial_number: item.serial_number || undefined,
+            purchase_date: item.purchase_date || undefined,
+            notes: item.notes || undefined,
+          })));
+        }
+
+        // Fetch user documents
+        const { data: documentsData, error: documentsError } = await supabase
+          .from('user_documents')
+          .select('id, name, type, date, file_url')
+          .eq('id_boat', id);
+
+        if (documentsError) {
+          console.error('Error fetching documents:', documentsError);
+        } else {
+          setDocuments(documentsData.map(doc => ({
+            id: doc.id.toString(),
+            name: doc.name,
+            type: doc.type,
+            date: doc.date,
+            file_url: doc.file_url,
+          })));
+        }
+
+        // Fetch technical records
+        const { data: technicalRecordsData, error: technicalRecordsError } = await supabase
+          .from('boat_technical_records')
+          .select('id, title, description, date, performed_by')
+          .eq('boat_id', id);
+
+        if (technicalRecordsError) {
+          console.error('Error fetching technical records:', technicalRecordsError);
+        } else {
+          setTechnicalRecords(technicalRecordsData.map(record => ({
+            id: record.id.toString(),
+            title: record.title,
+            description: record.description,
+            date: record.date,
+            performedBy: record.performed_by,
+          })));
+        }
+
+        // Fetch usage type
+        const { data: usageTypeData, error: usageTypeError } = await supabase
+          .from('boat_usage_types')
+          .select('*')
+          .eq('boat_id', id)
+          .single();
+
+        if (usageTypeError && usageTypeError.code !== 'PGRST116') { // PGRST116 means no rows found
+          console.error('Error fetching usage type:', usageTypeError);
+        } else if (usageTypeData) {
+          setUsageType({
+            legalNature: usageTypeData.legal_nature,
+            ownershipStatus: usageTypeData.ownership_status,
+            leaseType: usageTypeData.lease_type || undefined,
+            leaseEndDate: usageTypeData.lease_end_date || undefined,
+            usagePurposes: usageTypeData.usage_purposes || {
+              leisure: false, fishing: false, cruising: false, charter: false,
+              competition: false, permanentHousing: false, other: false
+            },
+            otherDescription: usageTypeData.other_description || undefined,
+          });
+          setLeaseType(usageTypeData.lease_type || '');
+          setLeaseEndDate(usageTypeData.lease_end_date || '');
+          setOtherUsageDescription(usageTypeData.other_description || '');
+        }
+
+      } else {
+        setFetchError('Bateau non trouvé.');
+      }
+    } catch (e) {
+      console.error('Unexpected error fetching boat data:', e);
+      setFetchError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
+  }, [id, user]); // Re-fetch if user changes (e.g., permissions)
+
+  // Use useFocusEffect to re-fetch data when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchBoatData();
+      // No cleanup needed for this effect, as it's just fetching data
+    }, [fetchBoatData]) // Dependency: fetchBoatData (which is memoized)
+  );
+
+  const handleEditBoat = () => {
+    router.push(`/boats/edit/${id}`);
+  };
+
+  const handleAddDocument = () => {
+    router.push(`/boats/document/new?boatId=${id}`);
   };
 
   const handleAddTechnicalRecord = () => {
     router.push(`/boats/technical/new?boatId=${id}`);
   };
 
-
-  
   const handleAddInventoryItem = () => {
     router.push(`/boats/inventory/new?boatId=${id}`);
   };
@@ -697,7 +672,7 @@ export default function BoatProfileScreen() {
     router.push(`/boats/inventory?boatId=${id}`);
   };
 
-  const handleViewDocument = (document: Document) => {
+  const handleViewDocument = (document: UserDocument) => {
     router.push(`/boats/document/${document.id}?boatId=${id}`);
   };
 
@@ -708,45 +683,32 @@ export default function BoatProfileScreen() {
   const handleViewInventoryItem = (item: InventoryItem) => {
     router.push(`/boats/inventory/${item.id}?boatId=${id}`);
   };
-  
-  const handleToggleUsagePurpose = useCallback((purpose: keyof UsageType['usagePurposes']) => {
-    setUsageType(prev => ({
-      ...prev,
-      usagePurposes: {
-        ...prev.usagePurposes,
-        [purpose]: !prev.usagePurposes[purpose]
-      }
-    }));
-  }, [setUsageType]);
-  
-  const handleSaveUsageType = useCallback(() => {
-    // Create updated usage type with all fields
-    const updatedUsageType: UsageType = {
-      ...usageType,
-      leaseType: usageType.ownershipStatus === 'financial_lease' ? leaseType : undefined,
-      leaseEndDate: usageType.ownershipStatus === 'financial_lease' ? leaseEndDate : undefined,
-      usagePurposes: {
-        ...usageType.usagePurposes,
-        otherDescription: usageType.usagePurposes.other ? otherUsageDescription : undefined
-      }
-    };
-    
-    // In a real app, you would save this to your backend
-    console.log('Saving usage type:', updatedUsageType);
-    
-    // Update the mock data for this example
-    if (id && typeof id === 'string') {
-      mockUsageTypes[id] = updatedUsageType;
-    }
-    
-    Alert.alert('Succès', 'Les informations d\'utilisation ont été enregistrées avec succès');
-  }, [usageType, leaseType, leaseEndDate, otherUsageDescription, id]);
 
-  if (!id || typeof id !== 'string' || !boatDetails) {
+  if (loading) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Chargement...</Text>
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0066CC" />
+          <Text style={styles.loadingText}>Chargement des données du bateau...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (fetchError || !boatDetails) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -755,8 +717,8 @@ export default function BoatProfileScreen() {
           <Text style={styles.title}>Bateau non trouvé</Text>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Ce bateau n'existe pas.</Text>
-          <TouchableOpacity 
+          <Text style={styles.errorText}>{fetchError || 'Ce bateau n\'existe pas ou vous n\'avez pas les permissions pour le voir.'}</Text>
+          <TouchableOpacity
             style={styles.errorButton}
             onPress={() => router.back()}
           >
@@ -767,397 +729,264 @@ export default function BoatProfileScreen() {
     );
   }
 
-  const AddDocumentModal = () => (
-    <Modal
-      visible={showAddDocumentModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowAddDocumentModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Ajouter un document</Text>
-          
-          <TouchableOpacity style={styles.modalOption} onPress={handleAddDocument}>
-            <FileText size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Sélectionner un document</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.modalCancelButton}
-            onPress={() => setShowAddDocumentModal(false)}
-          >
-            <Text style={styles.modalCancelText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const AddTechnicalRecordModal = () => (
-    <Modal
-      visible={showAddTechnicalRecordModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowAddTechnicalRecordModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Ajouter une intervention</Text>
-          
-          <TouchableOpacity style={styles.modalOption} onPress={handleAddTechnicalRecord}>
-            <Tool size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Nouvelle intervention</Text>
-          </TouchableOpacity>
-
-
-          <TouchableOpacity 
-            style={styles.modalCancelButton}
-            onPress={() => setShowAddTechnicalRecordModal(false)}
-          >
-            <Text style={styles.modalCancelText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const AddInventoryItemModal = () => (
-    <Modal
-      visible={showAddInventoryItemModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowAddInventoryItemModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Ajouter un équipement</Text>
-          
-          <TouchableOpacity style={styles.modalOption} onPress={handleAddInventoryItem}>
-            <Plus size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Nouvel équipement</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.modalOption} onPress={handleOpenInventory}>
-            <Clipboard size={24} color="#0066CC" />
-            <Text style={styles.modalOptionText}>Inventaire complet</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.modalCancelButton}
-            onPress={() => setShowAddInventoryItemModal(false)}
-          >
-            <Text style={styles.modalCancelText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const GeneralInfoTab = () => (
-    <View style={styles.tabContent}>
-      <View style={styles.infoSection}>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Nom</Text>
-          <Text style={styles.infoValue}>{boatDetails.name}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Type</Text>
-          <Text style={styles.infoValue}>{boatDetails.type}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Constructeur</Text>
-          <Text style={styles.infoValue}>{boatDetails.manufacturer}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Modèle</Text>
-          <Text style={styles.infoValue}>{boatDetails.model}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Année de construction</Text>
-          <Text style={styles.infoValue}>{boatDetails.constructionYear}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Moteur</Text>
-          <Text style={styles.infoValue}>{boatDetails.engine}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Heures moteur</Text>
-          <Text style={styles.infoValue}>{boatDetails.engineHours}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Longueur</Text>
-          <Text style={styles.infoValue}>{boatDetails.length}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Port d'attache</Text>
-          <Text style={styles.infoValue}>{boatDetails.homePort}</Text>
-        </View>
-      </View>
-    </View>
-  );
-
-  const DocumentsTab = () => (
-    <View style={styles.tabContent}>
-      <TouchableOpacity 
-        style={styles.addButton}
-        onPress={() => setShowAddDocumentModal(true)}
-      >
-        <Plus size={20} color="#0066CC" />
-        <Text style={styles.addButtonText}>Ajouter un document</Text>
-      </TouchableOpacity>
-
-      {documents.length > 0 ? (
-        <View style={styles.documentsList}>
-          {documents.map((document) => (
-            <TouchableOpacity 
-              key={document.id} 
-              style={styles.documentCard}
-              onPress={() => handleViewDocument(document)}
-            >
-              <View style={styles.documentIcon}>
-                <FileText size={24} color="#0066CC" />
-              </View>
-              <View style={styles.documentInfo}>
-                <Text style={styles.documentName}>{document.name}</Text>
-                <Text style={styles.documentDate}>{document.date}</Text>
-              </View>
-              <TouchableOpacity style={styles.documentAction}>
-                <Download size={20} color="#0066CC" />
-              </TouchableOpacity>
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <FileText size={48} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>Aucun document</Text>
-          <Text style={styles.emptyStateText}>
-            Ajoutez vos documents administratifs comme l'acte de francisation, l'assurance, etc.
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-
-  const TechnicalRecordsTab = () => (
-    <View style={styles.tabContent}>
-      <TouchableOpacity 
-        style={styles.addButton}
-        onPress={() => setShowAddTechnicalRecordModal(true)}
-      >
-        <Plus size={20} color="#0066CC" />
-        <Text style={styles.addButtonText}>Ajouter une intervention</Text>
-      </TouchableOpacity>
-
-      {technicalRecords.length > 0 ? (
-        <View style={styles.recordsList}>
-          {technicalRecords.map((record) => (
-            <TouchableOpacity 
-              key={record.id} 
-              style={styles.recordCard}
-              onPress={() => handleViewTechnicalRecord(record)}
-            >
-              <View style={styles.recordHeader}>
-                <View style={styles.recordTitleContainer}>
-                  <Tool size={20} color="#0066CC" />
-                  <Text style={styles.recordTitle}>{record.title}</Text>
-                </View>
-                <Text style={styles.recordDate}>{record.date}</Text>
-              </View>
-              <Text style={styles.recordDescription} numberOfLines={2}>
-                {record.description}
-              </Text>
-              <View style={styles.recordFooter}>
-                <Text style={styles.recordPerformedBy}>
-                  Réalisé par: {record.performedBy}
-                </Text>
-                {record.documents && record.documents.length > 0 && (
-                  <View style={styles.recordDocuments}>
-                    <FileText size={16} color="#666" />
-                    <Text style={styles.recordDocumentsText}>
-                      {record.documents.length} document{record.documents.length > 1 ? 's' : ''}
-                    </Text>
-                  </View>
-                )}
-              </View>
-              <ChevronRight size={20} color="#0066CC" style={styles.recordChevron} />
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Tool size={48} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>Aucune intervention</Text>
-          <Text style={styles.emptyStateText}>
-            Ajoutez les interventions techniques réalisées sur votre bateau
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-
-  const InventoryTab = () => (
-    <View style={styles.tabContent}>
-      <View style={styles.inventoryActions}>
-        <TouchableOpacity 
-          style={styles.addButton}
-          onPress={() => setShowAddInventoryItemModal(true)}
-        >
-          <Plus size={20} color="#0066CC" />
-          <Text style={styles.addButtonText}>Ajouter un équipement</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.checklistButton}
-          onPress={handleOpenInventory}
-        >
-          <Clipboard size={20} color="#0066CC" />
-          <Text style={styles.checklistButtonText}>Inventaire complet</Text>
-        </TouchableOpacity>
-      </View>
-
-      {inventory.length > 0 ? (
-        <View style={styles.inventoryList}>
-          {inventory.map((item) => (
-            <TouchableOpacity 
-              key={item.id} 
-              style={styles.inventoryCard}
-              onPress={() => handleViewInventoryItem(item)}
-            >
-              <View style={styles.inventoryHeader}>
-                <View style={styles.inventoryCategoryBadge}>
-                  <Text style={styles.inventoryCategoryText}>{item.category}</Text>
-                </View>
-                {item.purchaseDate && (
-                  <Text style={styles.inventoryDate}>{item.purchaseDate}</Text>
-                )}
-              </View>
-              <Text style={styles.inventoryName}>{item.name}</Text>
-              {(item.brand || item.model) && (
-                <Text style={styles.inventoryDetails}>
-                  {item.brand}{item.brand && item.model ? ' - ' : ''}{item.model}
-                </Text>
-              )}
-              {item.serialNumber && (
-                <View style={styles.inventorySerialNumber}>
-                  <Text style={styles.inventorySerialNumberText}>
-                    S/N: {item.serialNumber}
-                  </Text>
-                </View>
-              )}
-              <ChevronRight size={20} color="#0066CC" style={styles.inventoryChevron} />
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Clipboard size={48} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>Aucun équipement</Text>
-          <Text style={styles.emptyStateText}>
-            Ajoutez les équipements présents sur votre bateau
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-  
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
           <ArrowLeft size={24} color="#1a1a1a" />
         </TouchableOpacity>
         <Text style={styles.title}>{boatDetails.name}</Text>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.editButton}
           onPress={handleEditBoat}
         >
-          <Text style={styles.editButtonText}>Modifier</Text>
+          <Edit size={24} color="#0066CC" />
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.photoContainer}>
-          <Image 
-            source={{ uri: boatDetails.photo }}
-            style={styles.photoPreview}
-          />
-          <View style={styles.boatTypeOverlay}>
-            <Text style={styles.boatTypeText}>{boatDetails.type}</Text>
+      <Image
+    source={{ uri: boatDetails.photo }}
+    style={styles.boatImage}
+    resizeMode="cover"
+  />
+
+      <View style={styles.tabs}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'general' && styles.activeTab]}
+          onPress={() => setActiveTab('general')}
+        >
+          <Text style={[styles.tabText, activeTab === 'general' && styles.activeTabText]}>
+            Informations Générales
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'documents' && styles.activeTab]}
+          onPress={() => setActiveTab('documents')}
+        >
+          <Text style={[styles.tabText, activeTab === 'documents' && styles.activeTabText]}>
+            Documents Administratifs
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'technical' && styles.activeTab]}
+          onPress={() => setActiveTab('technical')}
+        >
+          <Text style={[styles.tabText, activeTab === 'technical' && styles.activeTabText]}>
+            Carnet de suivi technique
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'inventory' && styles.activeTab]}
+          onPress={() => setActiveTab('inventory')}
+        >
+          <Text style={[styles.tabText, activeTab === 'inventory' && styles.activeTabText]}>
+            Inventaire du bateau
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'usage' && styles.activeTab]}
+          onPress={() => setActiveTab('usage')}
+        >
+          <Text style={[styles.tabText, activeTab === 'usage' && styles.activeTabText]}>
+            Type d'utilisation
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {activeTab === 'general' && (
+        <View style={styles.tabContent}>
+          <View style={styles.infoSection}>
+            <View style={styles.infoRow}>
+              <Ship size={20} color="#666" />
+              <Text style={styles.infoLabel}>Type:</Text>
+              <Text style={styles.infoValue}>{boatDetails.type}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Tag size={20} color="#666" />
+              <Text style={styles.infoLabel}>Constructeur:</Text>
+              <Text style={styles.infoValue}>{boatDetails.manufacturer}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Info size={20} color="#666" />
+              <Text style={styles.infoLabel}>Modèle:</Text>
+              <Text style={styles.infoValue}>{boatDetails.model}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Calendar size={20} color="#666" />
+              <Text style={styles.infoLabel}>Année de construction:</Text>
+              <Text style={styles.infoValue}>{boatDetails.constructionYear}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Settings size={20} color="#666" />
+              <Text style={styles.infoLabel}>Moteur:</Text>
+              <Text style={styles.infoValue}>{boatDetails.engine}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Clock size={20} color="#666" />
+              <Text style={styles.infoLabel}>Heures moteur:</Text>
+              <Text style={styles.infoValue}>{boatDetails.engineHours}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Wrench size={20} color="#666" />
+              <Text style={styles.infoLabel}>Longueur:</Text>
+              <Text style={styles.infoValue}>{boatDetails.length}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <MapPin size={20} color="#666" />
+              <Text style={styles.infoLabel}>Port d'attache:</Text>
+              <Text style={styles.infoValue}>{boatDetails.homePort}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <MapPin size={20} color="#666" />
+              <Text style={styles.infoLabel}>Place de port:</Text>
+              <Text style={styles.infoValue}>{boatDetails.place_de_port}</Text>
+            </View>
           </View>
         </View>
+      )}
 
-        <View style={styles.tabs}>
-          <TouchableOpacity 
-            style={[styles.tab, activeTab === 'general' && styles.activeTab]}
-            onPress={() => setActiveTab('general')}
-          >
-            <Text style={[styles.tabText, activeTab === 'general' && styles.activeTabText]}>
-              Informations Générales
-            </Text>
+      {activeTab === 'documents' && (
+        <View style={styles.tabContent}>
+          <TouchableOpacity style={styles.addButton} onPress={handleAddDocument}>
+            <Plus size={20} color="#0066CC" />
+            <Text style={styles.addButtonText}>Ajouter un document</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tab, activeTab === 'documents' && styles.activeTab]}
-            onPress={() => setActiveTab('documents')}
-          >
-            <Text style={[styles.tabText, activeTab === 'documents' && styles.activeTabText]}>
-              Documents Administratifs
-            </Text>
+
+          {documents.length > 0 ? (
+            <View style={styles.documentsList}>
+              {documents.map((doc) => (
+                <TouchableOpacity key={doc.id} style={styles.documentCard} onPress={() => handleViewDocument(doc)}>
+                  <View style={styles.documentIcon}>
+                    <FileText size={24} color="#0066CC" />
+                  </View>
+                  <View style={styles.documentInfo}>
+                    <Text style={styles.documentName}>{doc.name}</Text>
+                    <Text style={styles.documentDate}>{doc.date}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.documentAction}>
+                    <Download size={20} color="#0066CC" />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <FileText size={48} color="#ccc" />
+              <Text style={styles.emptyStateTitle}>Aucun document</Text>
+              <Text style={styles.emptyStateText}>
+                Ajoutez vos documents administratifs comme l'acte de francisation, l'assurance, etc.
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {activeTab === 'technical' && (
+        <View style={styles.tabContent}>
+          <TouchableOpacity style={styles.addButton} onPress={handleAddTechnicalRecord}>
+            <Plus size={20} color="#0066CC" />
+            <Text style={styles.addButtonText}>Ajouter une intervention</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tab, activeTab === 'technical' && styles.activeTab]}
-            onPress={() => setActiveTab('technical')}
-          >
-            <Text style={[styles.tabText, activeTab === 'technical' && styles.activeTabText]}>
-              Carnet de suivi technique
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tab, activeTab === 'inventory' && styles.activeTab]}
-            onPress={() => setActiveTab('inventory')}
-          >
-            <Text style={[styles.tabText, activeTab === 'inventory' && styles.activeTabText]}>
-              Inventaire du bateau
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.tab, activeTab === 'usage' && styles.activeTab]}
-            onPress={() => setActiveTab('usage')}
-          >
-            <Text style={[styles.tabText, activeTab === 'usage' && styles.activeTabText]}>
-              Type d'utilisation
-            </Text>
-          </TouchableOpacity>
+
+          {technicalRecords.length > 0 ? (
+            <View style={styles.recordsList}>
+              {technicalRecords.map((record) => (
+                <TouchableOpacity key={record.id} style={styles.recordCard} onPress={() => handleViewTechnicalRecord(record)}>
+                  <View style={styles.recordIcon}>
+                    <Tool size={24} color="#0066CC" />
+                  </View>
+                  <View style={styles.recordInfo}>
+                    <Text style={styles.recordTitle}>{record.title}</Text>
+                    <Text style={styles.recordSubtitle}>{record.date} - {record.performedBy}</Text>
+                  </View>
+                  <ChevronRight size={20} color="#0066CC" style={styles.recordChevron} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Tool size={48} color="#ccc" />
+              <Text style={styles.emptyStateTitle}>Aucune intervention</Text>
+              <Text style={styles.emptyStateText}>
+                Ajoutez les interventions techniques réalisées sur votre bateau
+              </Text>
+            </View>
+          )}
         </View>
 
-        {activeTab === 'general' && <GeneralInfoTab />}
-        {activeTab === 'documents' && <DocumentsTab />}
-        {activeTab === 'technical' && <TechnicalRecordsTab />}
-        {activeTab === 'inventory' && <InventoryTab />}
-        {activeTab === 'usage' && (
-          <UsageTypeTab
-            usageType={usageType}
-            setUsageType={setUsageType}
-            leaseType={leaseType}
-            setLeaseType={setLeaseType}
-            leaseEndDate={leaseEndDate}
-            setLeaseEndDate={setLeaseEndDate}
-            otherUsageDescription={otherUsageDescription}
-            setOtherUsageDescription={setOtherUsageDescription}
-            handleToggleUsagePurpose={handleToggleUsagePurpose}
-            handleSaveUsageType={handleSaveUsageType}
-          />
-        )}
-      </ScrollView>
+      )}
 
-      <AddDocumentModal />
-      <AddTechnicalRecordModal />
-      <AddInventoryItemModal />
-    </View>
+      {activeTab === 'inventory' && (
+        <View style={styles.tabContent}>
+          <View style={styles.inventoryActions}>
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={handleAddInventoryItem}
+            >
+              <Plus size={20} color="#0066CC" />
+              <Text style={styles.addButtonText}>Ajouter un équipement</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.checklistButton}
+              onPress={handleOpenInventory}
+            >
+              <ClipboardList size={20} color="#0066CC" />
+              <Text style={styles.checklistButtonText}>Inventaire complet</Text>
+            </TouchableOpacity>
+          </View>
+
+          {inventory.length > 0 ? (
+            <View style={styles.inventoryList}>
+              {inventory.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.inventoryCard}
+                  onPress={() => handleViewInventoryItem(item)}
+                >
+                  <View style={styles.inventoryIcon}>
+                    <ClipboardList size={24} color="#0066CC" />
+                  </View>
+                  <View style={styles.inventoryInfo}>
+                    <Text style={styles.inventoryName}>{item.name}</Text>
+                    <Text style={styles.inventoryDetails}>
+                      {item.brand}{item.brand && item.model ? ' - ' : ''}{item.model}
+                    </Text>
+                  </View>
+                  <ChevronRight size={20} color="#0066CC" style={styles.inventoryChevron} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <ClipboardList size={48} color="#ccc" />
+              <Text style={styles.emptyStateTitle}>Aucun équipement</Text>
+              <Text style={styles.emptyStateText}>
+                Ajoutez les équipements présents sur votre bateau
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {activeTab === 'usage' && (
+        <UsageTypeTab
+          boatId={id}
+          usageType={usageType}
+          setUsageType={setUsageType}
+          leaseType={leaseType}
+          setLeaseType={setLeaseType}
+          leaseEndDate={leaseEndDate}
+          setLeaseEndDate={setLeaseEndDate}
+          otherUsageDescription={otherUsageDescription}
+          setOtherUsageDescription={setOtherUsageDescription}
+        />
+      )}
+    </ScrollView>
+
   );
 }
 
@@ -1169,7 +998,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
@@ -1188,11 +1016,14 @@ const styles = StyleSheet.create({
   },
   editButton: {
     padding: 8,
+    borderRadius: 16,
+    backgroundColor: '#f5f6fa',
+    marginLeft: 12,
   },
   editButtonText: {
-    fontSize: 16,
     color: '#0066CC',
-    fontWeight: '500',
+    fontWeight: '600',
+    fontSize: 16,
   },
   scrollView: {
     flex: 1,
@@ -1462,26 +1293,17 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  inventoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  inventoryCategoryBadge: {
+  inventoryIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#f0f7ff',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
   },
-  inventoryCategoryText: {
-    fontSize: 12,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  inventoryDate: {
-    fontSize: 12,
-    color: '#666',
+  inventoryInfo: {
+    flex: 1,
   },
   inventoryName: {
     fontSize: 16,
@@ -1569,10 +1391,18 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
+    marginBottom: 12,
   },
   modalOptionText: {
     fontSize: 16,
     color: '#1a1a1a',
+  },
+  deleteOption: {
+    backgroundColor: '#fff5f5',
+  },
+  deleteOptionText: {
+    fontSize: 16,
+    color: '#ff4444',
   },
   modalCancelButton: {
     padding: 16,
@@ -1766,10 +1596,31 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  boatImage: {
+  width: '90%',
+  height: 210,
+  borderRadius: 20,
+  alignSelf: 'center',
+  marginVertical: 14,
+  backgroundColor: '#e5eaf0',
+  ...Platform.select({
+    ios: {
+      shadowColor: '#0066CC',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.12,
+      shadowRadius: 12,
+    },
+    android: {
+      elevation: 6,
+    },
+    web: {
+      boxShadow: '0 6px 20px rgba(0, 102, 204, 0.08)',
+    },
+  }),
+},
   saveUsageButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
 });
-

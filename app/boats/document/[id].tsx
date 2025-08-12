@@ -1,55 +1,18 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Calendar, FileText, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
-interface Document {
-  id: string;
+interface DocumentForm {
+  id?: string; // Optional for new documents
   name: string;
-  type: string;
-  date: string;
-  file: string;
+  type: string; // e.g., 'administrative', 'technical', 'invoice'
+  date: string; // YYYY-MM-DD
+  file_url: string; // URL of the file in Supabase Storage
+  id_boat: string; // Foreign key to the boat
 }
-
-// Sample documents
-const mockDocuments: Record<string, Document> = {
-  'd1': {
-    id: 'd1',
-    name: 'Acte de francisation',
-    type: 'administrative',
-    date: '2020-05-15',
-    file: 'acte_francisation.pdf'
-  },
-  'd2': {
-    id: 'd2',
-    name: 'Assurance',
-    type: 'administrative',
-    date: '2024-01-10',
-    file: 'assurance_2024.pdf'
-  },
-  'd3': {
-    id: 'd3',
-    name: 'Place de port',
-    type: 'administrative',
-    date: '2024-01-05',
-    file: 'place_port_2024.pdf'
-  },
-  'd4': {
-    id: 'd4',
-    name: 'Acte de francisation',
-    type: 'administrative',
-    date: '2022-03-20',
-    file: 'acte_francisation.pdf'
-  },
-  'd5': {
-    id: 'd5',
-    name: 'Assurance',
-    type: 'administrative',
-    date: '2024-01-15',
-    file: 'assurance_2024.pdf'
-  }
-};
 
 const documentTypes = [
   'Acte de francisation',
@@ -63,123 +26,352 @@ const documentTypes = [
 ];
 
 export default function DocumentScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const isNewDocument = id === 'new';
-  const [form, setForm] = useState<Document>({
-    id: '',
+
+  const [form, setForm] = useState<DocumentForm>({
     name: '',
     type: 'administrative',
-    date: '',
-    file: '',
+    date: new Date().toISOString().split('T')[0], // Default to today
+    file_url: '',
+    id_boat: boatId || '', // Ensure boatId is passed via URL params
   });
-  const [errors, setErrors] = useState<Partial<Record<keyof Document, string>>>({});
-  const [selectedFile, setSelectedFile] = useState<{ name: string; uri: string } | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<keyof DocumentForm, string>>>({});
+  const [selectedFile, setSelectedFile] = useState<{ name: string; uri: string; type: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isNewDocument && typeof id === 'string' && mockDocuments[id]) {
-      setForm(mockDocuments[id]);
-    } else if (isNewDocument) {
-      const today = new Date().toISOString().split('T')[0];
-      setForm({
-        id: `d${Date.now()}`,
-        name: '',
-        type: 'administrative',
-        date: today,
-        file: '',
-      });
+    if (!boatId) {
+      setFetchError('ID du bateau manquant. Impossible de charger ou d\'ajouter un document.');
+      setLoading(false);
+      return;
     }
-  }, [id, isNewDocument]);
+
+    if (!isNewDocument && typeof id === 'string') {
+      const fetchDocument = async () => {
+        setLoading(true);
+        setFetchError(null);
+        try {
+          const { data, error } = await supabase
+            .from('user_documents')
+            .select('*')
+            .eq('id', id)
+            .eq('id_boat', boatId)
+            .single();
+
+          if (error) {
+            if (error.code === 'PGRST116') { // No rows found
+              setFetchError('Document non trouvé.');
+            } else {
+              console.error('Error fetching document:', error);
+              setFetchError('Erreur lors du chargement du document.');
+            }
+            setLoading(false);
+            return;
+          }
+
+          if (data) {
+            setForm({
+              id: data.id.toString(),
+              name: data.name,
+              type: data.type,
+              date: data.date,
+              file_url: data.file_url,
+              id_boat: data.id_boat.toString(),
+            });
+            setSelectedFile({ name: data.name, uri: data.file_url, type: data.type }); // Pre-fill selectedFile for display
+          } else {
+            setFetchError('Document non trouvé.');
+          }
+        } catch (e) {
+          console.error('Unexpected error fetching document:', e);
+          setFetchError('Une erreur inattendue est survenue.');
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchDocument();
+    } else {
+      setLoading(false);
+    }
+  }, [id, boatId, isNewDocument]);
 
   const handleChooseDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
+        type: ['application/pdf', 'image/*'], // Allow PDF and image files
         copyToCacheDirectory: true,
       });
 
-      if (result.canceled) {
+      if (result.canceled || !result.assets || result.assets.length === 0) {
         return;
       }
 
+      const file = result.assets[0];
       setSelectedFile({
-        name: result.assets[0].name,
-        uri: result.assets[0].uri,
+        name: file.name,
+        uri: file.uri,
+        type: file.mimeType || 'application/octet-stream',
       });
-      
-      // If no name is set yet, use the file name
+
+      // If no name is set yet, use the file name (without extension)
       if (!form.name) {
-        setForm(prev => ({ 
-          ...prev, 
-          name: result.assets[0].name.split('.')[0],
-          file: result.assets[0].uri
-        }));
-      } else {
-        setForm(prev => ({ 
-          ...prev, 
-          file: result.assets[0].uri
+        setForm(prev => ({
+          ...prev,
+          name: file.name.split('.').slice(0, -1).join('.'), // Remove extension
         }));
       }
-      
-      if (errors.file) {
-        setErrors(prev => ({ ...prev, file: undefined }));
+
+      // Clear file error if it was present
+      if (errors.file_url) {
+        setErrors(prev => ({ ...prev, file_url: undefined }));
       }
     } catch (error) {
       console.error('Error picking document:', error);
-      alert('Une erreur est survenue lors de la sélection du document');
+      Alert.alert('Erreur', 'Une erreur est survenue lors de la sélection du document.');
     }
   };
 
   const validateForm = () => {
-    const newErrors: Partial<Record<keyof Document, string>> = {};
-    
+    const newErrors: Partial<Record<keyof DocumentForm, string>> = {};
+
     if (!form.name.trim()) newErrors.name = 'Le nom est requis';
     if (!form.date.trim()) newErrors.date = 'La date est requise';
-    if (!form.file && !selectedFile) newErrors.file = 'Le document est requis';
-    
+    if (!selectedFile && !form.file_url) newErrors.file_url = 'Le document est requis';
+    if (!form.id_boat) newErrors.id_boat = 'L\'ID du bateau est manquant.'; // Should not happen if boatId is passed
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (validateForm()) {
-      // Here you would typically save the document
-      // For now, we'll just show a success message and navigate back
-      const message = isNewDocument 
-        ? 'Le document a été ajouté avec succès'
-        : 'Le document a été mis à jour avec succès';
-      
-      // Get the boat ID from the URL or context
-      const boatId = '1'; // This would come from the route or context in a real app
-      
-      // Show success message and navigate back to the boat profile
-      alert(message);
-      router.push(`/boats/${boatId}`);
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return;
+    }
+
+    setLoading(true);
+    setFetchError(null);
+
+    let newFileUrl = form.file_url; // Start with existing URL
+
+    try {
+      // 1. Handle file upload if a new file was selected
+      if (selectedFile && selectedFile.uri !== form.file_url) { // Check if a new file was actually selected
+        // Delete old file from storage if it exists and is different
+        if (form.file_url && form.file_url.includes(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl)) {
+          const oldFilePath = form.file_url.split(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl + '/')[1];
+          if (oldFilePath) {
+            const { error: deleteError } = await supabase.storage
+              .from('user.documents')
+              .remove([oldFilePath]);
+            if (deleteError) {
+              console.warn('Error deleting old file from storage:', deleteError);
+              // Continue even if old file deletion fails, as new file is more important
+            }
+          }
+        }
+
+        const fileExtension = selectedFile.name.split('.').pop();
+        const filePath = `user_documents/${form.id_boat}/${Date.now()}.${fileExtension}`;
+        const response = await fetch(selectedFile.uri);
+        const blob = await response.blob();
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('user.documents')
+          .upload(filePath, blob, {
+            contentType: selectedFile.type,
+            upsert: true,
+          });
+
+        if (uploadError) {
+          console.error('Error uploading file:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
+          setLoading(false);
+          return;
+        }
+        newFileUrl = supabase.storage.from('user.documents').getPublicUrl(uploadData.path).data.publicUrl;
+      }
+
+      // 2. Perform database operation
+      if (isNewDocument) {
+        const { data, error } = await supabase
+          .from('user_documents')
+          .insert({
+            name: form.name,
+            type: form.type,
+            date: form.date,
+            file_url: newFileUrl,
+            id_boat: parseInt(form.id_boat),
+          })
+          .select('id')
+          .single();
+
+        if (error) {
+          console.error('Error inserting document:', error);
+          Alert.alert('Erreur', `Échec de l'ajout du document: ${error.message}`);
+        } else {
+          Alert.alert(
+            'Succès',
+            'Le document a été ajouté avec succès.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.push(`/boats/${form.id_boat}`)
+              }
+            ]
+          );
+        }
+      } else {
+        const { error } = await supabase
+          .from('user_documents')
+          .update({
+            name: form.name,
+            type: form.type,
+            date: form.date,
+            file_url: newFileUrl,
+          })
+          .eq('id', id)
+          .eq('id_boat', form.id_boat);
+
+        if (error) {
+          console.error('Error updating document:', error);
+          Alert.alert('Erreur', `Échec de la mise à jour du document: ${error.message}`);
+        } else {
+          Alert.alert(
+            'Succès',
+            'Le document a été mis à jour avec succès.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.push(`/boats/${form.id_boat}`)
+              }
+            ]
+          );
+        }
+      }
+    } catch (e) {
+      console.error('Unexpected error during submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleDelete = () => {
-    // Here you would typically delete the document
-    // For now, we'll just show a success message and navigate back
-    
-    // Get the boat ID from the URL or context
-    const boatId = '1'; // This would come from the route or context in a real app
-    
-    // Show confirmation dialog
-    if (Platform.OS === 'web') {
-      if (window.confirm('Êtes-vous sûr de vouloir supprimer ce document ?')) {
-        alert('Le document a été supprimé avec succès');
-        router.push(`/boats/${boatId}`);
-      }
-    } else {
-      alert('Le document a été supprimé avec succès');
-      router.push(`/boats/${boatId}`);
-    }
+  const handleDelete = async () => {
+    Alert.alert(
+      'Supprimer le document',
+      'Êtes-vous sûr de vouloir supprimer ce document ? Cette action est irréversible.',
+      [
+        {
+          text: 'Annuler',
+          style: 'cancel',
+        },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            setFetchError(null);
+            try {
+              // 1. Delete file from storage
+              if (form.file_url && form.file_url.includes(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl)) {
+                const filePath = form.file_url.split(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl + '/')[1];
+                if (filePath) {
+                  const { error: deleteFileError } = await supabase.storage
+                    .from('user.documents')
+                    .remove([filePath]);
+                  if (deleteFileError) {
+                    console.warn('Error deleting file from storage:', deleteFileError);
+                    // Continue even if file deletion fails, as DB record is primary
+                  }
+                }
+              }
+
+              // 2. Delete record from database
+              const { error: deleteRecordError } = await supabase
+                .from('user_documents')
+                .delete()
+                .eq('id', id)
+                .eq('id_boat', form.id_boat);
+
+              if (deleteRecordError) {
+                console.error('Error deleting document record:', deleteRecordError);
+                Alert.alert('Erreur', `Échec de la suppression du document: ${deleteRecordError.message}`);
+              } else {
+                Alert.alert(
+                  'Succès',
+                  'Le document a été supprimé avec succès.',
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => router.push(`/boats/${form.id_boat}`)
+                    }
+                  ]
+                );
+              }
+            } catch (e) {
+              console.error('Unexpected error during deletion:', e);
+              Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la suppression.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
+
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>
+            {isNewDocument ? 'Nouveau document' : 'Modifier le document'}
+          </Text>
+        </View>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Chargement...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Erreur</Text>
+        </View>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{fetchError}</Text>
+          <TouchableOpacity
+            style={styles.errorButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.errorButtonText}>Retour</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -191,16 +383,16 @@ export default function DocumentScreen() {
       </View>
 
       <View style={styles.form}>
-        <TouchableOpacity 
-          style={[styles.fileSelector, errors.file && styles.fileSelectorError]}
+        <TouchableOpacity
+          style={[styles.fileSelector, errors.file_url && styles.fileSelectorError]}
           onPress={handleChooseDocument}
         >
-          <Upload size={24} color={errors.file ? '#ff4444' : '#0066CC'} />
+          <Upload size={24} color={errors.file_url ? '#ff4444' : '#0066CC'} />
           <Text style={styles.fileSelectorText}>
             {selectedFile ? selectedFile.name : 'Sélectionner un document'}
           </Text>
         </TouchableOpacity>
-        {errors.file && <Text style={styles.errorText}>{errors.file}</Text>}
+        {errors.file_url && <Text style={styles.errorText}>{errors.file_url}</Text>}
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Nom du document</Text>
@@ -262,7 +454,7 @@ export default function DocumentScreen() {
           {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
         </View>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.submitButton}
           onPress={handleSubmit}
         >
@@ -272,7 +464,7 @@ export default function DocumentScreen() {
         </TouchableOpacity>
 
         {!isNewDocument && (
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.deleteButton}
             onPress={handleDelete}
           >
@@ -306,6 +498,39 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    gap: 16,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#ff4444',
+    textAlign: 'center',
+  },
+  errorButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  errorButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   form: {
     padding: 16,
     gap: 20,
@@ -315,8 +540,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f0f7ff',
-    borderRadius: 12,
     padding: 16,
+    borderRadius: 12,
     gap: 12,
     borderWidth: 1,
     borderColor: '#0066CC',
@@ -390,11 +615,6 @@ const styles = StyleSheet.create({
   documentTagTextSelected: {
     color: 'white',
     fontWeight: '500',
-  },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
-    marginLeft: 4,
   },
   submitButton: {
     backgroundColor: '#0066CC',
