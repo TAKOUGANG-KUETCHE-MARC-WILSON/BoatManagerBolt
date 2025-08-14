@@ -10,22 +10,49 @@ import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
 
 
-const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+const isHttpUrl = (v?: string) =>
+  !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+// Extrait { bucket, path } d’une URL Supabase (public ou sign)
+function extractBucketAndPathFromSupabaseUrl(url: string) {
+  const m = url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/([^?]+)/);
+  if (!m) return null;
+  const [, bucket, path] = m;
+  return { bucket, path };
+}
 
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return '';
-  // Si on a déjà une URL (signée ou publique), on la renvoie
-  if (isHttpUrl(value)) return value;
 
-  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const raw = `${value}`.trim();
+
+  // Si on te passe déjà une URL http(s)
+  if (isHttpUrl(raw)) {
+    // Si c’est une URL Supabase, on re-signe proprement
+    const bp = extractBucketAndPathFromSupabaseUrl(raw);
+    if (bp) {
+      const { data, error } = await supabase
+        .storage
+        .from(bp.bucket)
+        .createSignedUrl(bp.path, 60 * 60);
+      if (error || !data?.signedUrl) return '';
+      return data.signedUrl;
+    }
+    // URL externe classique → on la garde telle quelle
+    return raw;
+  }
+
+  // Sinon c’est un chemin de bucket (ex: "users/1/avatar.jpg")
+  const path = raw.replace(/^\/+/, '');
   const { data, error } = await supabase
     .storage
     .from('avatars')
-    .createSignedUrl(value, 60 * 60); // 1h
+    .createSignedUrl(path, 60 * 60);
 
   if (error || !data?.signedUrl) return '';
   return data.signedUrl;
 };
+
 
 // Helper to extract path from a public URL
 const pathFromPublicUrl = (url: string) => {
@@ -694,39 +721,43 @@ if (userData) {
 
         // 4. Ajouter l'emplacement (port) pour chaque BM
         const associatedBMsWithLocation = await Promise.all(
-          allBms.map(async (bm) => {
-            // Trouver le port le plus ancien associé à ce BM (pour l'affichage)
-            const { data: bmPortLink, error: bmPortLinkError } = await supabase
-              .from('user_ports')
-              .select('port_id')
-              .eq('user_id', bm.id)
-              .order('port_id', { ascending: true }) // Order by port_id as created_at is removed
-              .limit(1);
+  (allBms ?? []).map(async (bm) => {
+    // Trouve un port pour affichage (tu peux garder ta logique actuelle)
+    const { data: bmPortLink } = await supabase
+      .from('user_ports')
+      .select('port_id')
+      .eq('user_id', bm.id)
+      .order('port_id', { ascending: true })
+      .limit(1);
 
-            let portName = 'Port inconnu';
-            if (bmPortLink && bmPortLink.length > 0) {
-              const { data: portData, error: portError } = await supabase
-                .from('ports')
-                .select('name')
-                .eq('id', bmPortLink[0].port_id)
-                .single();
-              if (portData?.name) portName = portData.name;
-            }
+    let portName = 'Port inconnu';
+    if (bmPortLink && bmPortLink.length > 0) {
+      const { data: portData } = await supabase
+        .from('ports')
+        .select('name')
+        .eq('id', bmPortLink[0].port_id)
+        .single();
+      if (portData?.name) portName = portData.name;
+    }
 
-            return {
-              id: bm.id.toString(),
-              name: `${bm.first_name} ${bm.last_name}`,
-              email: bm.e_mail,
-              phone: bm.phone,
-              avatar: bm.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-              rating: bm.rating,
-              reviewCount: bm.review_count,
-              location: portName,
-            };
-          })
-        );
+    // 🔑 Signe l’avatar (qu’il soit chemin "users/..../avatar.jpg"
+    // ou URL Supabase déjà publique/signée)
+    const signed = await getSignedAvatarUrl(bm.avatar);
 
-        setAssociatedBoatManagers(associatedBMsWithLocation);
+    return {
+      id: bm.id.toString(),
+      name: `${bm.first_name} ${bm.last_name}`,
+      email: bm.e_mail,
+      phone: bm.phone,
+      avatar: signed || DEFAULT_AVATAR, // ← injecte une URL exploitable par <Image/>
+      rating: bm.rating,
+      reviewCount: bm.review_count,
+      location: portName,
+    };
+  })
+);
+
+setAssociatedBoatManagers(associatedBMsWithLocation);
         // --- End of Boat Manager selection logic ---
 
       } catch (e) {
@@ -1013,8 +1044,15 @@ const { error } = await supabase
             >
               <View style={styles.boatManagerHeader}>
                 <Image
-  source={{ uri: bm.avatar && bm.avatar.trim() !== '' ? bm.avatar : DEFAULT_AVATAR }}
+  source={{ uri: bm.avatar || DEFAULT_AVATAR }}
   style={styles.boatManagerAvatar}
+  onError={() => {
+    if (bm.avatar !== DEFAULT_AVATAR) {
+      setAssociatedBoatManagers(prev =>
+        prev.map(m => m.id === bm.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
+      );
+    }
+  }}
 />
                 <View style={styles.boatManagerInfo}>
                   <Text style={styles.boatManagerName}>{bm.name}</Text>
