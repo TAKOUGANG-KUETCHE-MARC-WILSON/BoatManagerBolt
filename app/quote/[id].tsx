@@ -5,7 +5,7 @@ import { generateQuotePDF } from '@/utils/pdf';
 import { useAuth } from '@/context/AuthContext';
 import { useState } from 'react';
 
-type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'invoiced' | 'paid';
+type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'invoiced' | 'paid' | 'pending'; // Added 'pending' for clarity
 type QuoteSource = 'boat_manager' | 'nautical_company';
 
 interface Quote {
@@ -34,8 +34,10 @@ interface Quote {
   invoiceDate?: string;
   depositAmount?: number;
   paymentDueDate?: string;
+  file_url?: string; // Added for document-based quotes
 }
 
+// Mock data (updated to include a document-based quote)
 const mockQuotes: Record<string, Quote> = {
   '1': {
     id: '1',
@@ -130,6 +132,26 @@ const mockQuotes: Record<string, Quote> = {
     invoiceDate: '2024-02-25',
     depositAmount: 1000,
     paymentDueDate: '2024-03-25'
+  },
+  '4': { // New document-based quote for testing
+    id: '4',
+    reference: 'DEV-2024-004',
+    status: 'pending',
+    source: 'boat_manager',
+    date: '2024-03-01',
+    validUntil: '2024-03-31',
+    totalAmount: 800,
+    provider: {
+      id: 'bm2',
+      name: 'Pierre Dubois',
+      type: 'boat_manager'
+    },
+    boat: {
+      name: 'Le Navigateur',
+      type: 'Voilier'
+    },
+    services: [], // No services listed if it's a document
+    file_url: 'https://www.africau.edu/images/default/sample.pdf' // Sample PDF URL
   }
 };
 
@@ -174,7 +196,7 @@ const statusConfig = {
 export default function QuoteDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
-  const quote = mockQuotes[id as string];
+  const [quote, setQuote] = useState<Quote | undefined>(mockQuotes[id as string]); // Use state to allow updates
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
 
@@ -223,25 +245,36 @@ export default function QuoteDetailsScreen() {
   };
 
   const handleDownload = async () => {
-    try {
-      await generateQuotePDF({
-        reference: quote.reference,
-        date: quote.date,
-        validUntil: quote.validUntil,
-        provider: {
-          name: quote.provider.name,
-          type: quote.provider.type,
-        },
-        client: {
-          name: user?.firstName + ' ' + user?.lastName || '',
-          email: user?.email || '',
-        },
-        boat: quote.boat,
-        services: quote.services,
-        totalAmount: quote.totalAmount,
-      });
-    } catch (error) {
-      Alert.alert('Erreur', "Une erreur est survenue lors du téléchargement du devis.");
+    if (quote.file_url) {
+      // If it's a document-based quote, open the URL directly
+      if (Platform.OS === 'web') {
+        window.open(quote.file_url, '_blank');
+      } else {
+        // For mobile, you might want to use Linking.openURL or a file viewer library
+        Linking.openURL(quote.file_url).catch(err => console.error('Failed to open URL:', err));
+      }
+    } else {
+      // Otherwise, generate PDF from services
+      try {
+        await generateQuotePDF({
+          reference: quote.reference,
+          date: quote.date,
+          validUntil: quote.validUntil,
+          provider: {
+            name: quote.provider.name,
+            type: quote.provider.type,
+          },
+          client: {
+            name: user?.firstName + ' ' + user?.lastName || '',
+            email: user?.email || '',
+          },
+          boat: quote.boat,
+          services: quote.services,
+          totalAmount: quote.totalAmount,
+        });
+      } catch (error) {
+        Alert.alert('Erreur', "Une erreur est survenue lors du téléchargement du devis.");
+      }
     }
   };
 
@@ -293,12 +326,10 @@ export default function QuoteDetailsScreen() {
           style: 'default',
           onPress: () => {
             // Update the quote status to accepted
-            mockQuotes[id as string] = {
-              ...quote,
-              status: 'accepted',
-            };
+            setQuote(prev => prev ? { ...prev, status: 'accepted' } : prev);
+            // In a real app, you would also update the service_request status in the database
+            // For example: supabase.from('service_request').update({ status: 'quote_accepted' }).eq('id', quote.requestId);
             
-            // In a real app, this would trigger a notification to the corporate team
             Alert.alert(
               'Devis accepté',
               'Le devis a été accepté. L\'équipe corporate va maintenant générer une facture.',
@@ -329,10 +360,9 @@ export default function QuoteDetailsScreen() {
           style: 'destructive',
           onPress: () => {
             // Update the quote status to rejected
-            mockQuotes[id as string] = {
-              ...quote,
-              status: 'rejected',
-            };
+            setQuote(prev => prev ? { ...prev, status: 'rejected' } : prev);
+            // In a real app, you would also update the service_request status in the database
+            // For example: supabase.from('service_request').update({ status: 'quote_rejected' }).eq('id', quote.requestId);
             
             Alert.alert('Succès', 'Le devis a été refusé.');
             router.back();
@@ -360,10 +390,7 @@ export default function QuoteDetailsScreen() {
           style: 'default',
           onPress: () => {
             // Update the quote status to pending
-            mockQuotes[id as string] = {
-              ...quote,
-              status: 'pending',
-            };
+            setQuote(prev => prev ? { ...prev, status: 'pending' } : prev);
             
             Alert.alert('Succès', 'Le devis a été envoyé au client.');
             router.back();
@@ -408,10 +435,7 @@ export default function QuoteDetailsScreen() {
           text: 'OK',
           onPress: () => {
             // Update the quote status to paid
-            mockQuotes[id as string] = {
-              ...quote,
-              status: 'paid',
-            };
+            setQuote(prev => prev ? { ...prev, status: 'paid' } : prev);
             
             setShowPaymentModal(false);
             router.back();
@@ -435,10 +459,7 @@ export default function QuoteDetailsScreen() {
           style: 'default',
           onPress: () => {
             // Update the quote status to paid
-            mockQuotes[id as string] = {
-              ...quote,
-              status: 'paid',
-            };
+            setQuote(prev => prev ? { ...prev, status: 'paid' } : prev);
             
             Alert.alert('Succès', 'La facture a été marquée comme payée.');
             router.back();
@@ -461,14 +482,14 @@ export default function QuoteDetailsScreen() {
     const depositAmount = Math.round(quote.totalAmount * 0.3);
     
     // Update the quote with invoice information
-    mockQuotes[id as string] = {
-      ...quote,
+    setQuote(prev => prev ? {
+      ...prev,
       status: 'invoiced',
       invoiceReference,
       invoiceDate,
       depositAmount,
       paymentDueDate,
-    };
+    } : prev);
     
     Alert.alert(
       'Facture générée',
@@ -716,23 +737,45 @@ export default function QuoteDetailsScreen() {
             </View>
           </View>
 
-          {/* Services */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Services</Text>
-            {quote.services.map((service, index) => (
-              <View key={index} style={styles.serviceCard}>
-                <Text style={styles.serviceName}>{service.name}</Text>
-                <Text style={styles.serviceDescription}>{service.description}</Text>
-                <Text style={styles.serviceAmount}>{formatAmount(service.amount)}</Text>
+          {/* Conditional rendering for Services or Document */}
+          {quote.file_url ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Document du devis</Text>
+              <View style={styles.card}>
+                <View style={styles.cardRow}>
+                  <FileText size={16} color="#666" />
+                  <Text style={styles.cardText}>Devis disponible en PDF</Text>
+                </View>
+                <TouchableOpacity 
+                  style={styles.downloadButton}
+                  onPress={handleDownload}
+                >
+                  <Download size={20} color="#0066CC" />
+                  <Text style={styles.downloadButtonText}>Voir/Télécharger le PDF</Text>
+                </TouchableOpacity>
               </View>
-            ))}
-          </View>
+            </View>
+          ) : (
+            <>
+              {/* Services Section */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Services</Text>
+                {quote.services.map((service, index) => (
+                  <View key={index} style={styles.serviceCard}>
+                    <Text style={styles.serviceName}>{service.name}</Text>
+                    <Text style={styles.serviceDescription}>{service.description}</Text>
+                    <Text style={styles.serviceAmount}>{formatAmount(service.amount)}</Text>
+                  </View>
+                ))}
+              </View>
 
-          {/* Total */}
-          <View style={styles.totalSection}>
-            <Text style={styles.totalLabel}>Total HT</Text>
-            <Text style={styles.totalAmount}>{formatAmount(quote.totalAmount)}</Text>
-          </View>
+              {/* Total */}
+              <View style={styles.totalSection}>
+                <Text style={styles.totalLabel}>Total HT</Text>
+                <Text style={styles.totalAmount}>{formatAmount(quote.totalAmount)}</Text>
+              </View>
+            </>
+          )}
 
           {/* Invoice Info (if invoiced) */}
           {(quote.status === 'invoiced' || quote.status === 'paid') && (
@@ -833,28 +876,30 @@ export default function QuoteDetailsScreen() {
             </View>
           ) : null}
 
-          {/* Download Buttons */}
-          <View style={styles.downloadButtons}>
-            <TouchableOpacity 
-              style={styles.downloadButton}
-              onPress={handleDownload}
-            >
-              <Download size={20} color="#0066CC" />
-              <Text style={styles.downloadButtonText}>Télécharger le devis</Text>
-            </TouchableOpacity>
-
-            {(quote.status === 'invoiced' || quote.status === 'paid') && (
+          {/* Download Buttons (always visible for generated quotes) */}
+          {!quote.file_url && ( // Only show if not a document-based quote
+            <View style={styles.downloadButtons}>
               <TouchableOpacity 
-                style={[styles.downloadButton, { backgroundColor: '#3B82F6', marginTop: 12 }]}
-                onPress={handleViewInvoice}
+                style={styles.downloadButton}
+                onPress={handleDownload}
               >
-                <FileText size={20} color="white" />
-                <Text style={[styles.downloadButtonText, { color: 'white' }]}>
-                  Voir la facture
-                </Text>
+                <Download size={20} color="#0066CC" />
+                <Text style={styles.downloadButtonText}>Télécharger le devis</Text>
               </TouchableOpacity>
-            )}
-          </View>
+            </View>
+          )}
+
+          {(quote.status === 'invoiced' || quote.status === 'paid') && (
+            <TouchableOpacity 
+              style={[styles.downloadButton, { backgroundColor: '#3B82F6', marginTop: 12 }]}
+              onPress={handleViewInvoice}
+            >
+              <FileText size={20} color="white" />
+              <Text style={[styles.downloadButtonText, { color: 'white' }]}>
+                Voir la facture
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
       <PaymentModal />
@@ -1186,8 +1231,8 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   errorText: {
+    color: '#ff4444',
     fontSize: 16,
-    color: '#666',
     textAlign: 'center',
   },
   errorButton: {
@@ -1238,9 +1283,9 @@ const styles = StyleSheet.create({
     }),
   },
   sendButtonText: {
+    color: 'white',
     fontSize: 16,
     fontWeight: '600',
-    color: 'white',
   },
   deleteButton: {
     flex: 1,
@@ -1434,3 +1479,4 @@ const styles = StyleSheet.create({
     gap: 12,
   },
 });
+

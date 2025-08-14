@@ -5,12 +5,33 @@ import { ArrowLeft, Mail, Phone, Bot as Boat, ChevronRight, Search } from 'lucid
 import { useAuth } from '@/context/AuthContext'; // Import useAuth
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars (extraites du fichier de profil)
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (isHttpUrl(value)) return value;
+
+  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+
 // Interface pour les données client, incluant les bateaux via un JOIN
 interface Client {
   id: string;
   first_name: string;
   last_name: string;
-  avatar: string;
+  avatar: string; // Cette propriété contiendra l'URL signée ou par défaut
   e_mail: string;
   phone: string;
   status: 'active' | 'pending' | 'inactive'; // Corresponds to 'status' in DB
@@ -100,15 +121,19 @@ export default function ClientsListScreen() {
           setError(`Échec du chargement des clients: ${clientsError.message}`); // More detailed error
           setClients([]);
         } else {
-          // Ensure 'boat' is always an array, even if empty
-          const formattedData = data.map(client => ({
-            ...client,
-            boat: client.boat || [] // Supabase returns the relation as 'boat'
+          // Générer une URL signée pour chaque avatar de client
+          const formattedData = await Promise.all(data.map(async client => {
+            const signedAvatar = await getSignedAvatarUrl(client.avatar);
+            return {
+              ...client,
+              avatar: signedAvatar || DEFAULT_AVATAR, // Utiliser l'URL signée ou l'avatar par défaut
+              boat: client.boat || [],
+            };
           }));
           setClients(formattedData as Client[]);
         }
       } catch (e) {
-        console.error('Unexpected error fetching clients:', e);
+        console.error('Erreur inattendue lors de la récupération des clients:', e);
         setError('Une erreur inattendue est survenue.');
         setClients([]);
       } finally {
@@ -214,7 +239,16 @@ export default function ClientsListScreen() {
               onPress={() => handleClientDetails(client.id)}
             >
               <View style={styles.clientHeader}>
-                <Image source={{ uri: client.avatar }} style={styles.clientAvatar} />
+                <Image
+                  source={{ uri: client.avatar }} // Utilise l'URL signée ou par défaut
+                  style={styles.clientAvatar}
+                  onError={() => {
+                    // Fallback en cas d'erreur de chargement de l'image
+                    setClients(prev =>
+                      prev.map(c => c.id === client.id ? { ...c, avatar: DEFAULT_AVATAR } : c)
+                    );
+                  }}
+                />
                 <View style={styles.clientInfo}>
                   <View style={styles.clientNameRow}>
                     <Text style={styles.clientName}>{client.first_name} {client.last_name}</Text>
@@ -469,4 +503,3 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
 });
-

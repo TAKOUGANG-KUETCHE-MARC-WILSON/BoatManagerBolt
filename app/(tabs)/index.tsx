@@ -35,6 +35,60 @@ interface BoatManagerDetails {
   bio?: string; 
 }
 
+const AVATAR_BUCKET = 'avatars';
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+const isHttpUrl = (v?: string) =>
+  !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+// Extrait { bucket, path } d'une URL Supabase (public ou sign), sinon renvoie null
+function extractBucketAndPathFromSupabaseUrl(url: string) {
+  const m = url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/([^?]+)/);
+  if (!m) return null;
+  const [, bucket, path] = m;
+  return { bucket, path };
+}
+
+async function getAvatarUrl(value?: string | null): Promise<string> {
+  if (!value || !`${value}`.trim()) return DEFAULT_AVATAR;
+
+  const raw = `${value}`.trim();
+
+  // 1) Si c'est déjà une URL http(s)
+  if (isHttpUrl(raw)) {
+    // Si c’est une URL Supabase, on en extrait bucket+path puis on signe
+    const bp = extractBucketAndPathFromSupabaseUrl(raw);
+    if (bp) {
+      const { data, error } = await supabase.storage
+        .from(bp.bucket)
+        .createSignedUrl(bp.path, 60 * 60);
+      if (error || !data?.signedUrl) {
+        console.error('createSignedUrl failed (from http url):', { error, bp, raw });
+        return DEFAULT_AVATAR;
+      }
+      return data.signedUrl;
+    }
+    // Sinon, URL externe classique → on la garde telle quelle
+    return raw;
+  }
+
+  // 2) Chemin brut dans le bucket (avec ou sans slash en tête)
+  const path = raw.replace(/^\/+/, ''); // supprime les '/' initiaux
+  const { data, error } = await supabase.storage
+    .from(AVATAR_BUCKET)
+    .createSignedUrl(path, 60 * 60);
+
+  if (error || !data?.signedUrl) {
+    console.error('createSignedUrl failed (from path):', { error, bucket: AVATAR_BUCKET, path, raw });
+    return DEFAULT_AVATAR;
+  }
+  return data.signedUrl;
+}
+
+
+
+
+
 const serviceCategories: ServiceCategory[] = [
   {
     title: 'Maintenance',
@@ -243,85 +297,115 @@ export default function HomeScreen() {
             return;
           }
 
-          const formattedBms: BoatManagerDetails[] = await Promise.all(bmsData.map(async bm => {
-            const bmPort = allPorts.find(p => p.id === bmPortAssignments.find(bmpa => bmpa.user_id === bm.id)?.port_id.toString());
-            return {
-              id: bm.id.toString(),
-              name: `${bm.first_name} ${bm.last_name}`,
-              email: bm.e_mail,
-              phone: bm.phone,
-              avatar: bm.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-              location: bmPort?.name || 'N/A',
-              rating: bm.rating,
-              reviewCount: bm.review_count,
-              bio: bm.bio || 'Boat Manager professionnel',
-            };
-          }));
-          setAssociatedBoatManagers(formattedBms);
+          // Après avoir récupéré portsData:
+const portsList = (portsData ?? []).map(p => ({ id: p.id.toString(), name: p.name }));
+setAllPorts(portsList);
+const portsById = new Map(portsList.map(p => [p.id, p.name]));
+
+// ⬇️ getAvatarUrl est async → Promise.all
+const formattedBms: BoatManagerDetails[] = await Promise.all(
+  bmsData.map(async (bm) => {
+    const assignedPortId = bmPortAssignments.find(bmpa => bmpa.user_id === bm.id)?.port_id?.toString();
+    const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
+    const avatarUrl = await getAvatarUrl(bm.avatar);
+
+    return {
+      id: bm.id.toString(),
+      name: `${bm.first_name} ${bm.last_name}`,
+      email: bm.e_mail,
+      phone: bm.phone,
+      avatar: avatarUrl || DEFAULT_AVATAR,
+      location: bmPortName,
+      rating: bm.rating,
+      reviewCount: bm.review_count,
+      bio: bm.bio || 'Boat Manager professionnel',
+    };
+  })
+);
+
+setAssociatedBoatManagers(formattedBms);
         }
       }
     };
 
     fetchInitialData();
-  }, [user, allPorts]); // Added allPorts to dependencies
+  }, [user]); // Added allPorts to dependencies
 
   useEffect(() => {
-    const fetchTemporaryBms = async () => {
-      if (selectedTemporaryPortId) {
-        const port = allPorts.find(p => p.id === selectedTemporaryPortId);
-        if (port) {
-          setSelectedTemporaryPort(port);
+  const fetchTemporaryBms = async () => {
+    if (!selectedTemporaryPortId) {
+      setSelectedTemporaryPort(null);
+      setTemporaryBoatManagers([]);
+      return;
+    }
 
-          const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
-            .from('user_ports')
-            .select('user_id, ports(name)') // Select port name here
-            .eq('port_id', parseInt(port.id));
+    const port = allPorts.find(p => p.id === selectedTemporaryPortId);
+    if (!port) {
+      setSelectedTemporaryPort(null);
+      setTemporaryBoatManagers([]);
+      return;
+    }
+    setSelectedTemporaryPort(port);
 
-          if (bmPortAssignmentsError) {
-            console.error('Erreur chargement BM escale:', bmPortAssignmentsError);
-            setTemporaryBoatManagers([]);
-            return;
-          }
+    // 1) Qui est affecté à ce port ?
+    const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
+      .from('user_ports')
+      .select('user_id, ports(name)')
+      .eq('port_id', Number(port.id));
 
-          const bmIds = bmPortAssignments.map(bmpa => bmpa.user_id);
+    if (bmPortAssignmentsError) {
+      console.error('Erreur chargement BM escale:', bmPortAssignmentsError);
+      setTemporaryBoatManagers([]);
+      return;
+    }
 
-          if (bmIds.length > 0) {
-            const { data: bmsData, error: bmsError } = await supabase
-              .from('users')
-              .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
-              .in('id', bmIds)
-              .eq('profile', 'boat_manager');
+    const bmIds = [...new Set((bmPortAssignments ?? []).map(r => r.user_id))];
+    if (bmIds.length === 0) {
+      setTemporaryBoatManagers([]);
+      return;
+    }
 
-            if (bmsError) {
-              console.error('Erreur chargement BM:', bmsError);
-              setTemporaryBoatManagers([]);
-              return;
-            }
+    // 2) Détails des BM
+    const { data: bmsData, error: bmsError } = await supabase
+      .from('users')
+      .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
+      .in('id', bmIds)
+      .eq('profile', 'boat_manager');
 
-            const formattedBms: BoatManagerDetails[] = bmsData.map(bm => ({
-              id: bm.id.toString(),
-              name: `${bm.first_name} ${bm.last_name}`,
-              email: bm.e_mail,
-              phone: bm.phone,
-              avatar: bm.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-              location: bmPortAssignments.find(p => p.user_id === bm.id)?.ports?.name || port.name, // Use port name from assignment if available
-              rating: bm.rating,
-              reviewCount: bm.review_count,
-              bio: bm.bio || 'Boat Manager à votre écoute',
-            }));
-            setTemporaryBoatManagers(formattedBms);
-          } else {
-            setTemporaryBoatManagers([]);
-          }
-        }
-      } else {
-        setSelectedTemporaryPort(null);
-        setTemporaryBoatManagers([]);
-      }
-    };
+    if (bmsError) {
+      console.error('Erreur chargement BM:', bmsError);
+      setTemporaryBoatManagers([]);
+      return;
+    }
 
-    fetchTemporaryBms();
-  }, [selectedTemporaryPortId, allPorts]);
+    // 3) Même logique d’avatar que pour les BMs associés
+    const formattedBms: BoatManagerDetails[] = await Promise.all(
+      (bmsData ?? []).map(async (bm) => {
+        const avatarUrl = await getAvatarUrl(bm.avatar); // <- IMPORTANT
+        const portName =
+          bmPortAssignments.find(a => a.user_id === bm.id)?.ports?.name
+          ?? port.name;
+
+        return {
+          id: bm.id.toString(),
+          name: `${bm.first_name} ${bm.last_name}`,
+          email: bm.e_mail,
+          phone: bm.phone,
+          avatar: avatarUrl || DEFAULT_AVATAR,
+          location: portName,
+          rating: bm.rating,
+          reviewCount: bm.review_count,
+          bio: bm.bio || 'Boat Manager à votre écoute',
+        };
+      })
+    );
+
+    setTemporaryBoatManagers(formattedBms);
+  };
+
+  fetchTemporaryBms();
+}, [selectedTemporaryPortId, allPorts]);
+
 
   // Filter ports based on search query for the modal
   const filteredPorts = allPorts.filter(port =>
@@ -398,10 +482,18 @@ export default function HomeScreen() {
             temporaryBoatManagers.map(bm => (
               <View key={bm.id} style={styles.temporaryBoatManagerCard}>
                 <View style={styles.temporaryBoatManagerHeader}>
-                  <Image 
-                    source={{ uri: bm.avatar }} 
-                    style={styles.temporaryBoatManagerAvatar} 
-                  />
+                  <Image
+  source={{ uri: bm.avatar || DEFAULT_AVATAR }}
+  style={styles.temporaryBoatManagerAvatar}
+  onError={() => {
+    if (bm.avatar !== DEFAULT_AVATAR) {
+      setTemporaryBoatManagers(prev =>
+        prev.map(m => m.id === bm.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
+      );
+    }
+  }}
+/>
+
                   <View style={styles.temporaryBoatManagerInfo}>
                     <Text style={styles.temporaryBoatManagerName}>{bm.name}</Text>
                     <View style={styles.ratingContainer}>
@@ -495,7 +587,19 @@ export default function HomeScreen() {
             {associatedBoatManagers.map((bm) => (
               <View key={bm.id} style={styles.boatManagerCard}>
                 <View style={styles.boatManagerHeader}>
-                  <Image source={{ uri: bm.avatar }} style={styles.boatManagerAvatar} />
+                 <Image
+  source={{ uri: bm.avatar || DEFAULT_AVATAR }}
+  style={styles.boatManagerAvatar}
+  onError={() => {
+    if (bm.avatar !== DEFAULT_AVATAR) {
+      // remplace seulement l’avatar du BM en erreur
+      setAssociatedBoatManagers(prev =>
+        prev.map(m => m.id === bm.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
+      );
+    }
+  }}
+/>
+
                   <View style={styles.boatManagerInfo}>
                     <Text style={styles.boatManagerName}>{bm.name}</Text>
                     <View style={styles.ratingContainer}>

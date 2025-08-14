@@ -36,6 +36,27 @@ interface BoatManagerProfileData {
   bio: string;
 }
 
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (isHttpUrl(value)) return value;
+
+  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+
 // Hardcoded service icons (map to fetched service names)
 const serviceIconsMap = {
   'Maintenance': Wrench,
@@ -201,6 +222,8 @@ export default function BoatManagerProfileScreen() {
         }
 
         const bmPortName = bmData.user_ports?.[0]?.ports?.name || 'N/A';
+        const signedAvatarUrl = await getSignedAvatarUrl(bmData.avatar); // Get signed URL for avatar
+
         setBoatManager({
           id: bmData.id.toString(),
           name: `${bmData.first_name} ${bmData.last_name}`,
@@ -210,7 +233,7 @@ export default function BoatManagerProfileScreen() {
           reviewCount: bmData.review_count,
           experience: bmData.experience || 'Non renseignée',
           certifications: bmData.certification || [],
-          avatar: bmData.avatar || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
+          avatar: signedAvatarUrl || DEFAULT_AVATAR, // Use the signed URL or default
           cover: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop', // Default cover
           phone: bmData.phone || 'N/A',
           email: bmData.e_mail || 'N/A',
@@ -402,7 +425,15 @@ export default function BoatManagerProfileScreen() {
 
       {/* Profile Header */}
       <View style={styles.profileHeader}>
-        <Image source={{ uri: boatManager.avatar }} style={styles.avatar} />
+        <Image 
+          source={{ uri: boatManager.avatar }} 
+          style={styles.avatar} 
+          onError={(e) => {
+            console.error('Error loading BM avatar:', e.nativeEvent.error, 'URL:', boatManager.avatar);
+            // Fallback to default avatar if image fails to load
+            setBoatManager(prev => ({ ...prev!, avatar: DEFAULT_AVATAR }));
+          }}
+        />
         <View style={styles.profileInfo}>
           <Text style={styles.name}>{boatManager.name}</Text>
           <Text style={styles.title}>{boatManager.title}</Text>
