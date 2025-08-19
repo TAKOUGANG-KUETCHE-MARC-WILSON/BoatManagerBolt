@@ -264,97 +264,99 @@ export default function NewBoatScreen() {
   };
 
   const handleSubmit = async () => {
-    if (validateForm()) {
-      if (!user?.id) {
-        Alert.alert('Erreur', 'Utilisateur non authentifié.');
-        return;
-      }
+    if (!validateForm()) {
+      return;
+    }
 
-      setIsLoading(true);
-      let finalImageUrl = form.photo;
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      return;
+    }
 
-      // If photo is a local URI, upload it to Supabase
-      if (form.photo && !form.photo.startsWith('http')) {
-        try {
-          const fileName = `boat_images/${user.id}/${Date.now()}.jpeg`;
-          const contentType = 'image/jpeg';
+    setIsLoading(true);
+    let finalImageUrl = form.photo;
 
-          const base64 = await FileSystem.readAsStringAsync(form.photo, {
-            encoding: FileSystem.EncodingType.Base64,
+    // If photo is a local URI, upload it to Supabase
+    if (form.photo && !form.photo.startsWith('http')) {
+      try {
+        const fileName = `boat_images/${user.id}/${Date.now()}.jpeg`;
+        const contentType = 'image/jpeg';
+
+        const base64 = await FileSystem.readAsStringAsync(form.photo, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const fileBuffer = Buffer.from(base64, 'base64');
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('boat.images')
+          .upload(fileName, fileBuffer, {
+            contentType,
+            upsert: false,
           });
-          const fileBuffer = Buffer.from(base64, 'base64');
 
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('boat.images')
-            .upload(fileName, fileBuffer, {
-              contentType,
-              upsert: false,
-            });
-
-          if (uploadError) {
-            console.error('Erreur upload Supabase:', uploadError);
-            Alert.alert('Erreur', `Échec de l'envoi de l'image: ${uploadError.message}`);
-            setIsLoading(false);
-            return;
-          }
-
-          const { data: publicUrlData } = supabase.storage
-            .from('boat.images')
-            .getPublicUrl(uploadData.path);
-
-          finalImageUrl = publicUrlData.publicUrl;
-          setForm(prev => ({ ...prev, photo: finalImageUrl })); // Update form state with public URL
-          
-        } catch (e) {
-          console.error('Erreur lors du téléchargement de l\'image:', e);
-          Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement de l\'image.');
+        if (uploadError) {
+          console.error('Erreur upload Supabase:', uploadError);
+          Alert.alert('Erreur', `Échec de l'envoi de l'image: ${uploadError.message}`);
           setIsLoading(false);
           return;
         }
-      }
 
-      try {
-        const { data, error } = await supabase
-          .from('boat')
-          .insert({
-            id_user: user.id,
-            name: form.name,
-            type: form.type,
-            modele: form.model,
-            annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null, // Assuming YYYY format, set to Jan 1st
-            type_moteur: form.engine,
-            temps_moteur: form.engineHours ? form.engineHours : null, // Ensure correct type for DB
-            longueur: form.length,
-            image: finalImageUrl, // Use the final image URL
-            id_port: parseInt(form.portId),
-            constructeur: form.manufacturer,
-            place_de_port: form.place_de_port, // Include place_de_port
-            // 'etat' is not in the form, assuming it has a default value in DB or is nullable
-          })
-          .select('id')
-          .single();
+        const { data: publicUrlData } = supabase.storage
+          .from('boat.images')
+          .getPublicUrl(uploadData.path);
 
-        if (error) {
-          console.error('Error inserting boat:', error);
-          Alert.alert('Erreur', `Échec de l'ajout du bateau: ${error.message}`);
-        } else {
-          Alert.alert(
-            'Succès',
-            'Votre bateau a été créé et rattaché au Boat Manager avec succès.',
-            [
-              {
-                text: 'OK',
-                onPress: () => router.push(`/boats/${data.id}`) // Navigate to the new boat's profile
-              }
-            ]
-          );
-        }
+        finalImageUrl = publicUrlData.publicUrl;
+        setForm(prev => ({ ...prev, photo: finalImageUrl })); // Update form state with public URL
+        
       } catch (e) {
-        console.error('Unexpected error during boat submission:', e);
-        Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
-      } finally {
+        console.error('Erreur lors du téléchargement de l\'image:', e);
+        Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement de l\'image.');
         setIsLoading(false);
+        return;
       }
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('boat')
+        .insert({
+          id_user: user.id,
+          name: form.name,
+          type: form.type,
+          modele: form.model,
+          annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null, // Assuming YYYY format, set to Jan 1st
+          type_moteur: form.engine,
+          temps_moteur: form.engineHours ? form.engineHours : null, // Ensure correct type for DB
+          longueur: form.length,
+          image: finalImageUrl, // Use the final image URL
+          id_port: parseInt(form.portId),
+          constructeur: form.manufacturer,
+          place_de_port: form.place_de_port, // Include place_de_port
+          // 'etat' is not in the form, assuming it has a default value in DB or is nullable
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        console.error('Error inserting boat:', error);
+        Alert.alert('Erreur', `Échec de l'ajout du bateau: ${error.message}`);
+      } else {
+        Alert.alert(
+          'Succès',
+          'Votre bateau a été créé et rattaché au Boat Manager avec succès.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.push(`/boats/${data.id}`) // Navigate to the new boat's profile
+            }
+          ]
+        );
+      }
+    } catch (e) {
+      console.error('Unexpected error during boat submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -797,6 +799,7 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
+    marginBottom: 12,
   },
   modalOptionText: {
     fontSize: 16,
@@ -866,3 +869,4 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
   },
 });
+

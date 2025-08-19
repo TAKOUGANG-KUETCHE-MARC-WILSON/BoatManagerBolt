@@ -57,13 +57,13 @@ export default function NewQuoteScreen() {
       setForm(prevForm => {
         const updatedForm = { ...prevForm };
         
-        if (params.clientId && params.clientName) {
-          updatedForm.client = {
-            id: params.clientId as string,
-            name: params.clientName as string,
-            email: updatedForm.client.email,
-          };
-        }
+        if (params.clientId && params.clientName && params.clientEmail) {
+  updatedForm.client = {
+    id: params.clientId as string,
+    name: params.clientName as string,
+    email: params.clientEmail as string, // <-- Ajout ici
+  };
+}
         
         if (params.boatName && params.boatType) {
           updatedForm.boat = {
@@ -214,6 +214,7 @@ export default function NewQuoteScreen() {
               <TextInput
                 style={styles.input}
                 value={form.client.name}
+                editable={false} 
                 onChangeText={(text) => setForm(prev => ({
                   ...prev,
                   client: { ...prev.client, name: text }
@@ -224,15 +225,12 @@ export default function NewQuoteScreen() {
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Email</Text>
               <TextInput
-                style={styles.input}
-                value={form.client.email}
-                onChangeText={(text) => setForm(prev => ({
-                  ...prev,
-                  client: { ...prev.client, email: text }
-                }))}
-                placeholder="Email du client"
-                keyboardType="email-address"
-              />
+  style={[styles.input, { backgroundColor: '#e2e8f0' }]}
+  value={form.client.email}
+  editable={false} // 👈 REND LE CHAMP NON MODIFIABLE
+  placeholder="Email du client"
+  keyboardType="email-address"
+/>
             </View>
           </View>
         </View>
@@ -250,6 +248,7 @@ export default function NewQuoteScreen() {
               <TextInput
                 style={styles.input}
                 value={form.boat.name}
+                editable={false} 
                 onChangeText={(text) => setForm(prev => ({
                   ...prev,
                   boat: { ...prev.boat, name: text }
@@ -262,6 +261,7 @@ export default function NewQuoteScreen() {
               <TextInput
                 style={styles.input}
                 value={form.boat.type}
+                editable={false}
                 onChangeText={(text) => setForm(prev => ({
                   ...prev,
                   boat: { ...prev.boat, type: text }

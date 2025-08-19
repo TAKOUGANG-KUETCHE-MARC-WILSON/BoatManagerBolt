@@ -136,6 +136,22 @@ export default function BoatManagerTabLayout() {
         }}
       />
       <Tabs.Screen
+        name="other-boat-managers-list"
+        options={{
+          title: 'Devis',
+          headerShown: true,
+          href: null, // Masquer cet écran de la barre d'onglets
+        }}
+      />
+      <Tabs.Screen
+        name="headquarters-contacts-list"
+        options={{
+          title: 'Devis',
+          headerShown: true,
+          href: null, // Masquer cet écran de la barre d'onglets
+        }}
+      />
+      <Tabs.Screen
         name="clients-list"
         options={{
          title: 'Devis',

@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Modal, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Upload, FileText, User, Bot as Boat, Calendar, Plus, X, Check, Download, Euro, Trash } from 'lucide-react-native';
+import { ArrowLeft, Upload, FileText, User, Ship, Calendar, X, Check, Download, Euro, Trash, Plus  } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import { supabase } from '@/src/lib/supabase';
+
+const genQuoteRef = () => `DEV-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
 
 interface Service {
   id: string;
@@ -67,9 +69,103 @@ export default function QuoteUploadScreen() {
     ],
     file: undefined,
   });
-  
+  const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof QuoteUploadForm | 'services', string>>>({});
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  // -- Helpers d'insertion en base ------------------------------------------------
+const genQuoteRef = () => `DEV-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+
+async function createQuotePDF(params: {
+  requestId?: string;
+  clientId: string;
+  boatId: string;
+  title?: string;
+  validUntil?: string;
+  fileUrl: string;
+  providerType: 'boat_manager' | 'nautical_company';
+  providerId: number;
+}) {
+  const { requestId, clientId, boatId, title, validUntil, fileUrl, providerType, providerId } = params;
+
+  const payload: any = {
+    reference: genQuoteRef(),
+    status: 'sent',
+    valid_until: validUntil ? new Date(validUntil) : null,
+    service_request_id: requestId ? Number(requestId) : null,
+    id_client: Number(clientId),
+    id_boat: Number(boatId),
+    provider_type: providerType,
+    id_boat_manager: providerType === 'boat_manager' ? providerId : null,
+    id_companie: providerType === 'nautical_company' ? providerId : null,
+    title: title || null,
+    description: null,
+    currency: 'EUR',
+    default_tax_rate: 20,
+    file_url: fileUrl,
+  };
+
+  const { data, error } = await supabase.from('quotes').insert(payload).select('id').single();
+  if (error) throw error;
+  return data.id as string;
+}
+
+async function createQuoteWithItems(params: {
+  requestId?: string;
+  clientId: string;
+  boatId: string;
+  title?: string;
+  description?: string;
+  validUntil?: string;
+  services: { name: string; description?: string; amount: number }[];
+  providerType: 'boat_manager' | 'nautical_company';
+  providerId: number;
+}) {
+  const { requestId, clientId, boatId, title, description, validUntil, services, providerType, providerId } = params;
+
+  const qPayload: any = {
+    reference: genQuoteRef(),
+    status: 'sent',
+    valid_until: validUntil ? new Date(validUntil) : null,
+    service_request_id: requestId ? Number(requestId) : null,
+    id_client: Number(clientId),
+    id_boat: Number(boatId),
+    provider_type: provider_type,
+    id_boat_manager: providerType === 'boat_manager' ? providerId : null,
+    id_companie: providerType === 'nautical_company' ? providerId : null,
+    title: title || null,
+    description: description || null,
+    currency: 'EUR',
+    default_tax_rate: 20,
+  };
+
+  const { data: q, error: qErr } = await supabase.from('quotes').insert(qPayload).select('id').single();
+  if (qErr) throw qErr;
+
+  const items = services.map((s, i) => ({
+    quote_id: q.id,
+    position: i + 1,
+    label: s.name,
+    description: s.description ?? null,
+    quantity: 1,
+    unit: 'forfait',
+    unit_price: Number(s.amount) || 0,
+    discount_percent: 0,
+    tax_rate: null, // TVA ligne = null → prendra default_tax_rate du devis
+  }));
+
+  if (items.length > 0) {
+    const { error: itErr } = await supabase.from('quote_items').insert(items);
+    if (itErr) {
+      // rollback simple
+      await supabase.from('quotes').delete().eq('id', q.id);
+      throw itErr;
+    }
+  }
+
+  return q.id as string;
+}
+
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -82,32 +178,29 @@ export default function QuoteUploadScreen() {
       setLoading(true);
       try {
         // Fetch service request details
-        const { data: reqData, error: reqError } = await supabase
-          .from('service_request')
-          .select(`
-            *,
-            users!id_client(first_name, last_name, e_mail),
-            boat(name, type)
-          `)
-          .eq('id', parseInt(requestId))
-          .single();
+        const { data, error } = await supabase
+  .from('service_request')
+  .select(`
+    id,
+    description,
+    id_client ( first_name, last_name, e_mail ),
+    id_boat   ( name, type )
+  `)
+  .eq('id', Number(requestId))
+  .single();
 
-        if (reqError || !reqData) {
-          console.error('Error fetching service request:', reqError);
-          Alert.alert('Erreur', 'Impossible de charger les détails de la demande.');
-          setLoading(false);
-          return;
-        }
-        setRequestDetails(reqData);
+if (error) throw error;
+const reqData = data as any;
 
-        setForm(prev => ({
-          ...prev,
-          clientName: `${reqData.users.first_name} ${reqData.users.last_name}`,
-          boatName: reqData.boat.name,
-          boatType: reqData.boat.type,
-          // Pre-fill title if it's empty and request has a description
-          title: prev.title || reqData.description || `Devis pour demande #${requestId}`,
-        }));
+setRequestDetails(reqData);
+setForm(prev => ({
+  ...prev,
+  clientName: reqData.id_client ? `${reqData.id_client.first_name} ${reqData.id_client.last_name}` : prev.clientName,
+  boatName:   reqData.id_boat?.name ?? prev.boatName,
+  boatType:   reqData.id_boat?.type ?? prev.boatType,
+  title:      prev.title || reqData.description || `Devis pour demande #${requestId}`,
+}));
+
 
       } catch (e) {
         console.error('Unexpected error fetching initial data:', e);
@@ -222,75 +315,93 @@ export default function QuoteUploadScreen() {
   };
   
   const handleConfirmSubmit = async () => {
-    setShowConfirmModal(false);
-    if (!requestDetails || !user?.id) {
-      Alert.alert('Erreur', 'Données de requête ou utilisateur non disponibles.');
+  setShowConfirmModal(false);
+
+  if (!requestDetails || !user?.id) {
+    Alert.alert('Erreur', 'Données de requête ou utilisateur non disponibles.');
+    return;
+  }
+
+  try {
+    setSubmitting(true);
+
+    let quoteId: string | null = null;
+
+    if (uploadMethod === 'upload') {
+      // 1) Upload PDF vers le bucket "quotes"
+      if (!form.file) {
+        Alert.alert('Erreur', 'Aucun fichier sélectionné.');
+        setSubmitting(false);
+        return;
+      }
+      const fileExtension = form.file.name.split('.').pop();
+      const filePath = `quotes/${form.requestId}/${Date.now()}.${fileExtension}`;
+      const response = await fetch(form.file.uri);
+      const blob = await response.blob();
+
+      const { error: uploadError } = await supabase.storage
+        .from('quotes')
+        .upload(filePath, blob, {
+          contentType: form.file.type,
+          upsert: false,
+        });
+      if (uploadError) throw uploadError;
+
+      const { data: pub } = supabase.storage.from('quotes').getPublicUrl(filePath);
+      const fileUrl = pub?.publicUrl;
+      if (!fileUrl) throw new Error('URL publique introuvable après upload.');
+
+      // 2) Créer un devis "PDF" dans quotes
+      quoteId = await createQuotePDF({
+        requestId: form.requestId,
+        clientId: form.clientId,
+        boatId: form.boatId,
+        title: form.title,
+        validUntil: form.validUntil,
+        fileUrl,
+        providerType: 'boat_manager',
+        providerId: user.id,
+      });
+
+    } else if (uploadMethod === 'create') {
+      // 1) Créer un devis structuré + ses lignes
+      quoteId = await createQuoteWithItems({
+        requestId: form.requestId,
+        clientId: form.clientId,
+        boatId: form.boatId,
+        title: form.title,
+        description: '', // tu peux mapper un champ description si tu l'ajoutes au formulaire
+        validUntil: form.validUntil,
+        services: form.services.map(s => ({ name: s.name, description: s.description, amount: s.amount })),
+        providerType: 'boat_manager',
+        providerId: user.id,
+      });
+    } else {
+      Alert.alert('Info', 'Veuillez choisir une méthode de devis.');
+      setSubmitting(false);
       return;
     }
 
-    let fileUrl: string | null = null;
-    if (uploadMethod === 'upload' && form.file) {
-      try {
-        const fileExtension = form.file.name.split('.').pop();
-        const filePath = `quotes/${form.requestId}/${Date.now()}.${fileExtension}`;
-        const response = await fetch(form.file.uri);
-        const blob = await response.blob();
-
-        const { data, error: uploadError } = await supabase.storage
-          .from('quotes') // Assuming a bucket named 'quotes'
-          .upload(filePath, blob, {
-            contentType: form.file.type,
-            upsert: false,
-          });
-
-        if (uploadError) {
-          console.error('Error uploading file:', uploadError);
-          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
-          return;
-        }
-        fileUrl = supabase.storage.from('quotes').getPublicUrl(filePath).data.publicUrl;
-      } catch (e) {
-        console.error('Error processing file upload:', e);
-        Alert.alert('Erreur', 'Une erreur est survenue lors du traitement du fichier.');
-        return;
-      }
-    }
-
-    try {
-      const { error: updateError } = await supabase
+    // 3) Marquer la demande comme "devis envoyé"
+    if (form.requestId) {
+      const { error: srErr } = await supabase
         .from('service_request')
-        .update({
-          statut: 'quote_sent',
-          prix: totalAmount,
-          note_add: fileUrl ? `Devis PDF: ${fileUrl}` : form.notes, // Store file URL in note_add
-          // Other fields from the form could be mapped if needed, e.g., description, date
-          // For simplicity, we only update status and price here.
-        })
-        .eq('id', parseInt(form.requestId));
-
-      if (updateError) {
-        console.error('Error updating service request:', updateError);
-        Alert.alert('Erreur', `Échec de l'envoi du devis: ${updateError.message}`);
-      } else {
-        const message = `Le devis a été envoyé avec succès au client.`;
-        Alert.alert(
-          'Devis envoyé',
-          message,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                router.back(); // Go back to requests list
-              }
-            }
-          ]
-        );
-      }
-    } catch (e) {
-      console.error('Unexpected error during quote submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la soumission du devis.');
+        .update({ statut: 'quote_sent' })
+        .eq('id', Number(form.requestId));
+      if (srErr) throw srErr;
     }
-  };
+
+    Alert.alert('Devis envoyé', 'Le devis a été envoyé au client.', [
+      { text: 'OK', onPress: () => router.replace(`/quote/${quoteId}`) },
+    ]);
+  } catch (e: any) {
+    console.error(e);
+    Alert.alert('Erreur', e?.message || 'Impossible d\'envoyer le devis.');
+  } finally {
+    setSubmitting(false);
+  }
+};
+
   
   const MethodSelectionModal = () => (
     <Modal
@@ -406,11 +517,13 @@ export default function QuoteUploadScreen() {
             </TouchableOpacity>
             
             <TouchableOpacity 
-              style={styles.modalConfirmButton}
-              onPress={handleConfirmSubmit}
-            >
-              <Text style={styles.modalConfirmText}>Envoyer</Text>
-            </TouchableOpacity>
+  style={[styles.modalConfirmButton, submitting && { opacity: 0.6 }]}
+  onPress={handleConfirmSubmit}
+  disabled={submitting}
+>
+  <Text style={styles.modalConfirmText}>{submitting ? 'Envoi...' : 'Envoyer'}</Text>
+</TouchableOpacity>
+
           </View>
         </View>
       </View>
@@ -678,15 +791,17 @@ export default function QuoteUploadScreen() {
                 </View>
               </View>
               
-              <View style={styles.infoRow}>
-                <Boat size={20} color="#0066CC" />
-                <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>Bateau</Text>
-                  <Text style={styles.infoValue}>
-                    {form.boatName ? `${form.boatName} (${form.boatType})` : 'Non spécifié'}
-                  </Text>
-                </View>
-              </View>
+             <View style={styles.infoRow}>
+  <Ship size={20} color="#0066CC" />
+  <View style={styles.infoContent}>
+    <Text style={styles.infoLabel}>Bateau</Text>
+    <Text style={styles.infoValue}>
+      {form.boatName ? `${form.boatName} (${form.boatType})` : 'Non spécifié'}
+    </Text>
+  </View>
+</View>
+
+
             </View>
           </View>
           

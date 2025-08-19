@@ -1,9 +1,30 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput, Modal } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput, Modal, ActivityIndicator } from 'react-native';
 import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, X, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth, User as AuthUser, PleasureBoater, BoatManagerUser, NauticalCompany, CorporateUser } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
+
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (isHttpUrl(value)) return value;
+
+  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
+  const { data, error } = await supabase
+    .storage
+    .from('avatars') // Assurez-vous que c'est le bon bucket pour les avatars
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 // Interfaces mises à jour pour correspondre aux données Supabase
 interface Client extends PleasureBoater {
@@ -56,6 +77,7 @@ export default function HomeScreen() {
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [otherBMLoading, setOtherBMLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true); // Loading for dashboard stats
 
   // New state for company details modal
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
@@ -68,17 +90,100 @@ export default function HomeScreen() {
     year: 'numeric'
   });
 
-  // Stats for dashboard (still mocked for now)
-  const stats = {
-    urgentRequests: 2,
-    upcomingAppointments: 8,
-    pendingRequests: 5,
-    newMessages: 3,
-    clientSatisfaction: 4.8,
-    reviewCount: 42
-  };
+  // Stats for dashboard (now real data)
+  const [stats, setStats] = useState({
+    urgentRequests: 0,
+    upcomingAppointments: 0,
+    pendingRequests: 0,
+    newMessages: 0,
+    clientSatisfaction: 0,
+    reviewCount: 0
+  });
 
   // --- Data Fetching ---
+  const fetchDashboardStats = useCallback(async () => {
+    setStatsLoading(true);
+    if (!user?.id) {
+      setStatsLoading(false);
+      return;
+    }
+    try {
+      // Fetch current Boat Manager's rating and review count
+      const { data: bmProfile, error: bmProfileError } = await supabase
+        .from('users')
+        .select('rating, review_count')
+        .eq('id', user.id)
+        .single();
+
+      if (bmProfileError) {
+        console.error('Error fetching BM profile for stats:', bmProfileError);
+      }
+
+      // Fetch urgent requests
+      const { count: urgentRequestsCount, error: urgentRequestsError } = await supabase
+        .from('service_request')
+        .select('id', { count: 'exact' })
+        .eq('id_boat_manager', user.id)
+        .eq('urgence', 'urgent');
+
+      if (urgentRequestsError) {
+        console.error('Error fetching urgent requests:', urgentRequestsError);
+      }
+
+      // Fetch upcoming appointments
+      const today = new Date().toISOString().split('T')[0];
+      const nowTime = new Date().toTimeString().slice(0, 5); // "HH:MM"
+
+      const { count: upcomingAppointmentsCount, error: appointmentsError } = await supabase
+        .from('rendez_vous')
+        .select('id', { count: 'exact' })
+        .or(`invite.eq.${user.id},cree_par.eq.${user.id}`)
+        .in('statut', ['en_attente', 'confirme'])
+        .or(`date_rdv.gt.${today},and(date_rdv.eq.${today},heure.gt.${nowTime})`);
+
+      if (appointmentsError) {
+        console.error('Error fetching upcoming appointments:', appointmentsError);
+      }
+
+      // Fetch pending requests (status 'submitted')
+      const { count: pendingRequestsCount, error: pendingRequestsError } = await supabase
+        .from('service_request')
+        .select('id', { count: 'exact' })
+        .eq('id_boat_manager', user.id)
+        .eq('statut', 'submitted');
+
+      if (pendingRequestsError) {
+        console.error('Error fetching pending requests:', pendingRequestsError);
+      }
+
+      // Fetch new messages (simplified: count all unread messages for this user)
+      const { count: newMessagesCount, error: messagesError } = await supabase
+        .from('messages')
+        .select('id', { count: 'exact' })
+        .eq('receiver_id', user.id)
+        .eq('is_read', false);
+
+      if (messagesError) {
+        console.error('Error fetching new messages:', messagesError);
+      }
+
+      setStats(prevStats => ({
+        ...prevStats,
+        urgentRequests: urgentRequestsCount || 0,
+        upcomingAppointments: upcomingAppointmentsCount || 0,
+        pendingRequests: pendingRequestsCount || 0,
+        newMessages: newMessagesCount || 0,
+        clientSatisfaction: bmProfile?.rating || 0,
+        reviewCount: bmProfile?.review_count || 0,
+      }));
+
+    } catch (e) {
+      console.error('Dashboard stats fetch error:', e);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [user]);
+
   useEffect(() => {
     const fetchClients = async () => {
       setClientsLoading(true);
@@ -122,7 +227,12 @@ export default function HomeScreen() {
           .eq('profile', 'pleasure_boater');
 
         if (clientsError) throw clientsError;
-        setClients(data.map(c => ({ ...c, name: `${c.first_name} ${c.last_name}`, boats: c.boat || [] })) as Client[]);
+
+        const clientsWithSignedAvatars = await Promise.all(data.map(async c => {
+          const signedAvatar = await getSignedAvatarUrl(c.avatar);
+          return { ...c, name: `${c.first_name} ${c.last_name}`, avatar: signedAvatar || DEFAULT_AVATAR, boats: c.boat || [] };
+        }));
+        setClients(clientsWithSignedAvatars as Client[]);
       } catch (e) {
         console.error('Error fetching clients:', e);
       } finally {
@@ -161,9 +271,7 @@ export default function HomeScreen() {
 
         if (companyUsersError) throw companyUsersError;
 
-        const formattedCompanies: Company[] = [];
-
-        for (const company of companyUsers) {
+        const formattedCompanies: Company[] = await Promise.all(companyUsers.map(async (company: any) => {
           const companyPortIds = company.user_ports.map((up: any) => up.port_id);
           const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
 
@@ -173,11 +281,12 @@ export default function HomeScreen() {
 
             // Get all port names for the detailed view
             const allCompanyPortNames = company.user_ports.map((up: any) => up.ports?.name).filter(Boolean) as string[];
+            const signedLogo = await getSignedAvatarUrl(company.avatar);
 
-            formattedCompanies.push({
+            return {
               id: company.id,
               name: company.company_name,
-              logo: company.avatar,
+              logo: signedLogo || DEFAULT_AVATAR,
               fullAddress: company.address,
               contactEmail: company.e_mail,
               contactPhone: company.phone,
@@ -195,10 +304,11 @@ export default function HomeScreen() {
                 canManageServices: false, canManageBookings: false,
                 canAccessFinancials: false, canManageStaff: false
               }
-            });
+            };
           }
-        }
-        setCompanies(formattedCompanies);
+          return null; // Filter out companies not sharing a port
+        }));
+        setCompanies(formattedCompanies.filter(Boolean) as Company[]);
       } catch (e) {
         console.error('Error fetching companies:', e);
       } finally {
@@ -214,11 +324,17 @@ export default function HomeScreen() {
           .select('id, first_name, last_name, avatar, e_mail, phone, department, has_new_messages')
           .eq('profile', 'corporate');
         if (error) throw error;
-        setHeadquartersContacts(data.map(c => ({
-          ...c,
-          name: `${c.first_name} ${c.last_name}`,
-          role: 'corporate', // Explicitly set role
-        })) as HeadquartersContact[]);
+
+        const contactsWithSignedAvatars = await Promise.all(data.map(async c => {
+          const signedAvatar = await getSignedAvatarUrl(c.avatar);
+          return {
+            ...c,
+            name: `${c.first_name} ${c.last_name}`,
+            avatar: signedAvatar || DEFAULT_AVATAR,
+            role: 'corporate', // Explicitly set role
+          };
+        }));
+        setHeadquartersContacts(contactsWithSignedAvatars as HeadquartersContact[]);
       } catch (e) {
         console.error('Error fetching headquarters contacts:', e);
       } finally {
@@ -248,9 +364,11 @@ export default function HomeScreen() {
               location = portData.name;
             }
           }
+          const signedAvatar = await getSignedAvatarUrl(bm.avatar);
           return {
             ...bm,
             name: `${bm.first_name} ${bm.last_name}`,
+            avatar: signedAvatar || DEFAULT_AVATAR,
             location: location,
             specialties: bm.user_categorie_service.map((ucs: any) => ucs.categorie_service.description1), // Using categories as specialties
             role: 'boat_manager', // Explicitly set role
@@ -266,12 +384,13 @@ export default function HomeScreen() {
     };
 
     if (user) {
+      fetchDashboardStats(); // Fetch dashboard stats
       fetchClients();
       fetchCompanies();
       fetchHeadquartersContacts();
       fetchOtherBoatManagers();
     }
-  }, [user]);
+  }, [user, fetchDashboardStats]); // Added fetchDashboardStats to dependencies
 
   // --- Filtering Logic ---
   const filteredClients = clients.filter(client => {
@@ -384,55 +503,64 @@ export default function HomeScreen() {
 
       {/* Dashboard Stats */}
       <View style={styles.statsGrid}>
-        <TouchableOpacity 
-          style={[styles.statCard, styles.urgentCard]}
-          onPress={() => router.push('/(boat-manager)/requests?urgency=urgent')}
-        >
-          <AlertTriangle size={24} color="#DC2626" />
-          <Text style={[styles.statNumber, { color: '#DC2626' }]}>
-            {stats.urgentRequests}
-          </Text>
-          <Text style={[styles.statLabel, { color: '#DC2626' }]}>
-            Demandes urgentes
-          </Text>
-        </TouchableOpacity>
+        {statsLoading ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#0066CC" />
+            <Text style={styles.loadingText}>Chargement des statistiques...</Text>
+          </View>
+        ) : (
+          <>
+            <TouchableOpacity 
+              style={[styles.statCard, styles.urgentCard]}
+              onPress={() => router.push('/(boat-manager)/requests?urgency=urgent')}
+            >
+              <AlertTriangle size={24} color="#DC2626" />
+              <Text style={[styles.statNumber, { color: '#DC2626' }]}>
+                {stats.urgentRequests}
+              </Text>
+              <Text style={[styles.statLabel, { color: '#DC2626' }]}>
+                Demandes urgentes
+              </Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={styles.statCard}
-          onPress={() => router.push('/(boat-manager)/planning')}
-        >
-          <Calendar size={24} color="#0066CC" />
-          <Text style={styles.statNumber}>{stats.upcomingAppointments}</Text>
-          <Text style={styles.statLabel}>RDV à venir</Text>
-        </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.statCard}
+              onPress={() => router.push('/(boat-manager)/planning')}
+            >
+              <Calendar size={24} color="#0066CC" />
+              <Text style={styles.statNumber}>{stats.upcomingAppointments}</Text>
+              <Text style={styles.statLabel}>RDV à venir</Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={styles.statCard}
-          onPress={() => router.push('/(boat-manager)/requests?status=submitted')}
-        >
-          <FileText size={24} color="#F59E0B" />
-          <Text style={styles.statNumber}>{stats.pendingRequests}</Text>
-          <Text style={styles.statLabel}>Nouvelles demandes</Text>
-          {stats.pendingRequests > 0 && (
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationText}>{stats.pendingRequests}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.statCard}
+              onPress={() => router.push('/(boat-manager)/requests?status=submitted')}
+            >
+              <FileText size={24} color="#F59E0B" />
+              <Text style={styles.statNumber}>{stats.pendingRequests}</Text>
+              <Text style={styles.statLabel}>Nouvelles demandes</Text>
+              {stats.pendingRequests > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationText}>{stats.pendingRequests}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={styles.statCard}
-          onPress={() => router.push('/(boat-manager)/messages')}
-        >
-          <MessageSquare size={24} color="#10B981" />
-          <Text style={styles.statNumber}>{stats.newMessages}</Text>
-          <Text style={styles.statLabel}>Nouveaux messages</Text>
-          {stats.newMessages > 0 && (
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationText}>{stats.newMessages}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.statCard}
+              onPress={() => router.push('/(boat-manager)/messages')}
+            >
+              <MessageSquare size={24} color="#10B981" />
+              <Text style={styles.statNumber}>{stats.newMessages}</Text>
+              <Text style={styles.statLabel}>Nouveaux messages</Text>
+              {stats.newMessages > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationText}>{stats.newMessages}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
       </View>
 
       {/* Carte de performance */}
@@ -445,13 +573,13 @@ export default function HomeScreen() {
             <Text style={styles.performanceTitleText}>Satisfaction client</Text>
           </View>
           <View style={styles.ratingContainer}>
-            <Text style={styles.ratingText}>{stats.clientSatisfaction}</Text>
+            <Text style={styles.ratingText}>{stats.clientSatisfaction.toFixed(1)}</Text>
             <View style={styles.starsContainer}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <Star
                   key={star}
-                  fill={star <= 4 ? '#FFC107' : 'none'}
-                  color={star <= 4 ? '#FFC107' : '#D1D5DB'}
+                  fill={star <= Math.floor(stats.clientSatisfaction) ? '#FFC107' : 'none'}
+                  color={star <= Math.floor(stats.clientSatisfaction) ? '#FFC107' : '#D1D5DB'}
                 />
               ))}
               <Text style={styles.reviewCount}>({stats.reviewCount} avis)</Text>
@@ -496,18 +624,28 @@ export default function HomeScreen() {
 
         {clientsLoading ? (
           <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#0066CC" />
             <Text style={styles.loadingText}>Chargement des clients...</Text>
           </View>
         ) : filteredClients.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredClients.map((client) => (
+            {filteredClients.slice(0, 4).map((client) => ( // Limit to 4 clients
               <TouchableOpacity 
                 key={client.id} 
                 style={styles.clientCardCompact}
                 onPress={() => handleClientDetails(client.id)}
               >
                 <View style={styles.clientCardHeader}>
-                  <Image source={{ uri: client.avatar }} style={styles.clientAvatarCompact} />
+                  <Image 
+                    source={{ uri: client.avatar }} 
+                    style={styles.clientAvatarCompact} 
+                    onError={() => {
+                      // Fallback to default avatar if image fails to load
+                      setClients(prev =>
+                        prev.map(c => c.id === client.id ? { ...c, avatar: DEFAULT_AVATAR } : c)
+                      );
+                    }}
+                  />
                   <View style={[styles.statusBadgeCompact, { backgroundColor: `${getStatusColor(client.status)}15` }]}>
                     <View style={[styles.statusDot, { backgroundColor: getStatusColor(client.status) }]} />
                     <Text style={[styles.statusTextCompact, { color: getStatusColor(client.status) }]}>
@@ -613,17 +751,27 @@ export default function HomeScreen() {
 
         {companiesLoading ? (
           <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#0066CC" />
             <Text style={styles.loadingText}>Chargement des entreprises...</Text>
           </View>
         ) : filteredCompanies.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredCompanies.map((company) => (
+            {filteredCompanies.slice(0, 4).map((company) => ( // Limit to 4 companies
               <TouchableOpacity 
                 key={company.id} 
                 style={styles.companyCardCompact}
                 onPress={() => handleCompanyDetails(company)}
               >
-                <Image source={{ uri: company.logo }} style={styles.companyLogoCompact} />
+                <Image 
+                  source={{ uri: company.logo }} 
+                  style={styles.companyLogoCompact} 
+                  onError={() => {
+                    // Fallback to default avatar if image fails to load
+                    setCompanies(prev =>
+                      prev.map(c => c.id === company.id ? { ...c, logo: DEFAULT_AVATAR } : c)
+                    );
+                  }}
+                />
                 <Text style={styles.companyNameCompact}>{company.name}</Text>
                 
                 {company.commonPortName && ( // Display common port name
@@ -696,6 +844,15 @@ export default function HomeScreen() {
               </View>
             )}
           </View>
+          {filteredContacts.length > 4 && ( // Show "Voir tous" button if more than 4 contacts
+            <TouchableOpacity 
+              style={styles.viewAllButton}
+   //           onPress={() => router.push('/(boat-manager)/headquarters-contacts-list')} {/* Navigate to a new page */}
+            >
+              <Text style={styles.viewAllText}>Voir tous</Text>
+              <ChevronRight size={20} color="#0066CC" />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Contact Search */}
@@ -711,17 +868,27 @@ export default function HomeScreen() {
 
         {contactsLoading ? (
           <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#0066CC" />
             <Text style={styles.loadingText}>Chargement des contacts...</Text>
           </View>
         ) : filteredContacts.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredContacts.map((contact) => (
+            {filteredContacts.slice(0, 4).map((contact) => ( // Limit to 4 contacts
               <TouchableOpacity 
                 key={contact.id} 
                 style={styles.contactCardCompact}
                 onPress={() => handleContactMessage(contact.id)}
               >
-                <Image source={{ uri: contact.avatar }} style={styles.contactAvatarCompact} />
+                <Image 
+                  source={{ uri: contact.avatar }} 
+                  style={styles.contactAvatarCompact} 
+                  onError={() => {
+                    // Fallback to default avatar if image fails to load
+                    setHeadquartersContacts(prev =>
+                      prev.map(c => c.id === contact.id ? { ...c, avatar: DEFAULT_AVATAR } : c)
+                    );
+                  }}
+                />
                 <Text style={styles.contactNameCompact}>{contact.name}</Text>
                 <Text style={styles.contactRoleCompact}>{contact.role || 'Corporate User'}</Text>
                 <Text style={styles.contactDepartmentCompact}>{contact.department}</Text>
@@ -760,6 +927,18 @@ export default function HomeScreen() {
               </View>
             )}
           </View>
+          {/* Afficher "Voir tous" si plus de 4 managers */}
+{filteredBoatManagers.length > 4 && (
+  <TouchableOpacity 
+    style={styles.viewAllButton}
+    onPress={() => router.push('/(boat-manager)/other-boat-managers-list')}
+  >
+    {/* Navigate to a new page */}
+    <Text style={styles.viewAllText}>Voir tous</Text>
+    <ChevronRight size={20} color="#0066CC" />
+  </TouchableOpacity>
+)}
+
         </View>
 
         {/* Boat Manager Search */}
@@ -775,17 +954,27 @@ export default function HomeScreen() {
 
         {otherBMLoading ? (
           <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#0066CC" />
             <Text style={styles.loadingText}>Chargement des Boat Managers...</Text>
           </View>
         ) : filteredBoatManagers.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredBoatManagers.map((manager) => (
+            {filteredBoatManagers.slice(0, 4).map((manager) => ( // Limit to 4 managers
               <TouchableOpacity 
                 key={manager.id} 
                 style={styles.contactCardCompact}
                 onPress={() => handleBoatManagerMessage(manager.id)}
               >
-                <Image source={{ uri: manager.avatar }} style={styles.contactAvatarCompact} />
+                <Image 
+                  source={{ uri: manager.avatar }} 
+                  style={styles.contactAvatarCompact} 
+                  onError={() => {
+                    // Fallback to default avatar if image fails to load
+                    setOtherBoatManagers(prev =>
+                      prev.map(m => m.id === manager.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
+                    );
+                  }}
+                />
                 <Text style={styles.contactNameCompact}>{manager.name}</Text>
                 <View style={styles.boatManagerLocationContainer}>
                   <MapPin size={14} color="#666" />
@@ -846,7 +1035,14 @@ export default function HomeScreen() {
             {selectedCompanyDetails && (
               <ScrollView style={styles.modalBody}>
                 <View style={styles.companyDetailsCard}>
-                  <Image source={{ uri: selectedCompanyDetails.logo }} style={styles.companyDetailsLogo} />
+                  <Image 
+                    source={{ uri: selectedCompanyDetails.logo }} 
+                    style={styles.companyDetailsLogo} 
+                    onError={() => {
+                      // Fallback to default avatar if image fails to load
+                      setSelectedCompanyDetails(prev => prev ? { ...prev, logo: DEFAULT_AVATAR } : null);
+                    }}
+                  />
                   <Text style={styles.companyDetailsName}>{selectedCompanyDetails.name}</Text>
                   
                   {selectedCompanyDetails.commonPortName && ( // Display common port name
@@ -1628,7 +1824,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },

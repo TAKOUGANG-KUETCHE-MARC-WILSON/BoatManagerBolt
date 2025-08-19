@@ -25,6 +25,19 @@ interface BoatForm {
   place_de_port: string; // Added place_de_port
 }
 
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+// Helper to get the public URL for an image in a specific bucket
+const getPublicImageUrl = (filePath: string, bucketName: string): string => {
+  if (!filePath) return '';
+  // If it's already a full HTTP URL, return it directly
+  if (isHttpUrl(filePath)) return filePath;
+
+  // Otherwise, construct the public URL from the file path
+  const { data } = supabase.storage.from(bucketName).getPublicUrl(filePath);
+  return data?.publicUrl || '';
+};
+
 const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }: {
   visible: boolean;
   onClose: () => void;
@@ -139,32 +152,11 @@ export default function EditBoatScreen() {
       }
 
       if (data) {
-        let signedPhotoUrl = '';
-        // Vérifie si une image existe (Supabase)
-        if (data.image && data.image.includes('/storage/v1/object/public/boat.images/')) {
-          // Extraire le "path" relatif à partir de l'URL publique
-          const storagePrefix = '/storage/v1/object/public/boat.images/';
-          const idx = data.image.indexOf(storagePrefix);
-          if (idx !== -1) {
-            const path = data.image.substring(idx + storagePrefix.length);
-            // Générer une URL signée valable 1h
-            const { data: signedUrlData, error: signedUrlError } = await supabase
-              .storage
-              .from('boat.images')
-              .createSignedUrl(path, 60 * 60);
-            if (signedUrlError) {
-              console.warn('Erreur création URL signée :', signedUrlError);
-            } else {
-              signedPhotoUrl = signedUrlData?.signedUrl ?? '';
-              console.log('URL signée générée :', signedPhotoUrl);
-            }
-          }
-        }
+        // Use getPublicImageUrl to ensure we always get a public URL for display
+        const publicPhotoUrl = getPublicImageUrl(data.image || '', 'boat.images');
 
         setForm({
-          photo:
-            signedPhotoUrl ||
-            data.image ||
+          photo: publicPhotoUrl ||
             'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
           name: data.name || '',
           type: data.type || '',
@@ -249,9 +241,9 @@ export default function EditBoatScreen() {
 
   const handleDeletePhoto = async () => {
     // Check if the current photo URL is from Supabase Storage
-    if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
+    if (form.photo && form.photo.includes(getPublicImageUrl('', 'boat.images'))) { // Check against base public URL
       try {
-        const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
+        const filePath = form.photo.split(getPublicImageUrl('', 'boat.images'))[1]; // Extract path
         if (filePath) {
           const { error } = await supabase.storage
             .from('boat.images')
@@ -314,7 +306,7 @@ export default function EditBoatScreen() {
     // If photo is a local URI (newly selected), upload it to Supabase
     if (form.photo && !form.photo.startsWith('http')) {
       try {
-        const fileName = `boat_images/${id}/${Date.now()}.jpeg`; 
+        const fileName = `boat_images/${id}/${Date.now()}.jpeg`;
         const contentType = 'image/jpeg';
 
         // Read the file as base64
@@ -328,7 +320,7 @@ export default function EditBoatScreen() {
           .from('boat.images') // Specify the bucket name here
           .upload(fileName, fileBuffer, { // Use the fileBuffer
             contentType,
-            upsert: false,
+            upsert: true, // Use upsert to overwrite if file with same name exists
           });
 
         if (uploadError) {
@@ -338,18 +330,8 @@ export default function EditBoatScreen() {
           return;
         }
 
-        const { data: signedUrlData, error: signedUrlError } = await supabase
-          .storage
-          .from('boat.images')
-          .createSignedUrl(uploadData.path, 60 * 60); // URL valide 1h
-
-        if (signedUrlError) {
-          console.error('Erreur création URL signée:', signedUrlError);
-          Alert.alert('Erreur', `Problème d'accès à l'image: ${signedUrlError.message}`);
-          return;
-        }
-
-        finalImageUrl = signedUrlData?.signedUrl;
+        // Get the public URL directly
+        finalImageUrl = getPublicImageUrl(uploadData.path, 'boat.images');
 
       } catch (e) {
         console.error('Erreur lors du téléchargement de l\'image:', e);
@@ -370,7 +352,7 @@ export default function EditBoatScreen() {
           type_moteur: form.engine,
           temps_moteur: form.engineHours ? form.engineHours : null,
           longueur: form.length,
-          image: finalImageUrl, // Use the final image URL (local or Supabase)
+          image: finalImageUrl, // Use the final public image URL
           id_port: parseInt(form.portId),
           constructeur: form.manufacturer,
           place_de_port: form.place_de_port, // Include place_de_port in update
@@ -416,8 +398,8 @@ export default function EditBoatScreen() {
             setLoading(true);
             try {
               // Delete image from storage first
-              if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
-                const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
+              if (form.photo && form.photo.includes(getPublicImageUrl('', 'boat.images'))) { // Check against base public URL
+                const filePath = form.photo.split(getPublicImageUrl('', 'boat.images'))[1]; // Extract path
                 if (filePath) {
                   const { error: deleteImageError } = await supabase.storage
                     .from('boat.images')
@@ -516,7 +498,122 @@ export default function EditBoatScreen() {
           <ArrowLeft size={24} color="#1a1a1a" />
         </TouchableOpacity>
         <Text style={styles.title}>Modifier le bateau</Text>
+        <TouchableOpacity
+          style={styles.editButton}
+          onPress={() => { /* Add navigation to edit boat details if needed */ }}
+        >
+          {/* <Edit size={24} color="#0066CC" /> */}
+        </TouchableOpacity>
       </View>
+
+      <Image
+    source={{ uri: form.photo }}
+    style={styles.boatImage}
+    resizeMode="cover"
+  />
+
+      {/* Tabs for boat details - assuming these are part of the original file structure */}
+      {/* You might need to uncomment and adjust these sections based on your actual file */}
+      {/*
+      <View style={styles.tabs}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'general' && styles.activeTab]}
+          onPress={() => setActiveTab('general')}
+        >
+          <Text style={[styles.tabText, activeTab === 'general' && styles.activeTabText]}>
+            Informations Générales
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'documents' && styles.activeTab]}
+          onPress={() => setActiveTab('documents')}
+        >
+          <Text style={[styles.tabText, activeTab === 'documents' && styles.activeTabText]}>
+            Documents Administratifs
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'technical' && styles.activeTab]}
+          onPress={() => setActiveTab('technical')}
+        >
+          <Text style={[styles.tabText, activeTab === 'technical' && styles.activeTabText]}>
+            Carnet de suivi technique
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'inventory' && styles.activeTab]}
+          onPress={() => setActiveTab('inventory')}
+        >
+          <Text style={[styles.tabText, activeTab === 'inventory' && styles.activeTabText]}>
+            Inventaire du bateau
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'usage' && styles.activeTab]}
+          onPress={() => setActiveTab('usage')}
+        >
+          <Text style={[styles.tabText, activeTab === 'usage' && styles.activeTabText]}>
+            Type d'utilisation
+          </Text>
+        </TouchableOpacity>
+      </View>
+      */}
+
+      {/* General Info Tab Content - assuming this is part of the original file structure */}
+      {/* You might need to uncomment and adjust these sections based on your actual file */}
+      {/*
+      {activeTab === 'general' && (
+        <View style={styles.tabContent}>
+          <View style={styles.infoSection}>
+            <View style={styles.infoRow}>
+              <Ship size={20} color="#666" />
+              <Text style={styles.infoLabel}>Type:</Text>
+              <Text style={styles.infoValue}>{form.type}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Tag size={20} color="#666" />
+              <Text style={styles.infoLabel}>Constructeur:</Text>
+              <Text style={styles.infoValue}>{form.manufacturer}</Text>
+            </mView>
+            <View style={styles.infoRow}>
+              <Info size={20} color="#666" />
+              <Text style={styles.infoLabel}>Modèle:</Text>
+              <Text style={styles.infoValue}>{form.model}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Calendar size={20} color="#666" />
+              <Text style={styles.infoLabel}>Année de construction:</Text>
+              <Text style={styles.infoValue}>{form.constructionYear}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Settings size={20} color="#666" />
+              <Text style={styles.infoLabel}>Moteur:</Text>
+              <Text style={styles.infoValue}>{form.engine}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Clock size={20} color="#666" />
+              <Text style={styles.infoLabel}>Heures moteur:</Text>
+              <Text style={styles.infoValue}>{form.engineHours}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Wrench size={20} color="#666" />
+              <Text style={styles.infoLabel}>Longueur:</Text>
+              <Text style={styles.infoValue}>{form.length}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <MapPin size={20} color="#666" />
+              <Text style={styles.infoLabel}>Port d'attache:</Text>
+              <Text style={styles.infoValue}>{form.homePort}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <MapPin size={20} color="#666" />
+              <Text style={styles.infoLabel}>Place de port:</Text>
+              <Text style={styles.infoValue}>{form.place_de_port}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+      */}
 
       <View style={styles.form}>
         <TouchableOpacity
@@ -651,7 +748,7 @@ export default function EditBoatScreen() {
     placeholder="Port d'attache"
     placeholderTextColor="#999"
   />
-  <ImageIcon size={18} color="#b0b3b8" style={{ marginLeft: 6 }} />
+  {/* Removed ImageIcon as it's not used in the original code */}
 </TouchableOpacity>
   {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
 </View>
