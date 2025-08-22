@@ -1,38 +1,254 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X, Building, Search, ChevronRight } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import * as FileSystem from 'expo-file-system';
+import CustomDateTimePicker from '@/components/CustomDateTimePicker';
+import { useAuth } from '@/context/AuthContext';
+import { Buffer } from 'buffer';
+const BUCKET = 'technical.record.documents';
+// Polyfill (utile sur RN/Expo)
+(global as any).Buffer = (global as any).Buffer || Buffer;
+
+
+// Récupère la clé interne du bucket à partir d'une URL publique
+function extractPathFromPublicUrl(publicUrl: string, bucket = BUCKET) {
+  try {
+    const u = new URL(publicUrl);
+    const marker = `/object/public/${bucket}/`;
+    const i = u.pathname.indexOf(marker);
+    if (i === -1) return null;
+    return decodeURIComponent(u.pathname.slice(i + marker.length));
+  } catch {
+    return null;
+  }
+}
+
+// Lit une URI locale (content://, file://) en ArrayBuffer pour éviter les Blobs vides
+async function readUriAsArrayBuffer(uri: string, filename: string) {
+  let src = uri;
+  if (src.startsWith('content://')) {
+    const dest = `${FileSystem.cacheDirectory}${Date.now()}-${filename}`;
+    await FileSystem.copyAsync({ from: src, to: dest });
+    src = dest;
+  }
+  // Web: fetch marche bien
+  if (Platform.OS === 'web') {
+    const ab = await (await fetch(src)).arrayBuffer();
+    if (!ab.byteLength) throw new Error('Fichier vide (0 octet).');
+    return ab;
+  }
+  // Mobile: lire en base64 puis convertir
+  const base64 = await FileSystem.readAsStringAsync(src, { encoding: FileSystem.EncodingType.Base64 });
+  const bytes = Buffer.from(base64, 'base64');
+  if (!bytes.byteLength) throw new Error('Fichier vide (0 octet).');
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 
 interface TechnicalRecordForm {
-  id?: string; // Optional for new records
+  id?: string;
   title: string;
   description: string;
-  date: string;
-  performedBy: string;
+  date: string;                 // YYYY-MM-DD
+  performedById: number | null; // ✅ nouvel ID users
+  performedByLabel: string;     // "Moi-même" ou nom de société
   documents: Array<{
-    id: string; // Client-side ID for list management
+    id: string;
     name: string;
-    type: string; // Mime type or custom type
-    date: string; // YYYY-MM-DD
-    uri: string; // Local URI or Supabase URL
+    type: string;
+    date: string;
+    uri: string;
   }>;
 }
 
+
+const CompanySelectionModal = ({
+  visible,
+  loading,
+  companies,
+  query,
+  onChangeQuery,
+  onPick,
+  onClose,
+}: {
+  visible: boolean;
+  loading: boolean;
+  companies: Array<{ id: string; name: string; location?: string }>;
+  query: string;
+  onChangeQuery: (v: string) => void;
+  onPick: (choice: { id?: string; name: string }) => void;
+  onClose: () => void;
+}) => {
+  const filtered = companies.filter(c =>
+    c.name.toLowerCase().includes(query.toLowerCase())
+  );
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, { maxHeight: '88%' }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner une entreprise du nautisme</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.searchContainer}>
+            <Search size={20} color="#666" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Rechercher une entreprise…"
+              value={query}
+              onChangeText={onChangeQuery}
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
+
+          <ScrollView style={styles.modalList} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+            <TouchableOpacity style={styles.modalItem} onPress={() => onPick({ name: 'Moi-même' })}>
+              <View style={styles.modalItemContent}>
+                <User size={20} color="#0066CC" />
+                <Text style={styles.modalItemText}>Moi-même</Text>
+              </View>
+              <ChevronRight size={20} color="#666" />
+            </TouchableOpacity>
+
+            {loading ? (
+              <View style={{ padding: 24, alignItems: 'center' }}>
+                <ActivityIndicator />
+                <Text style={{ marginTop: 8, color: '#666' }}>Chargement…</Text>
+              </View>
+            ) : filtered.length > 0 ? (
+              filtered.map(c => (
+                <TouchableOpacity key={c.id} style={styles.modalItem} onPress={() => onPick({ id: c.id, name: c.name })} activeOpacity={0.7}>
+                  <View style={styles.modalItemContent}>
+                    <Building size={20} color="#0066CC" />
+                    <View>
+                      <Text style={styles.modalItemText}>{c.name}</Text>
+                      {!!c.location && <Text style={styles.modalItemSubtext}>{c.location}</Text>}
+                    </View>
+                  </View>
+                  <ChevronRight size={20} color="#666" />
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyModalState}>
+                <Text style={styles.emptyModalText}>Aucune entreprise trouvée.</Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+
+
 export default function TechnicalRecordScreen() {
+  const toDate = (v?: string) => {
+  const d = v ? new Date(v) : new Date();
+  return isNaN(d.getTime()) ? new Date() : d;
+};
   const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const isNewRecord = id === 'new';
   const [form, setForm] = useState<TechnicalRecordForm>({
-    title: '',
-    description: '',
-    date: new Date().toISOString().split('T')[0], // Default to today
-    performedBy: '',
-    documents: [],
-  });
-  const [errors, setErrors] = useState<Partial<Record<keyof TechnicalRecordForm, string>>>({});
+  title: '',
+  description: '',
+  date: new Date().toISOString().split('T')[0],
+  performedById: null,
+  performedByLabel: '',
+  documents: [],
+});
+
+
+const { user } = useAuth();
+
+type NauticalCompany = { id: string; name: string; location?: string };
+const [showCompanyModal, setShowCompanyModal] = useState(false);
+const [companies, setCompanies] = useState<NauticalCompany[]>([]);
+const [companiesLoading, setCompaniesLoading] = useState(false);
+const [companyQuery, setCompanyQuery] = useState('');
+
+const [currentUserRowId, setCurrentUserRowId] = useState<number | null>(null);
+
+useEffect(() => {
+  if (!user?.email) return;
+  supabase.from('users').select('id').eq('e_mail', user.email).single()
+    .then(({ data }) => setCurrentUserRowId(data?.id ?? null));
+}, [user?.email]);
+
+// ↓ même fonction que dans l’autre écran
+const fetchNauticalCompaniesForUserPorts = async () => {
+  if (!currentUserRowId) return;               // ✅
+  setCompaniesLoading(true);
+  try {
+    const { data: userPorts, error: portsErr } = await supabase
+      .from('user_ports')
+      .select('port_id')
+      .eq('user_id', currentUserRowId);
+    if (portsErr) throw portsErr;
+
+    const portIds = (userPorts || []).map(p => p.port_id);
+    if (portIds.length === 0) { setCompanies([]); return; }
+
+    const { data: links, error: linksErr } = await supabase
+      .from('user_ports')
+      .select('user_id, port_id')
+      .in('port_id', portIds);
+    if (linksErr) throw linksErr;
+
+    const candidateIds = [...new Set((links || []).map(l => l.user_id))];
+    if (candidateIds.length === 0) { setCompanies([]); return; }
+
+    const { data: companiesData, error: compErr } = await supabase
+      .from('users')
+      .select('id, company_name, user_ports(port_id, ports(name))')
+      .in('id', candidateIds)
+      .eq('profile', 'nautical_company');
+    if (compErr) throw compErr;
+
+    const list = (companiesData || []).map((c: any) => ({
+      id: String(c.id),
+      name: c.company_name,
+      location: (c.user_ports?.[0]?.ports?.name) ?? undefined,
+    }));
+    setCompanies(list);
+  } catch (e) {
+    console.error('Error fetching nautical companies:', e);
+    Alert.alert('Erreur', 'Impossible de charger les entreprises du nautisme de votre port.');
+    setCompanies([]);
+  } finally {
+    setCompaniesLoading(false);
+  }
+};
+
+
+useEffect(() => { if (showCompanyModal) fetchNauticalCompaniesForUserPorts(); }, [showCompanyModal]);
+
+
+  type FormErrors = {
+  title?: string;
+  description?: string;
+  date?: string;
+  performedBy?: string; // libellé d'erreur pour le sélecteur prestataire
+};
+
+const [errors, setErrors] = useState<FormErrors>({});
+
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+
+const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+
+const handleDateConfirm = (date: Date) => {
+  setForm(prev => ({ ...prev, date: date.toISOString().split('T')[0] }));
+  setDatePickerVisible(false);
+};
+
 
   useEffect(() => {
     const fetchTechnicalRecord = async () => {
@@ -75,19 +291,36 @@ export default function TechnicalRecordScreen() {
           }
 
           setForm({
-            id: recordData.id.toString(),
-            title: recordData.title || '',
-            description: recordData.description || '',
-            date: recordData.date || '',
-            performedBy: recordData.performed_by || '',
-            documents: documentsData ? documentsData.map(doc => ({
-              id: doc.id.toString(),
-              name: doc.name,
-              type: doc.type,
-              date: doc.date,
-              uri: doc.file_url, // Use file_url as uri for existing documents
-            })) : [],
-          });
+  id: recordData.id.toString(),
+  title: recordData.title || '',
+  description: recordData.description || '',
+  date: recordData.date || '',
+  performedById: recordData.performed_by ?? null,            // ✅ nouvel ID
+  performedByLabel: recordData.performed_by_label || '',     // ✅ le libellé
+  documents: (documentsData || []).map(doc => ({
+    id: doc.id.toString(),
+    name: doc.name,
+    type: doc.type,
+    date: doc.date,
+    uri: doc.file_url,
+  })),
+});
+// Fallback si anciens enregistrements sans performed_by_label
+if (!recordData.performed_by_label && recordData.performed_by) {
+  const { data: u } = await supabase
+    .from('users')
+    .select('company_name, first_name, last_name')
+    .eq('id', recordData.performed_by)
+    .single();
+
+  const guess =
+    u?.company_name ||
+    [u?.first_name, u?.last_name].filter(Boolean).join(' ') ||
+    'Moi-même';
+
+  setForm(prev => ({ ...prev, performedByLabel: guess }));
+}
+
         } catch (e) {
           console.error('Unexpected error fetching technical record:', e);
           setFetchError('Une erreur inattendue est survenue.');
@@ -102,17 +335,23 @@ export default function TechnicalRecordScreen() {
     fetchTechnicalRecord();
   }, [id, boatId, isNewRecord]);
 
+  useEffect(() => {
+  if (form.performedByLabel === 'Moi-même' && !form.performedById && currentUserRowId) {
+    setForm(prev => ({ ...prev, performedById: currentUserRowId }));
+  }
+}, [currentUserRowId]); // ✅
+
+
   const validateForm = () => {
-    const newErrors: Partial<Record<keyof TechnicalRecordForm, string>> = {};
-    
-    if (!form.title.trim()) newErrors.title = 'Le titre est requis';
-    if (!form.description.trim()) newErrors.description = 'La description est requise';
-    if (!form.date.trim()) newErrors.date = 'La date est requise';
-    if (!form.performedBy.trim()) newErrors.performedBy = 'Le prestataire est requis';
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+  const newErrors: FormErrors = {};
+  if (!form.title.trim()) newErrors.title = 'Le titre est requis';
+  if (!form.description.trim()) newErrors.description = 'La description est requise';
+  if (!form.date.trim()) newErrors.date = 'La date est requise';
+  if (!form.performedById) newErrors.performedBy = 'Le prestataire est requis';
+  setErrors(newErrors);
+  return Object.keys(newErrors).length === 0;
+};
+
 
   const handleAddDocument = async () => {
     try {
@@ -165,16 +404,17 @@ export default function TechnicalRecordScreen() {
       let technicalRecordId: number;
       
       if (isNewRecord) {
-        const { data, error } = await supabase
-          .from('boat_technical_records')
-          .insert({
-            boat_id: parseInt(boatId),
-            title: form.title,
-            description: form.description,
-            date: form.date,
-            performed_by: form.performedBy,
-          })
-          .select('id')
+  const { data, error } = await supabase
+    .from('boat_technical_records')
+    .insert({
+      boat_id: parseInt(boatId),
+      title: form.title,
+      description: form.description,
+      date: form.date,
+      performed_by: form.performedById,           // ✅ ID users
+      performed_by_label: form.performedByLabel,  // ✅ libellé (ex: "Moi-même")
+    })
+    .select('id')
           .single();
 
         if (error) {
@@ -186,15 +426,16 @@ export default function TechnicalRecordScreen() {
         technicalRecordId = data.id;
       } else {
         technicalRecordId = parseInt(id as string);
-        const { error } = await supabase
-          .from('boat_technical_records')
-          .update({
-            title: form.title,
-            description: form.description,
-            date: form.date,
-            performed_by: form.performedBy,
-          })
-          .eq('id', technicalRecordId);
+         const { error } = await supabase
+    .from('boat_technical_records')
+    .update({
+      title: form.title,
+      description: form.description,
+      date: form.date,
+      performed_by: form.performedById,           // ✅
+      performed_by_label: form.performedByLabel,  // ✅
+    })
+    .eq('id', technicalRecordId);
 
         if (error) {
           console.error('Error updating technical record:', error);
@@ -205,68 +446,74 @@ export default function TechnicalRecordScreen() {
       }
 
       // Handle documents: upload new ones, keep existing ones, delete removed ones
-      const existingDocumentUris = form.documents
-        .filter(doc => doc.uri.startsWith('http')) // Filter documents that are already uploaded (have a URL)
-        .map(doc => doc.uri);
+const { data: existingDocs } = await supabase
+  .from('boat_technical_record_documents')
+  .select('id, file_url')
+  .eq('technical_record_id', technicalRecordId);
 
-      const documentsToDelete = (await supabase
-        .from('boat_technical_record_documents')
-        .select('id, file_url')
-        .eq('technical_record_id', technicalRecordId))
-        .data?.filter(dbDoc => !existingDocumentUris.includes(dbDoc.file_url)) || [];
+// URIs déjà en ligne (dans ton formulaire)
+const uploadedUris = form.documents
+  .filter(d => d.uri.startsWith('http'))
+  .map(d => d.uri);
 
-      // Delete removed documents from storage and database
-      for (const doc of documentsToDelete) {
-        const filePath = doc.file_url.split(supabase.storage.from('technical_record_documents').getPublicUrl('').data.publicUrl + '/')[1];
-        if (filePath) {
-          const { error: deleteFileError } = await supabase.storage
-            .from('technical_record_documents')
-            .remove([filePath]);
-          if (deleteFileError) console.warn('Error deleting old document file:', deleteFileError);
-        }
-        await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
-      }
+// À supprimer = ce qui est en base mais n’est plus dans le formulaire
+const documentsToDelete = (existingDocs || []).filter(
+  d => !uploadedUris.includes(d.file_url)
+);
+
+
+for (const doc of documentsToDelete) {
+  const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
+  if (key) {
+    const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
+    if (delErr) console.warn('Storage delete error:', delErr);
+  }
+  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
+}
+
 
       // Upload new documents and insert/update records
       for (const doc of form.documents) {
-        if (!doc.uri.startsWith('http')) { // Only upload new files (those with local URIs)
-          const fileExtension = doc.name.split('.').pop();
-          const filePath = `technical_record_documents/${boatId}/${technicalRecordId}/${Date.now()}_${doc.name}`;
-          const response = await fetch(doc.uri);
-          const blob = await response.blob();
+  if (doc.uri.startsWith('http')) continue; // déjà en ligne
 
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('technical_record_documents')
-            .upload(filePath, blob, {
-              contentType: doc.type,
-              upsert: false,
-            });
+  // IMPORTANT: la "key" ne doit PAS contenir le nom du bucket
+  const key = `${boatId}/${technicalRecordId}/${Date.now()}_${doc.name}`;
 
-          if (uploadError) {
-            console.error('Error uploading document file:', uploadError);
-            Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
-            continue;
-          }
+  // Lire en ArrayBuffer (fiable sur Android/iOS)
+  const arrayBuffer = await readUriAsArrayBuffer(doc.uri, doc.name);
+  // (facultatif) console.log('byteLength', arrayBuffer.byteLength);
 
-          const { data: publicUrlData } = supabase.storage.from('technical_record_documents').getPublicUrl(uploadData.path);
-          const fileUrl = publicUrlData.publicUrl;
+  const { error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(key, arrayBuffer, {
+      contentType: doc.type || 'application/octet-stream',
+      upsert: false,
+    });
 
-          const { error: docInsertError } = await supabase
-            .from('boat_technical_record_documents')
-            .insert({
-              technical_record_id: technicalRecordId,
-              name: doc.name,
-              type: doc.type,
-              date: doc.date,
-              file_url: fileUrl,
-            });
+  if (uploadError) {
+    console.error('Error uploading document file:', uploadError);
+    Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
+    continue;
+  }
 
-          if (docInsertError) {
-            console.error('Error inserting document record:', docInsertError);
-            Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
-          }
-        }
-      }
+  const fileUrl = supabase.storage.from(BUCKET).getPublicUrl(key).data.publicUrl;
+
+  const { error: docInsertError } = await supabase
+    .from('boat_technical_record_documents')
+    .insert({
+      technical_record_id: technicalRecordId,
+      name: doc.name,
+      type: doc.type,
+      date: doc.date,
+      file_url: fileUrl,
+    });
+
+  if (docInsertError) {
+    console.error('Error inserting document record:', docInsertError);
+    Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
+  }
+}
+
 
       Alert.alert(
         'Succès',
@@ -312,15 +559,14 @@ export default function TechnicalRecordScreen() {
                 console.warn('Error fetching documents for deletion:', fetchDocsError);
               } else if (documentsData) {
                 for (const doc of documentsData) {
-                  const filePath = doc.file_url.split(supabase.storage.from('technical_record_documents').getPublicUrl('').data.publicUrl + '/')[1];
-                  if (filePath) {
-                    const { error: deleteFileError } = await supabase.storage
-                      .from('technical_record_documents')
-                      .remove([filePath]);
-                    if (deleteFileError) console.warn('Error deleting document file from storage:', deleteFileError);
-                  }
-                  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
-                }
+  const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
+  if (key) {
+    const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
+    if (delErr) console.warn('Storage delete error:', delErr);
+  }
+  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
+}
+
               }
 
               // 2. Delete the main technical record
@@ -460,41 +706,65 @@ export default function TechnicalRecordScreen() {
           </View>
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>Date de l'intervention</Text>
-            <TouchableOpacity
-              style={[styles.inputWrapper, errors.date && styles.inputWrapperError]}
-              onPress={() => { /* Implement date picker logic here */ }}
-            >
-              <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.date}
-                onChangeText={(text) => {
-                  setForm(prev => ({ ...prev, date: text }));
-                  if (errors.date) setErrors(prev => ({ ...prev, date: undefined }));
-                }}
-                placeholder="AAAA-MM-JJ"
-              />
-            </TouchableOpacity>
-            {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
-          </View>
+  <Text style={styles.label}>Date de l'intervention</Text>
+  <TouchableOpacity
+    style={[styles.inputWrapper, errors.date && styles.inputWrapperError]}
+    onPress={() => setDatePickerVisible(true)}
+  >
+    <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
+    <Text style={styles.input}>{form.date || 'Sélectionner une date'}</Text>
+  </TouchableOpacity>
+  {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
+</View>
+
+<CustomDateTimePicker
+  isVisible={isDatePickerVisible}
+  mode="date"
+  value={toDate(form.date)}
+  onConfirm={handleDateConfirm}
+  onCancel={() => setDatePickerVisible(false)}
+/>
+
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>Réalisée par</Text>
-            <View style={[styles.inputWrapper, errors.performedBy && styles.inputWrapperError]}>
-              <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.performedBy}
-                onChangeText={(text) => {
-                  setForm(prev => ({ ...prev, performedBy: text }));
-                  if (errors.performedBy) setErrors(prev => ({ ...prev, performedBy: undefined }));
-                }}
-                placeholder="ex: Nautisme Pro, Moi-même"
-              />
-            </View>
-            {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
-          </View>
+  <Text style={styles.label}>Réalisée par</Text>
+  <TouchableOpacity
+    style={[styles.inputWrapper, errors.performedBy && styles.inputWrapperError]}
+    onPress={() => setShowCompanyModal(true)}
+    activeOpacity={0.8}
+  >
+    <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
+    <Text
+  style={[styles.input, { textAlignVertical: 'center', paddingTop: 0 }]}
+  numberOfLines={1}
+  ellipsizeMode="tail"
+>
+  {form.performedByLabel || 'Sélectionner une entreprise du nautisme'}
+</Text>
+  </TouchableOpacity>
+  {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
+</View>
+
+<CompanySelectionModal
+  visible={showCompanyModal}
+  loading={companiesLoading}
+  companies={companies}
+  query={companyQuery}
+  onChangeQuery={setCompanyQuery}
+  onPick={(choice) => {
+  // Afficher le libellé tout de suite, même si l'ID n'est pas encore dispo
+  const id = choice.id ? Number(choice.id) : (currentUserRowId ?? null);
+  setForm(prev => ({
+    ...prev,
+    performedById: id,                 // peut être null si "Moi-même" mais non résolu
+    performedByLabel: choice.name,     // affichage immédiat
+  }));
+  setErrors(prev => ({ ...prev, performedBy: undefined }));
+  setShowCompanyModal(false);
+}}
+  onClose={() => setShowCompanyModal(false)}
+/>
+
 
           <View style={styles.documentsSection}>
             <View style={styles.documentsSectionHeader}>
@@ -762,4 +1032,117 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  // ⬇️ AJOUTER DANS const styles = StyleSheet.create({ ... })
+  // --- états chargement / erreur ---
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    color: '#666',
+  },
+  errorContainer: {
+    padding: 24,
+    alignItems: 'center',
+    gap: 12,
+  },
+  errorButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  errorButtonText: {
+    color: 'white',
+    fontWeight: '600',
+  },
+
+  // --- styles de la modale société (identiques à l’autre écran) ---
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: { padding: 4 },
+
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f8fafc',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1a1a1a',
+    padding: 0,
+  },
+
+  modalList: { maxHeight: 480 },
+
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    backgroundColor: 'white',
+  },
+  modalItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalItemText: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  modalItemSubtext: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  emptyModalState: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  emptyModalText: {
+    fontSize: 15,
+    color: '#666',
+    textAlign: 'center',
+  },
+
 });

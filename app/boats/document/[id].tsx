@@ -4,6 +4,10 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Calendar, FileText, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
+(global as any).Buffer = (global as any).Buffer || Buffer;
+
 
 interface DocumentForm {
   id?: string; // Optional for new documents
@@ -145,118 +149,134 @@ export default function DocumentScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      return;
-    }
+  const BUCKET = 'user.documents';
 
-    setLoading(true);
-    setFetchError(null);
+function extractPathFromPublicUrl(publicUrl: string, bucket: string) {
+  // publicUrl = https://<proj>.supabase.co/storage/v1/object/public/<bucket>/<path>
+  try {
+    const u = new URL(publicUrl);
+    const marker = `/object/public/${bucket}/`;
+    const i = u.pathname.indexOf(marker);
+    if (i === -1) return null;
+    return u.pathname.substring(i + marker.length); // => "<path/in/bucket>"
+  } catch {
+    return null;
+  }
+}
 
-    let newFileUrl = form.file_url; // Start with existing URL
+const handleSubmit = async () => {
+  if (!validateForm()) return;
 
-    try {
-      // 1. Handle file upload if a new file was selected
-      if (selectedFile && selectedFile.uri !== form.file_url) { // Check if a new file was actually selected
-        // Delete old file from storage if it exists and is different
-        if (form.file_url && form.file_url.includes(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl)) {
-          const oldFilePath = form.file_url.split(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl + '/')[1];
-          if (oldFilePath) {
-            const { error: deleteError } = await supabase.storage
-              .from('user.documents')
-              .remove([oldFilePath]);
-            if (deleteError) {
-              console.warn('Error deleting old file from storage:', deleteError);
-              // Continue even if old file deletion fails, as new file is more important
-            }
-          }
+  setLoading(true);
+  setFetchError?.(null); // si tu n'as pas ce state, supprime cette ligne
+
+  let newFileUrl = form.file_url;
+
+  try {
+    // 1) Upload si un nouveau fichier a été choisi
+    if (selectedFile && selectedFile.uri && selectedFile.uri !== form.file_url) {
+      // 1.a) Supprimer l'ancien fichier s'il existe dans le même bucket
+      if (form.file_url) {
+        const oldPath = extractPathFromPublicUrl(form.file_url, BUCKET);
+        if (oldPath) {
+          const { error: delErr } = await supabase.storage.from(BUCKET).remove([oldPath]);
+          if (delErr) console.warn('Error deleting old file from storage:', delErr);
         }
-
-        const fileExtension = selectedFile.name.split('.').pop();
-        const filePath = `user_documents/${form.id_boat}/${Date.now()}.${fileExtension}`;
-        const response = await fetch(selectedFile.uri);
-        const blob = await response.blob();
-
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('user.documents')
-          .upload(filePath, blob, {
-            contentType: selectedFile.type,
-            upsert: true,
-          });
-
-        if (uploadError) {
-          console.error('Error uploading file:', uploadError);
-          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
-          setLoading(false);
-          return;
-        }
-        newFileUrl = supabase.storage.from('user.documents').getPublicUrl(uploadData.path).data.publicUrl;
       }
 
-      // 2. Perform database operation
-      if (isNewDocument) {
-        const { data, error } = await supabase
-          .from('user_documents')
-          .insert({
-            name: form.name,
-            type: form.type,
-            date: form.date,
-            file_url: newFileUrl,
-            id_boat: parseInt(form.id_boat),
-          })
-          .select('id')
-          .single();
+      // 1.b) Choisir un chemin propre
+      const ext = (selectedFile.name.split('.').pop() || 'dat').toLowerCase();
+      const filePath = `user_documents/${form.id_boat}/${Date.now()}.${ext}`;
 
-        if (error) {
-          console.error('Error inserting document:', error);
-          Alert.alert('Erreur', `Échec de l'ajout du document: ${error.message}`);
-        } else {
-          Alert.alert(
-            'Succès',
-            'Le document a été ajouté avec succès.',
-            [
-              {
-                text: 'OK',
-                onPress: () => router.push(`/boats/${form.id_boat}`)
-              }
-            ]
-          );
-        }
+      // 1.c) Résoudre les URI Android "content://" -> copier vers cache "file://"
+      let fileUri = selectedFile.uri;
+      if (fileUri.startsWith('content://')) {
+        const dest = `${FileSystem.cacheDirectory}${Date.now()}-${selectedFile.name}`;
+        await FileSystem.copyAsync({ from: fileUri, to: dest });
+        fileUri = dest;
+      }
+
+      // 1.d) Lire en base64 puis convertir en octets
+      const base64 = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const bytes = Buffer.from(base64, 'base64');
+      if (bytes.byteLength === 0) {
+        throw new Error('Le fichier lu est vide (0 octet).');
+      }
+      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+      // 1.e) Uploader les octets
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET)
+        .upload(filePath, arrayBuffer as ArrayBuffer, {
+          contentType: selectedFile.type || 'application/octet-stream',
+          upsert: true, // ok si tu veux autoriser l'écrasement
+        });
+
+      if (uploadError) {
+        console.error('Error uploading file:', uploadError);
+        Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      // 1.f) Récupérer l’URL publique
+      newFileUrl = supabase.storage.from(BUCKET).getPublicUrl(filePath).data.publicUrl;
+    }
+
+    // 2) Opération DB
+    if (isNewDocument) {
+      const { error } = await supabase
+        .from('user_documents')
+        .insert({
+          name: form.name,
+          type: form.type,
+          date: form.date,
+          file_url: newFileUrl,
+          id_boat: parseInt(form.id_boat),
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        console.error('Error inserting document:', error);
+        Alert.alert('Erreur', `Échec de l'ajout du document: ${error.message}`);
       } else {
-        const { error } = await supabase
-          .from('user_documents')
-          .update({
-            name: form.name,
-            type: form.type,
-            date: form.date,
-            file_url: newFileUrl,
-          })
-          .eq('id', id)
-          .eq('id_boat', form.id_boat);
-
-        if (error) {
-          console.error('Error updating document:', error);
-          Alert.alert('Erreur', `Échec de la mise à jour du document: ${error.message}`);
-        } else {
-          Alert.alert(
-            'Succès',
-            'Le document a été mis à jour avec succès.',
-            [
-              {
-                text: 'OK',
-                onPress: () => router.push(`/boats/${form.id_boat}`)
-              }
-            ]
-          );
-        }
+        Alert.alert('Succès', 'Le document a été ajouté avec succès.', [
+          { text: 'OK', onPress: () => router.push(`/boats/${form.id_boat}`) },
+        ]);
       }
-    } catch (e) {
-      console.error('Unexpected error during submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
-    } finally {
-      setLoading(false);
+    } else {
+      // ⚠️ assure-toi que "id" est bien défini (id du document)
+      const { error } = await supabase
+        .from('user_documents')
+        .update({
+          name: form.name,
+          type: form.type,
+          date: form.date,
+          file_url: newFileUrl,
+        })
+        .eq('id', id)
+        .eq('id_boat', form.id_boat);
+
+      if (error) {
+        console.error('Error updating document:', error);
+        Alert.alert('Erreur', `Échec de la mise à jour du document: ${error.message}`);
+      } else {
+        Alert.alert('Succès', 'Le document a été mis à jour avec succès.', [
+          { text: 'OK', onPress: () => router.push(`/boats/${form.id_boat}`) },
+        ]);
+      }
     }
-  };
+  } catch (e: any) {
+    console.error('Unexpected error during submission:', e);
+    Alert.alert('Erreur', e?.message || 'Une erreur inattendue est survenue.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleDelete = async () => {
     Alert.alert(

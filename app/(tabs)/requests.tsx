@@ -1,16 +1,15 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert } from 'react-native';
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-
+import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
 
 // Types de statuts pour les différents rôles
-type RequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
+type RequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
 type SortKey = 'date' | 'type' | 'client'; // Simplifié pour le plaisancier
-
 
 // Interface pour les données de la demande
 interface Request {
@@ -47,22 +46,19 @@ interface Request {
   hasStatusUpdate?: boolean; // Client-side UI flag
 }
 
-
 // Configuration des statuts pour le plaisancier
 const statusConfig = {
   submitted: { icon: Clock, color: '#F97316', label: 'Soumise' },
   in_progress: { icon: CircleDot, color: '#3B82F6', label: 'En cours' },
-  forwarded: { icon: Upload, color: '#A855F7', label: 'Transmise' },
+  forwarded: { icon: Upload, color: '#A855F7', label: 'Transmise' }, // Vignette "transmise"
   quote_sent: { icon: FileText, color: '#22C55E', label: 'Devis reçu' },
   quote_accepted: { icon: CheckCircle2, color: '#15803D', label: 'Devis accepté' },
   scheduled: { icon: Calendar, color: '#2563EB', label: 'Planifiée' },
   completed: { icon: CheckCircle2, color: '#0EA5E9', label: 'Terminée' },
-  ready_to_bill: { icon: Upload, color: '#6366F1', label: 'Bon à facturer' },
   to_pay: { icon: Euro, color: '#EAB308', label: 'À régler' },
   paid: { icon: CheckCircle2, color: '#a6acaf', label: 'Réglée' },
   cancelled: { icon: XCircle, color: '#DC2626', label: 'Annulée' },
 };
-
 
 export default function RequestsScreen() {
   const { user } = useAuth();
@@ -77,22 +73,19 @@ export default function RequestsScreen() {
   const [unreadRequestsCount, setUnreadRequestsCount] = useState(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
-
   // Fetch requests for the logged-in pleasure boater
-  useEffect(() => {
-    const fetchRequests = async () => {
-      setLoading(true);
-      if (!user?.id) {
-        Alert.alert('Erreur', 'Utilisateur non authentifié.');
-        setLoading(false);
-        return;
-      }
+  const fetchRequests = useCallback(async () => {
+    setLoading(true);
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      setLoading(false);
+      return;
+    }
 
-
-      try {
-        const { data, error } = await supabase
-          .from('service_request')
-          .select(`
+    try {
+      const { data, error } = await supabase
+        .from('service_request')
+        .select(`
             id,
             description,
             statut,
@@ -105,109 +98,106 @@ export default function RequestsScreen() {
             id_companie(id, company_name),
             categorie_service(description1)
           `)
-          .eq('id_client', user.id) // Filter by the logged-in pleasure boater's ID
-          .order('date', { ascending: false }); // Order by date, newest first
+        .eq('id_client', user.id) // Filter by the logged-in pleasure boater's ID
+        .order('date', { ascending: false }); // Order by date, newest first
 
-
-        if (error) {
-          console.error('Error fetching requests:', error);
-          Alert.alert('Erreur', 'Impossible de charger vos demandes.');
-          return;
-        }
-
-
-        const formattedRequests: Request[] = data.map((req: any) => ({
-          id: req.id.toString(),
-          title: req.description || 'Demande de service',
-          type: req.categorie_service?.description1 || 'N/A',
-          status: req.statut as RequestStatus,
-          urgency: req.urgence as UrgencyLevel,
-          date: req.date,
-          description: req.description,
-          price: req.prix,
-          client: {
-            id: req.id_client.id.toString(),
-            name: `${req.id_client.first_name} ${req.id_client.last_name}`,
-            avatar: req.id_client.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-            email: req.id_client.e_mail,
-            phone: req.id_client.phone,
-          },
-          boat: {
-            id: req.id_boat.id.toString(),
-            name: req.id_boat.name,
-            type: req.id_boat.type,
-          },
-          boatManager: req.id_boat_manager ? {
-            id: req.id_boat_manager.id.toString(),
-            name: `${req.id_boat_manager.first_name} ${req.id_boat_manager.last_name}`,
-          } : undefined,
-          company: req.id_companie ? {
-            id: req.id_companie.id.toString(),
-            name: req.id_companie.company_name,
-          } : undefined,
-          isNew: false, // These flags are managed client-side
-          hasStatusUpdate: false,
-        }));
-
-
-        setRequests(formattedRequests);
-      } catch (e) {
-        console.error('Unexpected error fetching requests:', e);
-        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-
-    const fetchUnreadCounts = async () => {
-      if (!user?.id) return;
-
-
-      // Fetch unread requests (e.g., 'submitted' or 'quote_sent' that haven't been viewed)
-      // This logic might need to be more sophisticated in a real app (e.g., a 'viewed_by_client' flag)
-      const { count: requestsCount, error: requestsError } = await supabase
-        .from('service_request')
-        .select('id', { count: 'exact' })
-        .eq('id_client', user.id)
-        .in('statut', ['submitted', 'quote_sent']); // Example: consider these as "new" for the client
-
-
-      if (requestsError) {
-        console.error('Error fetching unread requests count:', requestsError);
-        setUnreadRequestsCount(0);
-      } else {
-        setUnreadRequestsCount(requestsCount || 0);
+      if (error) {
+        console.error('Error fetching requests:', error);
+        Alert.alert('Erreur', 'Impossible de charger vos demandes.');
+        return;
       }
 
+      const formattedRequests: Request[] = data.map((req: any) => ({
+        id: req.id.toString(),
+        title: req.description || 'Demande de service',
+        type: req.categorie_service?.description1 || 'N/A',
+        status: req.statut as RequestStatus,
+        urgency: req.urgence as UrgencyLevel,
+        date: req.date,
+        description: req.description,
+        price: req.prix,
+ 
+        client: {
+          id: req.id_client.id.toString(),
+          name: `${req.id_client.first_name} ${req.id_client.last_name}`,
+          avatar: req.id_client.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+          email: req.id_client.e_mail,
+          phone: req.id_client.phone,
+        },
+        boat: {
+          id: req.id_boat.id.toString(),
+          name: req.id_boat.name,
+          type: req.id_boat.type,
+        },
+        boatManager: req.id_boat_manager ? {
+          id: req.id_boat_manager.id.toString(),
+          name: `${req.id_boat_manager.first_name} ${req.id_boat_manager.last_name}`,
+        } : undefined,
+        company: req.id_companie ? {
+          id: req.id_companie.id.toString(),
+          name: req.id_companie.company_name,
+        } : undefined,
+        isNew: false, // These flags are managed client-side
+        hasStatusUpdate: false,
+      }));
 
-      // Fetch unread messages
-      const { count: messagesCount, error: messagesError } = await supabase
-        .from('messages')
-        .select('id', { count: 'exact' })
-        .eq('receiver_id', user.id)
-        .eq('is_read', false);
+      setRequests(formattedRequests);
+    } catch (e) {
+      console.error('Unexpected error fetching requests:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user]); // Dependency on 'user' to re-fetch if user changes
 
+  const fetchUnreadCounts = useCallback(async () => {
+    if (!user?.id) return;
 
-      if (messagesError) {
-        console.error('Error fetching unread messages count:', messagesError);
-        setUnreadMessagesCount(0);
-      } else {
-        setUnreadMessagesCount(messagesCount || 0);
-      }
-    };
+    // Fetch unread requests (e.g., 'submitted' or 'quote_sent' that haven't been viewed)
+    // This logic might need to be more sophisticated in a real app (e.g., a 'viewed_by_client' flag)
+    const { count: requestsCount, error: requestsError } = await supabase
+      .from('service_request')
+      .select('id', { count: 'exact' })
+      .eq('id_client', user.id)
+      .in('statut', ['submitted', 'quote_sent']); // Example: consider these as "new" for the client
 
+    if (requestsError) {
+      console.error('Error fetching unread requests count:', requestsError);
+      setUnreadRequestsCount(0);
+    } else {
+      setUnreadRequestsCount(requestsCount || 0);
+    }
 
-    fetchRequests();
-    fetchUnreadCounts();
-  }, [user]);
+    // Fetch unread messages
+    const { count: messagesCount, error: messagesError } = await supabase
+      .from('messages')
+      .select('id', { count: 'exact' })
+      .eq('receiver_id', user.id)
+      .eq('is_read', false);
 
+    if (messagesError) {
+      console.error('Error fetching unread messages count:', messagesError);
+      setUnreadMessagesCount(0);
+    } else {
+      setUnreadMessagesCount(messagesCount || 0);
+    }
+  }, [user]); // Dependency on 'user'
+
+  // Use useFocusEffect to re-fetch requests and unread counts when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchRequests();
+      fetchUnreadCounts();
+      // No cleanup needed for this effect, as it's just fetching data
+    }, [fetchRequests, fetchUnreadCounts]) // Dependencies on the memoized fetch functions
+  );
 
   const requestsSummary = useMemo(() => {
     return {
       total: requests.length,
       submitted: requests.filter(r => r.status === 'submitted').length,
       inProgress: requests.filter(r => r.status === 'in_progress').length,
+      forwarded: requests.filter(r => r.status === 'forwarded').length, // Compte les demandes "transmises"
       quoteSent: requests.filter(r => r.status === 'quote_sent').length,
       quoteAccepted: requests.filter(r => r.status === 'quote_accepted').length,
       scheduled: requests.filter(r => r.status === 'scheduled').length,
@@ -219,10 +209,9 @@ export default function RequestsScreen() {
     };
   }, [requests]);
 
-
   const filteredAndSortedRequests = useMemo(() => {
     let filteredRequests = [...requests];
-   
+    
     // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -235,18 +224,15 @@ export default function RequestsScreen() {
       );
     }
 
-
     // Apply status filter
     if (selectedStatus) {
       filteredRequests = filteredRequests.filter(r => r.status === selectedStatus);
     }
 
-
     // Apply urgency filter
     if (selectedUrgency) {
       filteredRequests = filteredRequests.filter(r => r.urgency === selectedUrgency);
     }
-
 
     // Apply sorting
     return filteredRequests.sort((a, b) => {
@@ -266,7 +252,6 @@ export default function RequestsScreen() {
     });
   }, [sortKey, sortAsc, searchQuery, selectedStatus, selectedUrgency, requests]);
 
-
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortAsc(!sortAsc);
@@ -276,12 +261,10 @@ export default function RequestsScreen() {
     }
   };
 
-
   const handleRequestDetails = (requestId: string) => {
     // Navigate to the central request details view
     router.push(`/request/${requestId}`);
   };
-
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -291,7 +274,6 @@ export default function RequestsScreen() {
     return `${day}-${month}-${year}`;
   };
 
-
   const formatAmount = (amount: number) => {
     return new Intl.NumberFormat('fr-FR', {
       style: 'currency',
@@ -299,23 +281,19 @@ export default function RequestsScreen() {
     }).format(amount);
   };
 
-
   const handleFilterByStatus = (status: RequestStatus | null) => {
     setSelectedStatus(status === selectedStatus ? null : status);
     setSelectedUrgency(null);
   };
-
 
   const handleFilterByUrgency = (urgency: UrgencyLevel | null) => {
     setSelectedUrgency(urgency === selectedUrgency ? null : urgency);
     setSelectedStatus(null);
   };
 
-
   const handleMessage = (clientId: string) => {
     router.push(`/(tabs)/messages?client=${clientId}`);
   };
-
 
   if (loading) {
     return (
@@ -324,7 +302,6 @@ export default function RequestsScreen() {
       </View>
     );
   }
-
 
   return (
     <ScrollView style={styles.container}>
@@ -398,6 +375,18 @@ export default function RequestsScreen() {
           >
             <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{requestsSummary.inProgress}</Text>
             <Text style={[styles.summaryLabel, { color: '#3B82F6' }]}>En cours</Text>
+          </TouchableOpacity>
+         
+          <TouchableOpacity // Vignette "Transmise"
+            style={[
+              styles.summaryCard,
+              { backgroundColor: 'rgba(168, 85, 247, 0.2)' },
+              selectedStatus === 'forwarded' && styles.summaryCardSelected
+            ]}
+            onPress={() => handleFilterByStatus('forwarded')}
+          >
+            <Text style={[styles.summaryNumber, { color: '#A855F7' }]}>{requestsSummary.forwarded}</Text>
+            <Text style={[styles.summaryLabel, { color: '#A855F7' }]}>Transmises</Text>
           </TouchableOpacity>
          
           <TouchableOpacity
@@ -486,7 +475,6 @@ export default function RequestsScreen() {
         </View>
       </View>
 
-
       {/* Recherche et Filtres */}
       <View style={styles.searchSection}>
         <View style={styles.searchContainer}>
@@ -506,7 +494,6 @@ export default function RequestsScreen() {
           <Filter size={20} color={showFilters ? "#0066CC" : "#666"} />
         </TouchableOpacity>
       </View>
-
 
       {showFilters && (
         <View style={styles.filtersContainer}>
@@ -535,7 +522,6 @@ export default function RequestsScreen() {
           </View>
         </View>
       )}
-
 
       {/* Liste des demandes */}
       <View style={styles.section}>
@@ -569,11 +555,14 @@ export default function RequestsScreen() {
           </TouchableOpacity>
         </View>
 
-
         <View style={styles.requestsList}>
           {filteredAndSortedRequests.length > 0 ? (
             filteredAndSortedRequests.map((request) => {
               const status = statusConfig[request.status];
+              if (!status) {
+  console.warn('Statut inconnu :', request.status);
+  return null; // ou continue; si dans un map
+}
               const StatusIcon = status.icon;
               return (
                 <TouchableOpacity
@@ -668,7 +657,6 @@ export default function RequestsScreen() {
                     )}
                   </View>
 
-
                   <View style={styles.requestActions}>
                     <TouchableOpacity
                       style={styles.actionButton}
@@ -698,7 +686,6 @@ export default function RequestsScreen() {
     </ScrollView>
   );
 }
-
 
 const styles = StyleSheet.create({
   container: {
@@ -868,10 +855,10 @@ const styles = StyleSheet.create({
   },
   filtersContainer: {
     backgroundColor: 'white',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
     borderRadius: 12,
+    padding: 16,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -887,7 +874,7 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  filtersTitle: {
+  filterTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1a1a1a',
@@ -1021,6 +1008,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  statusContainer: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1030,6 +1021,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statusText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  sourceBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+  },
+  sourceText: {
     fontSize: 12,
     fontWeight: '500',
   },
@@ -1120,6 +1120,22 @@ const styles = StyleSheet.create({
     color: '#8B5CF6',
     fontWeight: '500',
   },
+  handlerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  handlerText: {
+    fontSize: 12,
+    color: '#0066CC',
+    fontWeight: '500',
+  },
   invoiceInfo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1189,5 +1205,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
-  },
+  }
 });

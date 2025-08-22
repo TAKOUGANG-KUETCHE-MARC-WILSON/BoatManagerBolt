@@ -1,12 +1,4 @@
 {
-  "android": {
-    "adaptiveIcon": {
-      "backgroundColor": "#ffffff",
-      "foregroundImage": "./assets/images/adaptive-icon.png"
-    },
-    "enableNewArchitecture": false,
-    "package": "com.marcwilson.yourboatmanager"
-  },
   "assetBundlePatterns": [
     "**/*"
   ],
@@ -37,7 +29,6 @@
     "expo-router"
   ],
   "scheme": "yourboatmanager",
-  "sdkVersion": "53.0.0",
   "slug": "boat-manager",
   "splash": {
     "backgroundColor": "#ffffff",
@@ -48,5 +39,8 @@
   "version": "1.0.0",
   "web": {
     "favicon": "./assets/images/favicon.png"
+  },
+  "android": {
+    "package": "com.marcwilson.yourboatmanager"
   }
 }

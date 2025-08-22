@@ -139,7 +139,7 @@ export default function BoatManagerTabLayout() {
         name="other-boat-managers-list"
         options={{
           title: 'Devis',
-          headerShown: true,
+          headerShown: false,
           href: null, // Masquer cet écran de la barre d'onglets
         }}
       />
@@ -147,7 +147,7 @@ export default function BoatManagerTabLayout() {
         name="headquarters-contacts-list"
         options={{
           title: 'Devis',
-          headerShown: true,
+          headerShown: false,
           href: null, // Masquer cet écran de la barre d'onglets
         }}
       />

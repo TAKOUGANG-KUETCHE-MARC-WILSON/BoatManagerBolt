@@ -66,8 +66,11 @@ interface NauticalCompany {
   location: string; // Port name
   rating?: number;
   categories: Array<{ id: number; description1: string; }>;
+  contactName?: string;
   contactEmail?: string;
   contactPhone?: string;
+  hasNewRequests?: boolean;
+  ports: Array<{ id: number; name: string; }>; // All ports the company operates in
 }
 
 // Configuration des statuts avec icônes et couleurs
@@ -538,50 +541,18 @@ export default function RequestDetailsScreen() {
     }
   };
 
-  const handleSelectNauticalCompany = async (company: NauticalCompany) => {
-    if (!request || !id) return;
-
-    Alert.alert(
-      'Confirmer la transmission',
-      `Voulez-vous transmettre cette demande à ${company.name} ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: async () => {
-            const { error: updateError } = await supabase
-              .from('service_request')
-              .update({
-                statut: 'forwarded',
-                id_companie: company.id,
-              })
-              .eq('id', parseInt(id));
-
-            if (updateError) {
-              Alert.alert('Erreur', `Impossible de transmettre la demande: ${updateError.message}`);
-            } else {
-              setRequest(prev => prev ? { ...prev, status: 'forwarded', company: { id: company.id, name: company.name, profile: 'nautical_company' } } : prev);
-              Alert.alert('Succès', `Demande transmise à ${company.name}.`);
-              setShowCompanySelectionModal(false);
-            }
-          },
-        },
-      ]
-    );
-  };
-
   const handleCreateQuote = () => {
     if (!request) return;
     router.push({
-      pathname: '/quote/new', // Ou '/(boat-manager)/quote-upload' si c'est le point d'entrée
+      pathname: '/quote/select-method', // Redirige vers la nouvelle page de sélection de méthode
       params: {
+        requestId: request.id,
         clientId: request.client.id,
         clientName: request.client.name,
         clientEmail: request.client.email,
         boatId: request.boat.id,
         boatName: request.boat.name,
         boatType: request.boat.type,
-        requestId: request.id,
       }
     });
   };
@@ -732,7 +703,7 @@ export default function RequestDetailsScreen() {
         {
           text: 'Confirmer',
           onPress: async () => {
-            // Dans une vraie application, vous changeriez un statut 'archived' ou déplaceriez la demande
+            // Dans une vraie application, vous changerais un statut 'archived' ou déplaceriez la demande
             Alert.alert('Succès', 'Demande archivée.');
             router.back();
           },
@@ -1218,7 +1189,7 @@ export default function RequestDetailsScreen() {
             {availableActions.includes('create_quote') && (
               <TouchableOpacity style={[styles.actionButton, styles.primaryButton]} onPress={handleCreateQuote}>
                 <FileText size={20} color="white" />
-                <Text style={[styles.actionButtonText, { color: 'white' }]}>Créer Devis</Text>
+                <Text style={[styles.actionButtonText, { color: 'white' }]}>Créer/modifier Devis</Text>
               </TouchableOpacity>
             )}
             {availableActions.includes('mark_as_completed') && (
@@ -1686,6 +1657,3 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
-
-
-

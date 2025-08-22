@@ -1,12 +1,47 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Upload, X, Building, Search, ChevronRight } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import * as FileSystem from 'expo-file-system';
+import CustomDateTimePicker from '@/components/CustomDateTimePicker';
+import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import { Buffer } from 'buffer';
+(global as any).Buffer = (global as any).Buffer || Buffer;
 
-interface Document {
+const STORAGE_BUCKET = 'inventory.documents';
+
+
+async function readUriAsArrayBuffer(uri: string, filename: string) {
+  let src = uri;
+
+  // Android: content:// → copie vers un file:// lisible
+  if (src.startsWith('content://')) {
+    const dest = `${FileSystem.cacheDirectory}${Date.now()}-${filename}`;
+    await FileSystem.copyAsync({ from: src, to: dest });
+    src = dest;
+  }
+
+  // Web: fetch marche
+  if (Platform.OS === 'web') {
+    const ab = await (await fetch(src)).arrayBuffer();
+    if (!ab.byteLength) throw new Error('Fichier vide (0 octet).');
+    return ab;
+  }
+
+  // Mobile: lire en base64 puis convertir → évite les blobs vides
+  const base64 = await FileSystem.readAsStringAsync(src, { encoding: FileSystem.EncodingType.Base64 });
+  const bytes = Buffer.from(base64, 'base64');
+  if (!bytes.byteLength) throw new Error('Fichier vide (0 octet).');
+
+  // retourne un ArrayBuffer propre
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+
+
+interface InventoryDocument {
   id: string; // Client-side ID for list management
   name: string;
   type: string; // Mime type or custom type
@@ -14,44 +49,152 @@ interface Document {
   uri: string; // Local URI for selected file
 }
 
+// On sépare les erreurs du type du form pour être libres
+type FormErrors = {
+  equipmentType?: string;
+  description?: string;
+  installationDate?: string;
+  installedBy?: string; // message pour l'UI
+};
+
 interface InventoryItemForm {
-  equipmentType: string;
+  equipmentType: string;       // ira dans "name"
   description: string;
   installationDate: string;
-  installedBy: string;
-  documents: Document[];
+  installedById: number | null;   // id users (FK)
+  installedByLabel: string;       // affichage "Moi-même" / nom de la société
+  documents: InventoryDocument[];
 }
+
+
+const CompanySelectionModal = ({
+  visible,
+  loading,
+  companies,
+  query,
+  onChangeQuery,
+  onPick,
+  onClose,
+}: {
+  visible: boolean;
+  loading: boolean;
+  companies: Array<{ id: string; name: string; location?: string }>;
+  query: string;
+  onChangeQuery: (v: string) => void;
+  onPick: (choice: { id?: string; name: string }) => void;
+  onClose: () => void;
+}) => {
+  const filtered = companies.filter(c =>
+    c.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, { maxHeight: '88%' }]}>
+          {/* Header */}
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner une entreprise du nautisme</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Search bar */}
+          <View style={styles.searchContainer}>
+            <Search size={20} color="#666" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Rechercher une entreprise…"
+              value={query}
+              onChangeText={onChangeQuery}
+              placeholderTextColor="#94a3b8"
+            />
+          </View>
+
+          {/* Liste */}
+          <ScrollView style={styles.modalList} contentContainerStyle={{ paddingBottom: 24 }}
+          keyboardShouldPersistTaps="handled">
+            {/* Option Moi-même */}
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => onPick({ name: 'Moi-même' })}
+            >
+              <View style={styles.modalItemContent}>
+                <User size={20} color="#0066CC" />
+                <Text style={styles.modalItemText}>Moi-même</Text>
+              </View>
+              <ChevronRight size={20} color="#666" />
+            </TouchableOpacity>
+
+            {loading ? (
+              <View style={{ padding: 24, alignItems: 'center' }}>
+                <ActivityIndicator />
+                <Text style={{ marginTop: 8, color: '#666' }}>Chargement…</Text>
+              </View>
+            ) : filtered.length > 0 ? (
+              filtered.map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={styles.modalItem}
+                  onPress={() => onPick({ id: c.id, name: c.name })}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.modalItemContent}>
+                    <Building size={20} color="#0066CC" />
+                    <View>
+                      <Text style={styles.modalItemText}>{c.name}</Text>
+                      {!!c.location && (
+                        <Text style={styles.modalItemSubtext}>{c.location}</Text>
+                      )}
+                    </View>
+                  </View>
+                  <ChevronRight size={20} color="#666" />
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyModalState}>
+                <Text style={styles.emptyModalText}>Aucune entreprise trouvée.</Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+
 
 export default function NewInventoryItemScreen() {
   const { boatId } = useLocalSearchParams<{ boatId: string }>();
   const [form, setForm] = useState<InventoryItemForm>({
-    equipmentType: '',
-    description: '',
-    installationDate: new Date().toISOString().split('T')[0], // Default to today
-    installedBy: '',
-    documents: [],
-  });
-  const [errors, setErrors] = useState<Partial<Record<keyof InventoryItemForm, string>>>(
-    {}
-  );
+  equipmentType: '',
+  description: '',
+  installationDate: new Date().toISOString().split('T')[0],
+  installedById: null,
+  installedByLabel: '',
+  documents: [],
+});
+const [errors, setErrors] = useState<FormErrors>({});
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const validateForm = () => {
-    const newErrors: Partial<Record<keyof InventoryItemForm, string>> = {};
+  const newErrors: FormErrors = {};
 
-    if (!form.equipmentType.trim())
-      newErrors.equipmentType = 'Le type d\'équipement est requis';
-    if (!form.description.trim())
-      newErrors.description = 'La description est requise';
-    if (!form.installationDate.trim())
-      newErrors.installationDate = 'La date d\'installation est requise';
-    if (!form.installedBy.trim())
-      newErrors.installedBy = 'Le prestataire est requis';
+  if (!form.equipmentType.trim())
+    newErrors.equipmentType = 'Le type d\'équipement est requis';
+  if (!form.description.trim())
+    newErrors.description = 'La description est requise';
+  if (!form.installationDate.trim())
+    newErrors.installationDate = 'La date d\'installation est requise';
+  if (!form.installedById)
+    newErrors.installedBy = 'Le prestataire est requis';
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+  setErrors(newErrors);
+  return Object.keys(newErrors).length === 0;
+};
 
   const handleAddDocument = async () => {
     try {
@@ -65,13 +208,13 @@ export default function NewInventoryItemScreen() {
       }
 
       const file = result.assets[0];
-      const newDocument: Document = {
-        id: `doc-${Date.now()}`, // Client-side unique ID
-        name: file.name,
-        type: file.mimeType || 'unknown',
-        date: new Date().toISOString().split('T')[0], // Date of document addition
-        uri: file.uri, // Local URI
-      };
+      const newDocument: InventoryDocument = {
+  id: `doc-${Date.now()}`,
+  name: file.name,
+  type: file.mimeType || 'unknown',
+  date: new Date().toISOString().split('T')[0],
+  uri: file.uri,
+};
 
       setForm(prev => ({
         ...prev,
@@ -90,6 +233,87 @@ export default function NewInventoryItemScreen() {
     }));
   };
 
+  const { user } = useAuth();
+
+  // Id numérique de la table public.users pour "Moi-même"
+const [currentUserRowId, setCurrentUserRowId] = useState<number | null>(null);
+
+useEffect(() => {
+  if (!user?.email) return;
+  // Récupère l'id INT de `public.users` à partir de l'email de l'utilisateur auth
+  supabase
+    .from('users')
+    .select('id')
+    .eq('e_mail', user.email)
+    .single()
+    .then(({ data, error }) => {
+      if (error) {
+        console.warn('Lookup users.id by e_mail failed:', error);
+        return;
+      }
+      setCurrentUserRowId(data?.id ?? null);
+    });
+}, [user?.email]);
+
+
+type NauticalCompany = { id: string; name: string; location?: string };
+
+const [showCompanyModal, setShowCompanyModal] = useState(false);
+const [companies, setCompanies] = useState<NauticalCompany[]>([]);
+const [companiesLoading, setCompaniesLoading] = useState(false);
+const [companyQuery, setCompanyQuery] = useState('');
+
+const fetchNauticalCompaniesForUserPorts = async () => {
+  if (!user?.id) return;
+  setCompaniesLoading(true);
+  try {
+    const { data: userPorts, error: portsErr } = await supabase
+      .from('user_ports')
+      .select('port_id')
+      .eq('user_id', user.id);
+    if (portsErr) throw portsErr;
+
+    const portIds = (userPorts || []).map(p => p.port_id);
+    if (portIds.length === 0) { setCompanies([]); return; }
+
+    const { data: links, error: linksErr } = await supabase
+      .from('user_ports')
+      .select('user_id, port_id')
+      .in('port_id', portIds);
+    if (linksErr) throw linksErr;
+
+    const candidateIds = [...new Set((links || []).map(l => l.user_id))];
+    if (candidateIds.length === 0) { setCompanies([]); return; }
+
+    const { data: companiesData, error: compErr } = await supabase
+      .from('users')
+      .select('id, company_name, user_ports(port_id, ports(name))')
+      .in('id', candidateIds)
+      .eq('profile', 'nautical_company');
+    if (compErr) throw compErr;
+
+    const list = (companiesData || []).map((c: any) => ({
+      id: String(c.id),
+      name: c.company_name,
+      location: (c.user_ports?.[0]?.ports?.name) ?? undefined,
+    }));
+    setCompanies(list);
+  } catch (e) {
+    console.error('Error fetching nautical companies:', e);
+    Alert.alert('Erreur', 'Impossible de charger les entreprises du nautisme de votre port.');
+    setCompanies([]);
+  } finally {
+    setCompaniesLoading(false);
+  }
+};
+
+
+// Charge la liste à l’ouverture de la modale
+useEffect(() => {
+  if (showCompanyModal) fetchNauticalCompaniesForUserPorts();
+}, [showCompanyModal]);
+
+
   const handleSubmit = async () => {
     if (!validateForm()) {
       return;
@@ -104,16 +328,16 @@ export default function NewInventoryItemScreen() {
     try {
       // 1. Insert the main inventory item
       const { data: inventoryItem, error: inventoryError } = await supabase
-        .from('boat_inventory')
-        .insert({
-          boat_id: parseInt(boatId),
-          equipment_type: form.equipmentType,
-          description: form.description,
-          installation_date: form.installationDate,
-          installed_by: form.installedBy,
-        })
-        .select('id')
-        .single();
+  .from('boat_inventory')
+  .insert({
+    boat_id: Number(boatId),
+    name: form.equipmentType,                 // ✅ la table a "name"
+    description: form.description,
+    installation_date: form.installationDate,
+    installed_by: form.installedById!,        // déjà validé par validateForm()
+  })
+  .select('id')
+  .single();
 
       if (inventoryError) {
         console.error('Error inserting inventory item:', inventoryError);
@@ -123,45 +347,69 @@ export default function NewInventoryItemScreen() {
       }
 
       // 2. Upload and insert associated documents
-      for (const doc of form.documents) {
-        const fileExtension = doc.name.split('.').pop();
-        const filePath = `inventory_documents/${boatId}/${inventoryItem.id}/${Date.now()}_${doc.name}`;
-        const response = await fetch(doc.uri);
-        const blob = await response.blob();
+      for (const [i, doc] of form.documents.entries()) {
+  // Chemin propre (ne PAS inclure le nom du bucket)
+  const safeName = doc.name.replace(/[^\w.\-]/g, '_');
+  const filePath = `${boatId}/${inventoryItem.id}/${Date.now()}_${i}_${safeName}`;
 
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('inventory_documents') // Your Supabase Storage bucket name
-          .upload(filePath, blob, {
-            contentType: doc.type,
-            upsert: false,
-          });
+  // Lire en ArrayBuffer (fiable RN)
+  let uri = doc.uri; // tu peux garder tel quel, le helper gère content://
+  let arrayBuffer: ArrayBuffer;
+  try {
+    arrayBuffer = await readUriAsArrayBuffer(uri, safeName);
+  } catch (e) {
+    console.error('Lecture fichier KO:', e);
+    Alert.alert('Erreur', `Fichier invalide ou vide: ${doc.name}`);
+    continue;
+  }
 
-        if (uploadError) {
-          console.error('Error uploading document file:', uploadError);
-          Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
-          // Continue to next document or handle as critical failure
-          continue;
-        }
+  const contentType = doc.type && doc.type !== 'unknown'
+    ? doc.type
+    : 'application/octet-stream';
 
-        const { data: publicUrlData } = supabase.storage.from('inventory_documents').getPublicUrl(uploadData.path);
-        const fileUrl = publicUrlData.publicUrl;
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(filePath, arrayBuffer, {
+      contentType,
+      upsert: false,
+    });
 
-        const { error: docInsertError } = await supabase
-          .from('boat_inventory_documents')
-          .insert({
-            inventory_item_id: inventoryItem.id,
-            name: doc.name,
-            type: doc.type,
-            date: doc.date,
-            file_url: fileUrl,
-          });
+  if (uploadError) {
+    console.error('Upload KO:', uploadError);
+    Alert.alert('Erreur', `Échec du téléchargement de ${doc.name}: ${uploadError.message}`);
+    continue;
+  }
 
-        if (docInsertError) {
-          console.error('Error inserting inventory document record:', docInsertError);
-          Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
-          // Continue to next document or handle as critical failure
-        }
-      }
+  // URL publique (bucket public) — si bucket privé, voir NOTE plus bas
+  const { data: publicUrlData } = supabase.storage
+    .from(STORAGE_BUCKET)
+    .getPublicUrl(filePath);
+
+  const fileUrl = publicUrlData?.publicUrl;
+  if (!fileUrl) {
+    console.error('Public URL introuvable pour', filePath);
+    Alert.alert('Erreur', `URL publique introuvable pour ${doc.name}.`);
+    continue;
+  }
+
+  // Insertion de la ligne document (sans .select().single() pour éviter 404 RLS)
+  const { error: docInsertError } = await supabase
+    .from('boat_inventory_documents')
+    .insert({
+      inventory_item_id: inventoryItem.id,
+      name: doc.name,
+      type: contentType,
+      date: doc.date,   // 'YYYY-MM-DD'
+      file_url: fileUrl, // ✅ on enregistre bien l’URL
+    });
+
+  if (docInsertError) {
+    console.error('Insert doc KO:', docInsertError);
+    Alert.alert('Erreur', `Échec de l'enregistrement de ${doc.name}`);
+    // on continue quand même avec les autres fichiers
+  }
+}
+
 
       Alert.alert(
         'Succès',
@@ -181,10 +429,16 @@ export default function NewInventoryItemScreen() {
     }
   };
 
-  const handleDateConfirm = (date: Date) => {
-    setForm(prev => ({ ...prev, installationDate: date.toISOString().split('T')[0] }));
-    setDatePickerVisible(false);
-  };
+  // util pour parser en Date sûre
+const toDate = (v?: string) => {
+  const d = v ? new Date(v) : new Date();
+  return isNaN(d.getTime()) ? new Date() : d;
+};
+
+const handleDateConfirm = (date: Date) => {
+  setForm(prev => ({ ...prev, installationDate: date.toISOString().split('T')[0] }));
+  setDatePickerVisible(false);
+};
 
   return (
     <KeyboardAvoidingView
@@ -255,22 +509,20 @@ export default function NewInventoryItemScreen() {
             {errors.installationDate && <Text style={styles.errorText}>{errors.installationDate}</Text>}
           </View>
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Installée par</Text>
-            <View style={[styles.inputWrapper, errors.installedBy && styles.inputWrapperError]}>
-              <User size={20} color={errors.installedBy ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.installedBy}
-                onChangeText={(text) => {
-                  setForm(prev => ({ ...prev, installedBy: text }));
-                  if (errors.installedBy) setErrors(prev => ({ ...prev, installedBy: undefined }));
-                }}
-                placeholder="ex: Nautisme Pro, Moi-même"
-              />
-            </View>
-            {errors.installedBy && <Text style={styles.errorText}>{errors.installedBy}</Text>}
-          </View>
+           <View style={styles.inputContainer}>
+  <Text style={styles.label}>Installée par</Text>
+   <TouchableOpacity
+     style={[styles.inputWrapper, errors.installedBy && styles.inputWrapperError]}
+    onPress={() => setShowCompanyModal(true)}
+     activeOpacity={0.8}
+   >
+     <User size={20} color={errors.installedBy ? '#ff4444' : '#666'} />
+<Text style={[styles.input, { textAlignVertical: 'center', paddingTop: 0 }]}>
+  {form.installedByLabel || 'Sélectionner une entreprise du nautisme'}
+</Text>
+   </TouchableOpacity>
+   {errors.installedBy && <Text style={styles.errorText}>{errors.installedBy}</Text>}
+ </View>
 
           <View style={styles.documentsSection}>
             <View style={styles.documentsSectionHeader}>
@@ -325,12 +577,42 @@ export default function NewInventoryItemScreen() {
         </View>
       </ScrollView>
 
-      <DateTimePickerModal
-        isVisible={isDatePickerVisible}
-        mode="date"
-        onConfirm={handleDateConfirm}
-        onCancel={() => setDatePickerVisible(false)}
-      />
+       <CustomDateTimePicker
+    isVisible={isDatePickerVisible}
+    mode="date"
+   value={toDate(form.installationDate)}   // <-- un vrai Date
+   onConfirm={handleDateConfirm}           // <-- reconverti en string
+   onCancel={() => setDatePickerVisible(false)}
+ />
+
+    <CompanySelectionModal
+  visible={showCompanyModal}
+  loading={companiesLoading}
+  companies={companies}
+  query={companyQuery}
+  onChangeQuery={setCompanyQuery}
+  onPick={(choice) => {
+  // Si "Moi-même" et qu'on n'a pas encore trouvé l'id numérique, on bloque proprement
+  if (!choice.id && !currentUserRowId) {
+    Alert.alert(
+      'Compte manquant',
+      "Impossible de retrouver votre identifiant interne. Réessayez plus tard."
+    );
+    return;
+  }
+  const id = choice.id ? Number(choice.id) : (currentUserRowId as number); 
+  setForm(prev => ({
+    ...prev,
+    installedById: id,
+    installedByLabel: choice.name,
+  }));
+  setErrors(prev => ({ ...prev, installedBy: undefined }));
+  setShowCompanyModal(false);
+}}
+  onClose={() => setShowCompanyModal(false)}
+/>
+
+
     </KeyboardAvoidingView>
   );
 }
@@ -521,5 +803,88 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+   modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: { padding: 4 },
+
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f8fafc',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1a1a1a',
+    padding: 0,
+  },
+
+  modalList: { maxHeight: 480 },
+
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    backgroundColor: 'white',
+  },
+  modalItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalItemText: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  modalItemSubtext: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  emptyModalState: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  emptyModalText: {
+    fontSize: 15,
+    color: '#666',
+    textAlign: 'center',
   },
 });

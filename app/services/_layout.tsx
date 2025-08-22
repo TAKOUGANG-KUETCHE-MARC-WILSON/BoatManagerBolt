@@ -15,6 +15,7 @@ export default function ServicesLayout() {
       <Stack.Screen name="control" options={{ title: 'Contrôle' }} />
       <Stack.Screen name="access" options={{ title: 'Accès à bord' }} />
       <Stack.Screen name="security" options={{ title: 'Sécurité' }} />
+      <Stack.Screen name="other" options={{ title: 'Autre' }} />
       <Stack.Screen name="administrative" options={{ title: 'Démarches administratives' }} />
     </Stack>
   );

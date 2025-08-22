@@ -10,19 +10,18 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@expo/config-plugins": "~10.0.0",
     "@expo/vector-icons": "^14.0.2",
     "@lucide/lab": "^0.1.2",
-    "@react-native-community/datetimepicker": "^8.4.2",
+    "@react-native-community/datetimepicker": "8.4.1",
     "@react-native-google-signin/google-signin": "^11.0.0",
     "@react-native-picker/picker": "2.11.1",
-    "@react-navigation/bottom-tabs": "^7.4.2",
+    "@react-navigation/bottom-tabs": "^7.3.10",
     "@react-navigation/native": "^7.0.14",
     "@stripe/stripe-react-native": "0.45.0",
     "@supabase/supabase-js": "^2.50.3",
     "bcryptjs": "^3.0.2",
     "buffer": "^6.0.3",
-    "expo": "53.0.11",
+    "expo": "^53.0.20",
     "expo-apple-authentication": "~7.2.4",
     "expo-auth-session": "~6.2.0",
     "expo-blur": "^14.0.3",
@@ -33,6 +32,7 @@
     "expo-file-system": "~18.1.11",
     "expo-font": "^13.0.3",
     "expo-haptics": "^14.0.1",
+    "expo-image-manipulator": "~13.1.7",
     "expo-image-picker": "~16.1.4",
     "expo-linear-gradient": "^14.0.2",
     "expo-linking": "^7.0.5",
@@ -49,24 +49,23 @@
     "expo-web-browser": "^14.0.2",
     "lucide-react-native": "^0.525.0",
     "react": "19.0.0",
-    "react-native": "0.79.0",
+    "react-native": "0.79.5",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-get-random-values": "^1.11.0",
     "react-native-modal-datetime-picker": "^18.0.0",
     "react-native-randombytes": "^3.6.2",
-    "react-native-reanimated": "^3.6.1",
-    "react-native-safe-area-context": "^5.5.0",
-    "react-native-screens": "^4.11.1",
+    "react-native-reanimated": "~3.17.4",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1",
     "react-native-svg": "15.11.2",
     "react-native-url-polyfill": "^2.0.0",
-    "react-native-webview": "^13.15.0",
-    "expo-image-manipulator": "~13.1.7"
+    "react-native-webview": "13.13.5"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
     "@types/react-native-bcrypt": "^2.4.6",
-    "typescript": "^5.3.3"
+    "typescript": "~5.8.3"
   },
   "overrides": {
     "lucide-react-native": {

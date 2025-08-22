@@ -623,49 +623,46 @@ if (userData) {
           return;
         }
 
-        const formattedReviews: Review[] = reviewsData
-          .filter(review => review.service_request)
-          .map(review => {
-            const sr = review.service_request;
-            let reviewedEntity: Review['reviewedEntity'];
+        // ⬇️ remplace tout le bloc actuel qui calcule formattedReviews
+const formattedReviews: Review[] = await Promise.all(
+  (reviewsData || [])
+    .filter(review => review.service_request)
+    .map(async (review) => {
+      const sr = review.service_request;
 
-            if (sr.id_boat_manager) {
-              reviewedEntity = {
-                id: sr.id_boat_manager.id.toString(),
-                name: `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`,
-                avatar: sr.id_boat_manager.avatar && sr.id_boat_manager.avatar.trim() !== '' ? sr.id_boat_manager.avatar : DEFAULT_AVATAR,
+      // Qui est noté ? (BM ou entreprise)
+      const isBM = !!sr.id_boat_manager;
+      const name = isBM
+        ? `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`
+        : sr.id_companie?.company_name || 'Inconnu';
 
-                type: 'boat_manager',
-                entityRating: sr.id_boat_manager.rating,
-                entityReviewCount: sr.id_boat_manager.review_count,
-              };
-            } else if (sr.id_companie) {
-              reviewedEntity = {
-                id: sr.id_companie.id.toString(),
-                name: sr.id_companie.company_name,
-                avatar: sr.id_companie.avatar, // Default for company
-                type: 'nautical_company',
-                entityRating: sr.id_companie.rating,
-                entityReviewCount: sr.id_companie.review_count,
-              };
-            } else {
-              reviewedEntity = {
-                id: 'unknown',
-                name: 'Inconnu',
-                avatar: DEFAULT_AVATAR,
-                type: 'boat_manager',
-              };
-            }
+      // Avatar brut depuis la BDD (peut être chemin, public URL, signed URL ou vide)
+      const rawAvatar = isBM ? sr.id_boat_manager.avatar : sr.id_companie?.avatar;
 
-            return {
-              id: review.id.toString(),
-              rating: review.rating,
-              comment: review.comment,
-              createdAt: review.created_at,
-              reviewedEntity: reviewedEntity,
-            };
-          });
-        setMyReviews(formattedReviews);
+      // 🔐 Obtenir une URL utilisable par <Image/>
+      const signedAvatar = await getSignedAvatarUrl(rawAvatar);
+
+      const reviewedEntity: Review['reviewedEntity'] = {
+        id: (isBM ? sr.id_boat_manager.id : sr.id_companie?.id)?.toString?.() || 'unknown',
+        name,
+        avatar: signedAvatar || DEFAULT_AVATAR,
+        type: isBM ? 'boat_manager' : 'nautical_company',
+        entityRating: isBM ? sr.id_boat_manager.rating : sr.id_companie?.rating,
+        entityReviewCount: isBM ? sr.id_boat_manager.review_count : sr.id_companie?.review_count,
+      };
+
+      return {
+        id: review.id.toString(),
+        rating: review.rating,
+        comment: review.comment,
+        createdAt: review.created_at,
+        reviewedEntity,
+      };
+    })
+);
+
+setMyReviews(formattedReviews);
+
 
         // --- Start of Boat Manager selection logic (MODIFIED) ---
 
@@ -1239,8 +1236,23 @@ const { error } = await supabase
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
                   <Image
-  source={{ uri: review.reviewedEntity.avatar && review.reviewedEntity.avatar.trim() !== '' ? review.reviewedEntity.avatar : DEFAULT_AVATAR }}
+  source={{
+    uri:
+      review.reviewedEntity.avatar &&
+      review.reviewedEntity.avatar.trim() !== ''
+        ? review.reviewedEntity.avatar
+        : DEFAULT_AVATAR,
+  }}
   style={styles.reviewedEntityAvatar}
+  onError={() => {
+    setMyReviews(prev =>
+      prev.map(r =>
+        r.id === review.id
+          ? { ...r, reviewedEntity: { ...r.reviewedEntity, avatar: DEFAULT_AVATAR } }
+          : r
+      )
+    );
+  }}
 />
                   <View style={styles.reviewedEntityInfo}>
                     <Text style={styles.reviewedEntityName}>{review.reviewedEntity.name}</Text>

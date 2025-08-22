@@ -6,107 +6,21 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 
-
 async function getEntretienCategoryId() {
   const { data, error } = await supabase
     .from('categorie_service')
     .select('id')
-    .ilike('description1', 'Amélioration') // insensible à la casse, exact
+    .ilike('description1', 'Autre') // insensible à la casse, exact
     .limit(1)
     .maybeSingle();
 
   if (error || !data) {
-    throw new Error('La catégorie "Amélioration" est introuvable dans categorie_service.description1');
+    throw new Error('La catégorie "Autre" est introuvable dans categorie_service.description1');
   }
   return Number(data.id);
 }
 
-// Choisit le boat manager selon tes règles : port → compétence → historique
-async function resolveBoatManagerForRequest(params: {
-  boatId: number;
-  serviceId: number;
-  clientId: number;
-}): Promise<number | null> {
-  const { boatId, serviceId, clientId } = params;
 
-  // a) Port du bateau
-  const { data: boatRow, error: boatErr } = await supabase
-    .from('boat')
-    .select('id_port')
-    .eq('id', boatId)
-    .single();
-  if (boatErr || !boatRow) return null;
-
-  // b) Tous les users rattachés au port
-  const { data: portUsers, error: puErr } = await supabase
-    .from('user_ports')
-    .select('user_id')
-    .eq('port_id', boatRow.id_port);
-  if (puErr || !portUsers?.length) return null;
-
-  const portUserIds = [...new Set(portUsers.map(u => Number(u.user_id)))];
-
-  // ✅ c) Filtrer par profil "boat_manager"
-  const { data: bmUsers, error: bmErr } = await supabase
-    .from('users')
-    .select('id')
-    .in('id', portUserIds)
-    .eq('profile', 'boat_manager');
-  if (bmErr) return null;
-
-  const boatManagerIds = bmUsers?.map(u => Number(u.id)) ?? [];
-  if (boatManagerIds.length === 0) return null;
-  if (boatManagerIds.length === 1) return boatManagerIds[0];
-
-  // d) Filtrer par compétence (service) parmi les boat managers
-  const { data: capableRows, error: capErr } = await supabase
-    .from('user_categorie_service')
-    .select('user_id')
-    .eq('categorie_service_id', serviceId)
-    .in('user_id', boatManagerIds);
-
-  const capableIds = !capErr && capableRows?.length
-    ? [...new Set(capableRows.map(r => Number(r.user_id)))]
-    : [];
-
-  if (capableIds.length === 1) return capableIds[0];
-
-  // e) Historique client parmi les candidats (priorité: nb de demandes, puis date récente, puis id croissant)
-  const candidates = capableIds.length ? capableIds : boatManagerIds;
-
-  const { data: historyRows, error: histErr } = await supabase
-    .from('service_request')
-    .select('id_boat_manager, date')
-    .eq('id_client', clientId)
-    .in('id_boat_manager', candidates);
-
-  if (!histErr && historyRows?.length) {
-    const stats = new Map<number, { count: number; lastDate: string }>();
-    for (const row of historyRows) {
-      const mid = Number(row.id_boat_manager);
-      if (!mid) continue;
-      const prev = stats.get(mid) ?? { count: 0, lastDate: '1970-01-01' };
-      const d = (row.date ?? '1970-01-01') as string;
-      stats.set(mid, {
-        count: prev.count + 1,
-        lastDate: d > prev.lastDate ? d : prev.lastDate,
-      });
-    }
-    if (stats.size) {
-      const best = [...stats.entries()].sort((a, b) => {
-        const [idA, sA] = a, [idB, sB] = b;
-        if (sB.count !== sA.count) return sB.count - sA.count;
-        if (sB.lastDate !== sA.lastDate) return (sB.lastDate > sA.lastDate ? 1 : -1);
-        return idA - idB;
-      })[0]?.[0];
-      if (best) return best;
-    }
-  }
-
-  // f) Fallback déterministe
-  candidates.sort((a, b) => a - b);
-  return candidates[0] ?? null;
-}
 
 // Extracted UrgencySelector component
 const UrgencySelector = ({ urgencyLevel, setUrgencyLevel, componentStyles }) => {
@@ -161,11 +75,12 @@ const UrgencySelector = ({ urgencyLevel, setUrgencyLevel, componentStyles }) => 
   );
 };
 
-export default function ImprovementScreen() {
+export default function OtherScreen() {
   const { boatId, serviceCategoryId } = useLocalSearchParams<{ boatId: string; serviceCategoryId: string }>();
   const { user } = useAuth();
 
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent'>('normal');
+  const [detailedDescription, setDetailedDescription] = useState('');
 
   const handleSubmit = async (formData: any) => {
     if (!user?.id || !boatId || !serviceCategoryId) {
@@ -173,29 +88,43 @@ export default function ImprovementScreen() {
       return;
     }
 
-    const description = formData.improvementType ? formData.improvementType.trim() : '';
-
-    if (!description) {
-      Alert.alert('Erreur', 'Veuillez décrire les améliorations que vous souhaitez apporter.');
+    if (!detailedDescription.trim()) {
+      Alert.alert('Erreur', 'Veuillez décrire votre demande.');
       return;
     }
 
     try {
-      const id_service = await getEntretienCategoryId(); // Get the specific service category ID
+      // Récupérer le Boat Manager associé au port du bateau
+      const { data: boatData, error: boatError } = await supabase
+        .from('boat')
+        .select('id_port')
+        .eq('id', boatId)
+        .single();
 
-      const id_boat_manager = await resolveBoatManagerForRequest({
-        boatId: Number(boatId),
-        serviceId: id_service,
-        clientId: Number(user.id),
-      });
+      if (boatError || !boatData) {
+        console.error('Error fetching boat port:', boatError);
+        Alert.alert('Erreur', 'Impossible de récupérer les informations du port du bateau.');
+        return;
+      }
+
+      const { data: bmPortAssignment, error: bmPortAssignmentError } = await supabase
+        .from('user_ports')
+        .select('user_id')
+        .eq('port_id', boatData.id_port)
+        .limit(1); // Prend le premier Boat Manager trouvé pour ce port
+
+      let id_boat_manager = null;
+      if (!bmPortAssignmentError && bmPortAssignment.length > 0) {
+        id_boat_manager = bmPortAssignment[0].user_id;
+      }
 
       const { error } = await supabase
         .from('service_request')
         .insert({
           id_client: user.id,
           id_boat: parseInt(boatId),
-          id_service: id_service, // Utilise l'ID de la catégorie de service
-          description: description,
+          id_service: parseInt(serviceCategoryId), // Utilise l'ID de la catégorie de service
+          description: detailedDescription,
           urgence: urgencyLevel,
           statut: 'submitted', // Statut initial
           date: new Date().toISOString().split('T')[0], // Date du jour
@@ -219,25 +148,34 @@ export default function ImprovementScreen() {
     <ScrollView style={styles.container}>
       <View style={styles.content}>
         <ServiceForm
-          title="Amélioration de votre bateau"
-          description="Décrivez les améliorations que vous souhaitez apporter à votre bateau"
-          fields={[
-            {
-              name: 'improvementType',
-              label: "",
-              placeholder: "Décrivez les améliorations que vous souhaitez apporter à votre bateau",
-              icon: Tool,
-              multiline: true,
-            },
-          ]}
+          title="Autre demande"
+          description="Décrivez votre besoin spécifique"
+          fields={[]}
           submitLabel="Envoyer"
           onSubmit={handleSubmit}
           customContent={
-            <UrgencySelector
-              urgencyLevel={urgencyLevel}
-              setUrgencyLevel={setUrgencyLevel}
-              componentStyles={styles}
-            />
+            <>
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Description détaillée de votre demande</Text>
+                <View style={styles.textAreaWrapper}>
+                  <TextInput
+                    style={styles.textArea}
+                    value={detailedDescription}
+                    onChangeText={setDetailedDescription}
+                    placeholder="Décrivez en détail votre demande (ex: besoin d'un expert maritime, recherche de place de port, etc.)"
+                    multiline
+                    numberOfLines={4}
+                    textAlignVertical="top"
+                  />
+                </View>
+              </View>
+
+              <UrgencySelector
+                urgencyLevel={urgencyLevel}
+                setUrgencyLevel={setUrgencyLevel}
+                componentStyles={styles}
+              />
+            </>
           }
         />
       </View>
@@ -252,8 +190,28 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 24,
-    flex: 1,
-    height: '100%'
+  },
+  inputContainer: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1a1a1a',
+    marginBottom: 8,
+  },
+  textAreaWrapper: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 12,
+  },
+  textArea: {
+    fontSize: 16,
+    color: '#1a1a1a',
+    minHeight: 120,
+    textAlignVertical: 'top',
   },
   urgencySelector: {
     marginBottom: 24,
@@ -301,9 +259,18 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   urgencyNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 8,
+  },
+  urgencyNoteText: {
     flex: 1,
     fontSize: 14,
     color: '#DC2626',
     lineHeight: 20,
-  }
+  },
 });

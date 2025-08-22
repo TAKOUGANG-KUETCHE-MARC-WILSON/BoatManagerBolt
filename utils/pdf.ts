@@ -271,8 +271,8 @@ export const generateQuotePDF = async (quote: QuoteData) => {
 
         <div class="footer">
           <p>Your Boat Manager - Facilitateur de plaisance</p>
-          <p>SIRET: 123 456 789 00012 - TVA: FR12 123 456 789</p>
-          <p>123 Avenue de la Mer, 13000 Marseille - contact@yourboatmanager.com</p>
+          <p>SIRET: 988 859 088 000 11 - TVA: FR86 988 859 088</p>
+          <p>10 Rue Jean Philippe Rameau, Toulon  - contact@yourboatmanager.com</p>
         </div>
       </body>
     </html>

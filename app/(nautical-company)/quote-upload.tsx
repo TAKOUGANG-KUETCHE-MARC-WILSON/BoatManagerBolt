@@ -5,6 +5,9 @@ import { ArrowLeft, Upload, FileText, User, Bot as Boat, Calendar, Plus, X, Chec
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
+
 
 interface Service {
   id: string;
@@ -232,24 +235,45 @@ export default function QuoteUploadScreen() {
     let fileUrl: string | null = null;
     if (uploadMethod === 'upload' && form.file) {
       try {
-        const fileExtension = form.file.name.split('.').pop();
-        const filePath = `quotes/${form.requestId}/${Date.now()}.${fileExtension}`;
-        const response = await fetch(form.file.uri);
-        const blob = await response.blob();
+        const ext = (form.file.name.split('.').pop() || 'pdf').toLowerCase();
+const filePath = `quotes/${form.requestId}/${Date.now()}.${ext}`;
 
-        const { data, error: uploadError } = await supabase.storage
-          .from('quotes') // Assuming a bucket named 'quotes'
-          .upload(filePath, blob, {
-            contentType: form.file.type,
-            upsert: false,
-          });
+// 1) Résoudre content:// sur Android en copiant vers cache file://
+let fileUri = form.file.uri;
+if (fileUri.startsWith('content://')) {
+  const dest = `${FileSystem.cacheDirectory}${Date.now()}-${form.file.name}`;
+  await FileSystem.copyAsync({ from: fileUri, to: dest });
+  fileUri = dest;
+}
 
-        if (uploadError) {
-          console.error('Error uploading file:', uploadError);
-          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
-          return;
-        }
-        fileUrl = supabase.storage.from('quotes').getPublicUrl(filePath).data.publicUrl;
+// 2) Lire en base64 puis convertir en octets
+const base64 = await FileSystem.readAsStringAsync(fileUri, {
+  encoding: FileSystem.EncodingType.Base64,
+});
+const bytes = Buffer.from(base64, 'base64'); // Uint8Array
+if (bytes.byteLength === 0) {
+  throw new Error('Le fichier lu est vide (0 octet).');
+}
+// convertir proprement en ArrayBuffer
+const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+// 3) Uploader des octets (PAS un Blob)
+const { error: uploadError } = await supabase.storage
+  .from('quotes')
+  .upload(filePath, arrayBuffer as ArrayBuffer, {
+    contentType: form.file.type || 'application/pdf',
+    upsert: true, // ou false si tu veux strictement éviter l’écrasement
+  });
+if (uploadError) {
+  console.error('Error uploading file:', uploadError);
+  Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
+  return;
+}
+
+// 4) Récupérer l’URL publique
+const { data: pub } = supabase.storage.from('quotes').getPublicUrl(filePath);
+fileUrl = pub.publicUrl;
+
       } catch (e) {
         console.error('Error processing file upload:', e);
         Alert.alert('Erreur', 'Une erreur est survenue lors du traitement du fichier.');

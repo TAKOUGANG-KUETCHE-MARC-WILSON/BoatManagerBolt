@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ImageBackground, ScrollView, TouchableOpacity, Platform, Animated, Image, Modal, TextInput, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { Wrench, MessagesSquare, Handshake as HandshakeIcon, Tag, ShoppingBag as Cart, PenTool as Tool, Hammer, Settings, Gauge, Key, Shield, FileText, ChevronDown, Plus, User, Phone, Mail, Star, Search, MapPin, X, ArrowLeft, Anchor, MessageSquare } from 'lucide-react-native';
+import { Wrench, MessagesSquare, Handshake as HandshakeIcon, Tag, ShoppingBag as Cart, PenTool as Tool, Hammer, Settings, Gauge, Key, Shield, FileText, ChevronDown, Plus, User, Phone, Mail, Star, Search, MapPin, X, ArrowLeft, Anchor, MessageSquare, ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import TemporaryPortModal from '../../components/TemporaryPortModal'; // <-- Importation du nouveau composant
 
 interface ServiceCategory {
+  id: number; // Added for Supabase mapping
   title: string;
   icon: any;
   color: string;
   services: Array<{
+    id: number; // Added for Supabase mapping
     name: string;
     icon: React.ComponentType<any>;
     route: string;
@@ -21,6 +23,14 @@ interface ServiceCategory {
 interface Port {
   id: string;
   name: string;
+}
+
+interface BoatDetails {
+  id: string;
+  name: string;
+  type: string;
+  image: string;
+  id_port: number; // Added for Supabase mapping
 }
 
 interface BoatManagerDetails {
@@ -86,34 +96,36 @@ async function getAvatarUrl(value?: string | null): Promise<string> {
 }
 
 
-
-
-
 const serviceCategories: ServiceCategory[] = [
   {
+    id: 1, // Corresponds to 'Maintenance' category in Supabase
     title: 'Maintenance',
     icon: Wrench,
     color: '#0EA5E9',
     services: [
       { 
+        id: 101, // Corresponds to 'Entretien' service in Supabase
         name: 'Entretien', 
         icon: Settings,
         route: '/services/maintenance',
         description: 'Entretien régulier et préventif'
       },
       { 
+        id: 102, // Corresponds to 'Amélioration' service in Supabase
         name: 'Amélioration', 
         icon: Hammer,
         route: '/services/improvement',
         description: 'Optimisez votre bateau'
       },
       { 
+        id: 103, // Corresponds to 'Réparation / Panne' service in Supabase
         name: 'Réparation / Panne', 
         icon: Wrench,
         route: '/services/repair',
         description: 'Remise en état'
       },
       { 
+        id: 104, // Corresponds to 'Contrôle' service in Supabase
         name: 'Contrôle', 
         icon: Gauge,
         route: '/services/control',
@@ -122,42 +134,56 @@ const serviceCategories: ServiceCategory[] = [
     ],
   },
   {
+    id: 2, // Corresponds to 'Assistance' category in Supabase
     title: 'Assistance',
     icon: MessagesSquare,
     color: '#10B981',
     services: [
       { 
-        name: 'Accès à mon bateau', 
+        id: 201, // Corresponds to 'Gestion des accès' service in Supabase
+        name: 'Gestion des accès', // Renamed from 'Accès à mon bateau'
         icon: Key,
         route: '/services/access',
         description: 'Gestion des accès'
       },
       { 
+        id: 202, // Corresponds to 'Sécurité' service in Supabase
         name: 'Sécurité', 
         icon: Shield,
         route: '/services/security',
         description: 'Protection et surveillance'
       },
       { 
+        id: 203, // Corresponds to 'Représentation' service in Supabase
         name: 'Représentation', 
         icon: FileText,
         route: '/services/administrative',
         description: 'Délégation de vos intérêts'
       },
+      {
+        id: 204, // New service for 'Autre'
+        name: 'Autre',
+        icon: Tool, // Using a generic tool icon
+        route: '/services/other', // Assuming a generic 'other' service screen
+        description: 'Demande de service non listée'
+      }
     ],
   },
   {
+    id: 3, // Corresponds to 'Achat/Vente' category in Supabase
     title: 'Achat/Vente',
     icon: HandshakeIcon,
     color: '#4F46E5',
     services: [
       { 
+        id: 301, // Corresponds to 'Je vends mon bateau' service in Supabase
         name: 'Je vends mon bateau', 
         icon: Tag,
         route: '/services/sell',
         description: 'Mettez votre bateau en vente'
       },
       { 
+        id: 302, // Corresponds to 'Je cherche un bateau' service in Supabase
         name: 'Je cherche un bateau', 
         icon: Cart,
         route: '/services/buy',
@@ -167,7 +193,7 @@ const serviceCategories: ServiceCategory[] = [
   },
 ];
 
-function ServiceCategoryCard({ category }: { category: ServiceCategory }) {
+function ServiceCategoryCard({ category, onServicePress }: { category: ServiceCategory, onServicePress: (category: ServiceCategory, service: ServiceCategory['services'][0]) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [rotateAnimation] = useState(new Animated.Value(0));
 
@@ -212,7 +238,8 @@ function ServiceCategoryCard({ category }: { category: ServiceCategory }) {
             <View key={index} style={styles.serviceRow}>
               <TouchableOpacity
                 style={styles.serviceCard}
-                onPress={() => router.push(service.route)}>
+                onPress={() => onServicePress(category, service)} // Modified to use onServicePress
+              >
                 <View style={[styles.serviceIcon, { backgroundColor: `${category.color}15` }]}>
                   <service.icon size={24} color={category.color} />
                 </View>
@@ -242,6 +269,12 @@ export default function HomeScreen() {
   
   const [allPorts, setAllPorts] = useState<Port[]>([]); // All ports for the modal
   const [userHomePortId, setUserHomePortId] = useState<string | null>(null); // To store the user's home port ID
+
+  // New states for boat selection
+  const [userBoats, setUserBoats] = useState<BoatDetails[]>([]);
+  const [showBoatSelectionModal, setShowBoatSelectionModal] = useState(false);
+  const [selectedServiceForRequest, setSelectedServiceForRequest] = useState<{ category: ServiceCategory, service: ServiceCategory['services'][0] } | null>(null);
+
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -304,7 +337,7 @@ const portsById = new Map(portsList.map(p => [p.id, p.name]));
 
 // ⬇️ getAvatarUrl est async → Promise.all
 const formattedBms: BoatManagerDetails[] = await Promise.all(
-  bmsData.map(async (bm) => {
+  (bmsData ?? []).map(async (bm) => {
     const assignedPortId = bmPortAssignments.find(bmpa => bmpa.user_id === bm.id)?.port_id?.toString();
     const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
     const avatarUrl = await getAvatarUrl(bm.avatar);
@@ -318,13 +351,31 @@ const formattedBms: BoatManagerDetails[] = await Promise.all(
       location: bmPortName,
       rating: bm.rating,
       reviewCount: bm.review_count,
-      bio: bm.bio || 'Boat Manager professionnel',
+      bio: bm.bio || 'Boat Manager à votre écoute',
     };
   })
 );
 
 setAssociatedBoatManagers(formattedBms);
         }
+      }
+
+      // 4. Fetch user's boats
+      const { data: boatsData, error: boatsError } = await supabase
+        .from('boat')
+        .select('id, name, type, image, id_port')
+        .eq('id_user', user.id);
+
+      if (boatsError) {
+        console.error('Error fetching user boats:', boatsError);
+      } else {
+        setUserBoats(boatsData.map(boat => ({
+          id: boat.id.toString(),
+          name: boat.name,
+          type: boat.type,
+          image: boat.image || 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+          id_port: boat.id_port,
+        })));
       }
     };
 
@@ -528,6 +579,7 @@ setAssociatedBoatManagers(formattedBms);
                   style={styles.contactTemporaryBoatManagerButton}
                   onPress={() => handleContactBoatManager(bm.id)}
                 >
+                  <MessageSquare size={20} color="white" />
                   <Text style={styles.contactTemporaryBoatManagerText}>Contacter</Text>
                 </TouchableOpacity>
               </View>
@@ -549,6 +601,97 @@ setAssociatedBoatManagers(formattedBms);
       )}
     </View>
   );
+
+  // Handler for service category/service press
+  const handleServiceRequestInitiation = (category: ServiceCategory, service: ServiceCategory['services'][0]) => {
+    if (!user?.id) {
+      Alert.alert('Connexion requise', 'Veuillez vous connecter pour effectuer une demande de service.');
+      router.push('/login');
+      return;
+    }
+
+    if (userBoats.length === 0) {
+      Alert.alert(
+        'Aucun bateau enregistré',
+        'Veuillez ajouter un bateau à votre profil avant de faire une demande de service.',
+        [{ text: 'Ajouter un bateau', onPress: () => router.push('/boats/new') }]
+      );
+      return;
+    }
+
+    setSelectedServiceForRequest({ category, service });
+
+    if (userBoats.length === 1) {
+      // Si un seul bateau, le sélectionner automatiquement
+      router.push({
+        pathname: service.route,
+        params: {
+          boatId: userBoats[0].id,
+          serviceCategoryId: service.id,
+        },
+      });
+    } else {
+      // Si plusieurs bateaux, afficher la modale de sélection
+      setShowBoatSelectionModal(true);
+    }
+  };
+
+  const handleSelectBoatForRequest = (boat: BoatDetails) => {
+    if (selectedServiceForRequest) {
+      router.push({
+        pathname: selectedServiceForRequest.service.route,
+        params: {
+          boatId: boat.id,
+          serviceCategoryId: selectedServiceForRequest.service.id,
+        },
+      });
+      setShowBoatSelectionModal(false);
+      setSelectedServiceForRequest(null);
+    }
+  };
+
+  const BoatSelectionModal = () => (
+    <Modal
+      visible={showBoatSelectionModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowBoatSelectionModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un bateau</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setShowBoatSelectionModal(false)}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.boatList}>
+            {userBoats.map(boat => (
+              <TouchableOpacity
+                key={boat.id}
+                style={styles.boatItem}
+                onPress={() => handleSelectBoatForRequest(boat)}
+              >
+                <Image source={{ uri: boat.image }} style={styles.boatImage} />
+                <View style={styles.boatItemInfo}>
+                  <Text style={styles.boatItemName}>{boat.name}</Text>
+                  <Text style={styles.boatItemDetails}>
+                    {boat.type} • {boat.id_port ? `Port ID: ${boat.id_port}` : 'Port non spécifié'}
+                  </Text>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
 
   return (
     <ScrollView style={styles.container}>
@@ -576,7 +719,7 @@ setAssociatedBoatManagers(formattedBms);
       <View style={styles.content}>
         <View style={styles.servicesContainer}>
           {serviceCategories.map((category, index) => (
-            <ServiceCategoryCard key={index} category={category} />
+            <ServiceCategoryCard key={index} category={category} onServicePress={handleServiceRequestInitiation} />
           ))}
         </View>
         
@@ -615,9 +758,21 @@ setAssociatedBoatManagers(formattedBms);
                         {bm.rating ? `${bm.rating.toFixed(1)} (${bm.reviewCount} avis)` : 'N/A'}
                       </Text>
                     </View>
-                    <Text style={styles.boatManagerLocation}>{bm.location}</Text>
+                    <Text style={styles.boatManagerRole}>Boat Manager</Text>
                   </View>
                 </View>
+                
+                <View style={styles.temporaryBoatManagerContactInfo}>
+                  <View style={styles.temporaryContactRow}>
+                    <Phone size={16} color="#666" />
+                    <Text style={styles.temporaryContactText}>{bm.phone}</Text>
+                  </View>
+                  <View style={styles.temporaryContactRow}>
+                    <Mail size={16} color="#666" />
+                    <Text style={styles.temporaryContactText}>{bm.email}</Text>
+                  </View>
+                </View>
+                
                 <TouchableOpacity 
                   style={styles.contactBoatManagerButton}
                   onPress={() => handleContactBoatManager(bm.id)}
@@ -644,6 +799,8 @@ setAssociatedBoatManagers(formattedBms);
         setTemporaryPortSearch={setTemporaryPortSearch}
         selectedTemporaryPortId={selectedTemporaryPortId}
       />
+
+      <BoatSelectionModal />
     </ScrollView>
   );
 }
@@ -895,9 +1052,7 @@ const styles = StyleSheet.create({
   },
   ratingContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 4,
+    gap: 2,
   },
   ratingText: {
     fontSize: 14,
@@ -908,32 +1063,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  boatManagerContactInfo: {
+  temporaryBoatManagerContactInfo: {
     backgroundColor: '#f8fafc',
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
     gap: 8,
   },
-  contactInfoRow: {
+  temporaryContactRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
   },
-  contactInfoText: {
+  temporaryContactText: {
     fontSize: 14,
     color: '#666',
-  },
-  boatManagerPromise: {
-    fontSize: 16,
-    color: '#1a1a1a',
-    fontStyle: 'italic',
-    lineHeight: 24,
-    marginBottom: 20,
-    textAlign: 'center',
-    borderLeftWidth: 3,
-    borderLeftColor: '#0066CC',
-    paddingLeft: 16,
   },
   contactBoatManagerButton: {
     backgroundColor: '#0066CC',
@@ -1105,8 +1249,64 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
-  // Styles from previous response for other sections
-  // ... (keep existing styles for header, profile info, tabs, boats, history, reviews, logout)
-  // Ensure these are correctly merged with the new styles
-  // For brevity, I'm omitting the unchanged styles here, but they should be present in the actual file.
+  // Styles for BoatSelectionModal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  boatList: {
+    padding: 16,
+  },
+  boatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+  },
+  boatImage: {
+    width: 80,
+    height: 80,
+  },
+  boatItemInfo: {
+    flex: 1,
+    padding: 12,
+  },
+  boatItemName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 4,
+  },
+  boatItemDetails: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 2,
+  },
 });

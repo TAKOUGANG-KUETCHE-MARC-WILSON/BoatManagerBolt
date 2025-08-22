@@ -5,8 +5,8 @@ import { ArrowLeft, Upload, FileText, User, Ship, Calendar, X, Check, Download, 
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
-
-const genQuoteRef = () => `DEV-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
 
 interface Service {
   id: string;
@@ -130,7 +130,7 @@ async function createQuoteWithItems(params: {
     service_request_id: requestId ? Number(requestId) : null,
     id_client: Number(clientId),
     id_boat: Number(boatId),
-    provider_type: provider_type,
+    provider_type: providerType,
     id_boat_manager: providerType === 'boat_manager' ? providerId : null,
     id_companie: providerType === 'nautical_company' ? providerId : null,
     title: title || null,
@@ -334,21 +334,41 @@ setForm(prev => ({
         setSubmitting(false);
         return;
       }
-      const fileExtension = form.file.name.split('.').pop();
-      const filePath = `quotes/${form.requestId}/${Date.now()}.${fileExtension}`;
-      const response = await fetch(form.file.uri);
-      const blob = await response.blob();
+      const ext = (form.file.name.split('.').pop() || 'pdf').toLowerCase();
+const filePath = `quotes/${form.requestId}/${Date.now()}.${ext}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from('quotes')
-        .upload(filePath, blob, {
-          contentType: form.file.type,
-          upsert: false,
-        });
-      if (uploadError) throw uploadError;
+// 1) S’assurer d’un vrai chemin lisible
+let fileUri = form.file.uri;
+if (fileUri.startsWith('content://')) {
+  const dest = `${FileSystem.cacheDirectory}${Date.now()}-${form.file.name}`;
+  await FileSystem.copyAsync({ from: fileUri, to: dest });
+  fileUri = dest;
+}
 
-      const { data: pub } = supabase.storage.from('quotes').getPublicUrl(filePath);
-      const fileUrl = pub?.publicUrl;
+// 2) Lire en base64 puis convertir en octets
+const base64 = await FileSystem.readAsStringAsync(fileUri, {
+  encoding: FileSystem.EncodingType.Base64,
+});
+const bytes = Buffer.from(base64, 'base64'); // Uint8Array
+if (bytes.byteLength === 0) {
+  throw new Error('Le fichier lu est vide (0 octet).');
+}
+// convertir proprement en ArrayBuffer pour Supabase
+const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+// 3) Upload d’OCTETS (pas un Blob)
+const { error: uploadError } = await supabase.storage
+  .from('quotes')
+  .upload(filePath, arrayBuffer as ArrayBuffer, {
+    contentType: form.file.type || 'application/pdf',
+    upsert: true,
+  });
+if (uploadError) throw uploadError;
+
+// 4) URL publique
+const { data: pub } = supabase.storage.from('quotes').getPublicUrl(filePath);
+const fileUrl = pub.publicUrl;
+
       if (!fileUrl) throw new Error('URL publique introuvable après upload.');
 
       // 2) Créer un devis "PDF" dans quotes

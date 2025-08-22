@@ -1,26 +1,44 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Tag, Info, Calendar, Hash, FileText, XCircle } from 'lucide-react-native';
+import { ArrowLeft, Tag, Info, Calendar, Hash, FileText, XCircle, User, Tool, Upload, Download } from 'lucide-react-native';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+
+
+
 
 interface InventoryItem {
   id: string;
   category: string;
   name: string;
+  description?: string; // Added description
   brand?: string;
   model?: string;
-  serial_number?: string; // Changed from serialNumber to serial_number for Supabase convention
-  purchase_date?: string; // Changed from purchaseDate to purchase_date for Supabase convention
+  serial_number?: string;
+  purchase_date?: string;
   notes?: string;
-  boat_id: string; // Added boat_id to the interface
+  installed_by?: string; // Added installed_by
+  boat_id: string;
+  documents?: Array<{ // Added documents array
+    id: string;
+    name: string;
+    type: string;
+    date: string;
+    file_url: string;
+  }>;
 }
+
+
+
 
 export default function InventoryItemDetailScreen() {
   const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const [item, setItem] = useState<InventoryItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+
+
+
 
   useEffect(() => {
     const fetchInventoryItem = async () => {
@@ -30,15 +48,34 @@ export default function InventoryItemDetailScreen() {
         return;
       }
 
+
+
+
       setLoading(true);
       setFetchError(null);
       try {
         const { data, error } = await supabase
           .from('boat_inventory')
-          .select('*') // Select all columns
+          .select(`
+            id,
+            category,
+            name,
+            description,
+            brand,
+            model,
+            serial_number,
+            purchase_date,
+            notes,
+            installed_by,
+            boat_id,
+            boat_inventory_documents(id, name, type, date, file_url)
+          `)
           .eq('id', id)
           .eq('boat_id', boatId)
           .single();
+
+
+
 
         if (error) {
           if (error.code === 'PGRST116') { // No rows found
@@ -51,17 +88,29 @@ export default function InventoryItemDetailScreen() {
           return;
         }
 
+
+
+
         if (data) {
           setItem({
             id: data.id.toString(),
             category: data.category || 'Non spécifié',
             name: data.name || 'Non spécifié',
+            description: data.description || undefined,
             brand: data.brand || undefined,
             model: data.model || undefined,
             serial_number: data.serial_number || undefined,
             purchase_date: data.purchase_date || undefined,
             notes: data.notes || undefined,
+            installed_by: data.installed_by || undefined,
             boat_id: data.boat_id.toString(),
+            documents: data.boat_inventory_documents.map((doc: any) => ({
+              id: doc.id.toString(),
+              name: doc.name,
+              type: doc.type,
+              date: doc.date,
+              file_url: doc.file_url,
+            })),
           });
         } else {
           setFetchError('Équipement non trouvé.');
@@ -74,14 +123,43 @@ export default function InventoryItemDetailScreen() {
       }
     };
 
+
+
+
     fetchInventoryItem();
   }, [id, boatId]);
+
+
+
+
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  };
+
+
+
+
+  const handleDownloadDocument = (fileUrl: string) => {
+    // Implement file download logic here
+    // For web, you might open in a new tab: window.open(fileUrl, '_blank');
+    // For React Native, you might use Linking or a file download library
+    Alert.alert('Télécharger le document', `Vous pouvez télécharger le document depuis : ${fileUrl}`);
+    console.log('Download document:', fileUrl);
+  };
+
+
+
 
   if (loading) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -96,11 +174,14 @@ export default function InventoryItemDetailScreen() {
     );
   }
 
+
+
+
   if (fetchError || !item) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -111,7 +192,7 @@ export default function InventoryItemDetailScreen() {
         <View style={styles.errorContainer}>
           <XCircle size={48} color="#ccc" />
           <Text style={styles.errorText}>{fetchError || 'Cet équipement n\'existe pas ou n\'est pas associé à ce bateau.'}</Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.errorButton}
             onPress={() => router.back()}
           >
@@ -122,10 +203,13 @@ export default function InventoryItemDetailScreen() {
     );
   }
 
+
+
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -134,48 +218,161 @@ export default function InventoryItemDetailScreen() {
         <Text style={styles.title}>Détails de l'équipement</Text>
       </View>
 
+
+
+
       <View style={styles.content}>
-        <View style={styles.itemCard}>
-          <View style={styles.itemHeader}>
-            <Text style={styles.itemName}>{item.name}</Text>
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>{item.category}</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Informations générales</Text>
+
+
+
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Nom de l'équipement</Text>
+            <View style={styles.inputWrapper}>
+              <Tag size={20} color="#666" />
+              <Text style={styles.input}>{item.name}</Text>
             </View>
           </View>
 
+
+
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Catégorie</Text>
+            <View style={styles.inputWrapper}>
+              <Info size={20} color="#666" />
+              <Text style={styles.input}>{item.category}</Text>
+            </View>
+          </View>
+
+
+
+
+          {item.description && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Description</Text>
+              <View style={styles.textAreaWrapper}>
+                <FileText size={20} color="#666" style={styles.textAreaIcon} />
+                <Text style={styles.textArea}>{item.description}</Text>
+              </View>
+            </View>
+          )}
+
+
+
+
           {item.brand && (
-            <View style={styles.detailRow}>
-              <Tag size={16} color="#666" />
-              <Text style={styles.detailLabel}>Marque:</Text>
-              <Text style={styles.detailValue}>{item.brand}</Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Marque</Text>
+              <View style={styles.inputWrapper}>
+                <Tag size={20} color="#666" />
+                <Text style={styles.input}>{item.brand}</Text>
+              </View>
             </View>
           )}
+
+
+
+
           {item.model && (
-            <View style={styles.detailRow}>
-              <Info size={16} color="#666" />
-              <Text style={styles.detailLabel}>Modèle:</Text>
-              <Text style={styles.detailValue}>{item.model}</Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Modèle</Text>
+              <View style={styles.inputWrapper}>
+                <Info size={20} color="#666" />
+                <Text style={styles.input}>{item.model}</Text>
+              </View>
             </View>
           )}
+
+
+
+
           {item.serial_number && (
-            <View style={styles.detailRow}>
-              <Hash size={16} color="#666" />
-              <Text style={styles.detailLabel}>Numéro de série:</Text>
-              <Text style={styles.detailValue}>{item.serial_number}</Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Numéro de série</Text>
+              <View style={styles.inputWrapper}>
+                <Hash size={20} color="#666" />
+                <Text style={styles.input}>{item.serial_number}</Text>
+              </View>
             </View>
           )}
+
+
+
+
           {item.purchase_date && (
-            <View style={styles.detailRow}>
-              <Calendar size={16} color="#666" />
-              <Text style={styles.detailLabel}>Date d'achat:</Text>
-              <Text style={styles.detailValue}>{item.purchase_date}</Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Date d'achat</Text>
+              <View style={styles.inputWrapper}>
+                <Calendar size={20} color="#666" />
+                <Text style={styles.input}>{formatDate(item.purchase_date)}</Text>
+              </View>
             </View>
           )}
+
+
+
+
+          {item.installed_by && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Installé par</Text>
+              <View style={styles.inputWrapper}>
+                <User size={20} color="#666" />
+                <Text style={styles.input}>{item.installed_by}</Text>
+              </View>
+            </View>
+          )}
+
+
+
+
           {item.notes && (
-            <View style={styles.notesContainer}>
-              <FileText size={16} color="#666" />
-              <Text style={styles.notesLabel}>Notes:</Text>
-              <Text style={styles.notesText}>{item.notes}</Text>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Notes additionnelles</Text>
+              <View style={styles.textAreaWrapper}>
+                <FileText size={20} color="#666" style={styles.textAreaIcon} />
+                <Text style={styles.textArea}>{item.notes}</Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+
+
+
+        <View style={styles.documentsSection}>
+          <View style={styles.documentsSectionHeader}>
+            <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+          </View>
+
+
+
+
+          {item.documents && item.documents.length > 0 ? (
+            <View style={styles.documentsList}>
+              {item.documents.map((document) => (
+                <View key={document.id} style={styles.documentItem}>
+                  <View style={styles.documentInfo}>
+                    <FileText size={20} color="#0066CC" />
+                    <View style={styles.documentDetails}>
+                      <Text style={styles.documentName}>{document.name}</Text>
+                      <Text style={styles.documentDate}>{formatDate(document.date)}</Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.downloadButton}
+                    onPress={() => handleDownloadDocument(document.file_url)}
+                  >
+                    <Download size={20} color="#0066CC" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.noDocuments}>
+              <Text style={styles.noDocumentsText}>Aucun document associé.</Text>
             </View>
           )}
         </View>
@@ -183,6 +380,9 @@ export default function InventoryItemDetailScreen() {
     </ScrollView>
   );
 }
+
+
+
 
 const styles = StyleSheet.create({
   container: {
@@ -219,87 +419,61 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
   },
-  itemCard: {
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 16,
+  },
+  inputContainer: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1a1a1a',
+    marginBottom: 8,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
-    padding: 16,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  itemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  itemName: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
-  categoryBadge: {
-    backgroundColor: '#f0f7ff',
-    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
     paddingHorizontal: 12,
-    borderRadius: 16,
+    height: 48,
   },
-  categoryText: {
-    fontSize: 14,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
-  },
-  detailLabel: {
-    fontSize: 16,
-    color: '#666',
-    fontWeight: '500',
-    width: 120, // Fixed width for labels for alignment
-  },
-  detailValue: {
+  input: {
+    flex: 1,
+    marginLeft: 8,
     fontSize: 16,
     color: '#1a1a1a',
+    // Removed Platform.select for web outlineStyle as it's not an editable TextInput
+  },
+  textAreaWrapper: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 12,
+    minHeight: 120,
+  },
+  textAreaIcon: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+  },
+  textArea: {
     flex: 1,
-  },
-  notesContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    gap: 8,
-  },
-  notesLabel: {
-    fontSize: 16,
-    color: '#666',
-    fontWeight: '500',
-    width: 120,
-  },
-  notesText: {
+    marginLeft: 28,
     fontSize: 16,
     color: '#1a1a1a',
-    flex: 1,
-    lineHeight: 24,
+    textAlignVertical: 'top',
+    // Removed Platform.select for web outlineStyle as it's not an editable TextInput
   },
   errorContainer: {
     flex: 1,
@@ -323,5 +497,65 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  documentsSection: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    marginBottom: 24,
+  },
+  documentsSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  documentsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1a1a1a',
+  },
+  documentsList: {
+    gap: 12,
+  },
+  documentItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 12,
+  },
+  documentInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  documentDetails: {
+    gap: 2,
+  },
+  documentName: {
+    fontSize: 14,
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  documentDate: {
+    fontSize: 12,
+    color: '#666',
+  },
+  downloadButton: {
+    padding: 4,
+  },
+  noDocuments: {
+    padding: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  noDocumentsText: {
+    fontSize: 14,
+    color: '#666',
   },
 });
