@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react'; // Import memo
 import { View, StyleSheet, ScrollView, Text, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Ship, Euro, Info, Calendar, MapPin } from 'lucide-react-native';
 import ServiceForm from '@/components/ServiceForm';
@@ -6,7 +6,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 
-async function getEntretienCategoryId() {
+async function getAchatVenteCategoryId() {
   const { data, error } = await supabase
     .from('categorie_service')
     .select('id')
@@ -20,172 +20,115 @@ async function getEntretienCategoryId() {
   return Number(data.id);
 }
 
-// Choisit le boat manager selon tes règles : port → compétence → historique
-async function resolveBoatManagerForRequest(params: {
-  boatId: number;
-  serviceId: number;
-  clientId: number;
-}): Promise<number | null> {
-  const { boatId, serviceId, clientId } = params;
+// Nouvelle fonction pour trouver le meilleur Boat Manager
+async function findBestBoatManagerForClient(clientId: string): Promise<number | null> {
+  // 1. Récupérer tous les ports associés au client
+  const { data: clientPorts, error: clientPortsError } = await supabase
+    .from('user_ports')
+    .select('port_id')
+    .eq('user_id', clientId);
 
-  // a) Port du bateau
-  const { data: boatRow, error: boatErr } = await supabase
-    .from('boat')
-    .select('id_port')
-    .eq('id', boatId)
-    .single();
-  if (boatErr || !boatRow) return null;
+  if (clientPortsError || !clientPorts || clientPorts.length === 0) {
+    console.warn('Aucun port trouvé pour le client ou erreur lors de la récupération des ports du client:', clientPortsError);
+    return null;
+  }
 
-  // b) Tous les users rattachés au port
-  const { data: portUsers, error: puErr } = await supabase
+  const clientPortIds = clientPorts.map(p => p.port_id);
+
+  // 2. Trouver tous les Boat Managers associés à ces ports
+  const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
     .from('user_ports')
     .select('user_id')
-    .eq('port_id', boatRow.id_port);
-  if (puErr || !portUsers?.length) return null;
+    .in('port_id', clientPortIds);
 
-  const portUserIds = [...new Set(portUsers.map(u => Number(u.user_id)))];
+  if (bmPortAssignmentsError || !bmPortAssignments || bmPortAssignments.length === 0) {
+    console.warn('Aucun Boat Manager trouvé pour les ports du client ou erreur lors de la récupération des affectations de BM:', bmPortAssignmentsError);
+    return null;
+  }
 
-  // ✅ c) Filtrer par profil "boat_manager"
-  const { data: bmUsers, error: bmErr } = await supabase
+  const potentialBmIds = [...new Set(bmPortAssignments.map(bm => bm.user_id))];
+
+  // Filtrer pour s'assurer qu'ils sont bien des profils 'boat_manager'
+  const { data: actualBms, error: actualBmsError } = await supabase
     .from('users')
     .select('id')
-    .in('id', portUserIds)
+    .in('id', potentialBmIds)
     .eq('profile', 'boat_manager');
-  if (bmErr) return null;
 
-  const boatManagerIds = bmUsers?.map(u => Number(u.id)) ?? [];
-  if (boatManagerIds.length === 0) return null;
-  if (boatManagerIds.length === 1) return boatManagerIds[0];
+  if (actualBmsError || !actualBms || actualBms.length === 0) {
+    console.warn('Aucun Boat Manager réel trouvé parmi les utilisateurs potentiels ou erreur lors de la récupération des BMs réels:', actualBmsError);
+    return null;
+  }
 
-  // d) Filtrer par compétence (service) parmi les boat managers
-  const { data: capableRows, error: capErr } = await supabase
-    .from('user_categorie_service')
-    .select('user_id')
-    .eq('categorie_service_id', serviceId)
-    .in('user_id', boatManagerIds);
+  const finalPotentialBmIds = actualBms.map(bm => bm.id);
 
-  const capableIds = !capErr && capableRows?.length
-    ? [...new Set(capableRows.map(r => Number(r.user_id)))]
-    : [];
+  if (finalPotentialBmIds.length === 0) {
+    return null;
+  }
+  if (finalPotentialBmIds.length === 1) {
+    return finalPotentialBmIds[0];
+  }
 
-  if (capableIds.length === 1) return capableIds[0];
-
-  // e) Historique client parmi les candidats (priorité: nb de demandes, puis date récente, puis id croissant)
-  const candidates = capableIds.length ? capableIds : boatManagerIds;
-
-  const { data: historyRows, error: histErr } = await supabase
+  // 3. Compter les demandes de service pour chaque Boat Manager potentiel avec ce client
+  const { data: serviceRequests, error: srError } = await supabase
     .from('service_request')
     .select('id_boat_manager, date')
     .eq('id_client', clientId)
-    .in('id_boat_manager', candidates);
+    .in('id_boat_manager', finalPotentialBmIds);
 
-  if (!histErr && historyRows?.length) {
-    const stats = new Map<number, { count: number; lastDate: string }>();
-    for (const row of historyRows) {
-      const mid = Number(row.id_boat_manager);
-      if (!mid) continue;
-      const prev = stats.get(mid) ?? { count: 0, lastDate: '1970-01-01' };
-      const d = (row.date ?? '1970-01-01') as string;
-      stats.set(mid, {
-        count: prev.count + 1,
-        lastDate: d > prev.lastDate ? d : prev.lastDate,
+  if (srError) {
+    console.error('Erreur lors de la récupération des demandes de service pour le classement des BM:', srError);
+    return null;
+  }
+
+  const bmStats = new Map<number, { count: number; lastRequestDate: string }>();
+
+  // Initialiser les statistiques pour tous les BMs potentiels
+  finalPotentialBmIds.forEach(bmId => {
+    bmStats.set(bmId, { count: 0, lastRequestDate: '1970-01-01' });
+  });
+
+  // Remplir les statistiques à partir des demandes de service
+  serviceRequests.forEach(req => {
+    const bmId = req.id_boat_manager;
+    if (bmId && bmStats.has(bmId)) {
+      const currentStats = bmStats.get(bmId)!;
+      bmStats.set(bmId, {
+        count: currentStats.count + 1,
+        lastRequestDate: req.date > currentStats.lastRequestDate ? req.date : currentStats.lastRequestDate,
       });
     }
-    if (stats.size) {
-      const best = [...stats.entries()].sort((a, b) => {
-        const [idA, sA] = a, [idB, sB] = b;
-        if (sB.count !== sA.count) return sB.count - sA.count;
-        if (sB.lastDate !== sA.lastDate) return (sB.lastDate > sA.lastDate ? 1 : -1);
-        return idA - idB;
-      })[0]?.[0];
-      if (best) return best;
+  });
+
+  // 4. Sélectionner le Boat Manager avec le plus de demandes (règle de départage: demande la plus récente, puis l'ID le plus bas)
+  let bestBmId: number | null = null;
+  let maxCount = -1;
+  let latestDate = '1970-01-01';
+
+  for (const [bmId, stats] of bmStats.entries()) {
+    if (stats.count > maxCount) {
+      maxCount = stats.count;
+      latestDate = stats.lastRequestDate;
+      bestBmId = bmId;
+    } else if (stats.count === maxCount) {
+      if (stats.lastRequestDate > latestDate) {
+        latestDate = stats.lastRequestDate;
+        bestBmId = bmId;
+      } else if (stats.lastRequestDate === latestDate) {
+        // Règle de départage: prendre celui avec l'ID le plus bas
+        if (bestBmId === null || bmId < bestBmId) {
+          bestBmId = bmId;
+        }
+      }
     }
   }
 
-  // f) Fallback déterministe
-  candidates.sort((a, b) => a - b);
-  return candidates[0] ?? null;
+  return bestBmId;
 }
 
-
-export default function BuyBoatScreen() {
-  const { boatId, serviceCategoryId } = useLocalSearchParams<{ boatId: string; serviceCategoryId: string }>();
-  const { user } = useAuth();
-
-  const [yearRange, setYearRange] = useState({ min: '', max: '' });
-  const [budgetRange, setBudgetRange] = useState({ min: '', max: '' });
-
-  const handleSubmit = async (formData: any) => {
-    if (!user?.id || !boatId || !serviceCategoryId) {
-      Alert.alert('Erreur', 'Informations manquantes pour soumettre la demande.');
-      return;
-    }
-
-    // Construct the description from form data and ranges
-    let description = `Type de bateau: ${formData.boatType || 'Non spécifié'}`;
-    description += ` ; Constructeur: ${formData.manufacturer || 'Non spécifié'}`;
-    description += ` ; Modèle: ${formData.model || 'Non spécifié'}`;
-    description += ` ; Zone de recherche: ${formData.location || 'Non spécifié'}`;
-    description += ` ; Année de construction: ${yearRange.min || 'Min'} - ${yearRange.max || 'Max'}`;
-    description += ` ; Budget: ${budgetRange.min || 'Min'}€ - ${budgetRange.max || 'Max'}€`;
-
-    if (!description.trim()) {
-      Alert.alert('Erreur', 'Veuillez remplir au moins un critère de recherche.');
-      return;
-    }
-
-    try {
-      // Récupérer le Boat Manager associé au port du bateau
-      const { data: boatData, error: boatError } = await supabase
-        .from('boat')
-        .select('id_port')
-        .eq('id', boatId)
-        .single();
-
-      if (boatError || !boatData) {
-        console.error('Error fetching boat port:', boatError);
-        Alert.alert('Erreur', 'Impossible de récupérer les informations du port du bateau.');
-        return;
-      }
-
-      const { data: bmPortAssignment, error: bmPortAssignmentError } = await supabase
-        .from('user_ports')
-        .select('user_id')
-        .eq('port_id', boatData.id_port)
-        .limit(1); // Prend le premier Boat Manager trouvé pour ce port
-
-      let id_boat_manager = null;
-      if (!bmPortAssignmentError && bmPortAssignment.length > 0) {
-        id_boat_manager = bmPortAssignment[0].user_id;
-      }
-
-      const { error } = await supabase
-        .from('service_request')
-        .insert({
-          id_client: user.id,
-          id_boat: parseInt(boatId),
-          id_service: parseInt(serviceCategoryId), // Utilise l'ID de la catégorie de service
-          description: description,
-          urgence: 'normal', // Default to normal urgency for this service
-          statut: 'submitted', // Statut initial
-          date: new Date().toISOString().split('T')[0], // Date du jour
-          id_boat_manager: id_boat_manager, // Assigner le Boat Manager trouvé
-        });
-
-      if (error) {
-        console.error('Error inserting service request:', error);
-        Alert.alert('Erreur', `Échec de l'envoi de la demande: ${error.message}`);
-      } else {
-        Alert.alert('Succès', 'Votre demande a été envoyée avec succès !');
-        router.back(); // Revenir à la page précédente
-      }
-    } catch (e) {
-      console.error('Unexpected error during submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'envoi de la demande.');
-    }
-  };
-
-  const RangeInputs = () => (
+// Déplacez la définition de RangeInputs en dehors du composant principal et utilisez memo
+const RangeInputs = memo(({ yearRange, setYearRange, budgetRange, setBudgetRange }) => {
+  return (
     <>
       {/* Fourchette d'années */}
       <View style={styles.rangeContainer}>
@@ -198,9 +141,9 @@ export default function BuyBoatScreen() {
               <TextInput
                 style={styles.input}
                 value={yearRange.min}
-                onChangeText={(text) => setYearRange(prev => ({ ...prev, min: text }))}
+                onChangeText={(text) => setYearRange(prev => ({ ...prev, min: text.replace(/[^0-9]/g, '') }))}
                 placeholder="Année min"
-                keyboardType="numeric"
+                keyboardType="numeric" 
               />
             </View>
           </View>
@@ -211,9 +154,9 @@ export default function BuyBoatScreen() {
               <TextInput
                 style={styles.input}
                 value={yearRange.max}
-                onChangeText={(text) => setYearRange(prev => ({ ...prev, max: text }))}
+                onChangeText={(text) => setYearRange(prev => ({ ...prev, max: text.replace(/[^0-9]/g, '') }))}
                 placeholder="Année max"
-                keyboardType="numeric"
+                keyboardType="numeric" 
               />
             </View>
           </View>
@@ -231,9 +174,9 @@ export default function BuyBoatScreen() {
               <TextInput
                 style={styles.input}
                 value={budgetRange.min}
-                onChangeText={(text) => setBudgetRange(prev => ({ ...prev, min: text }))}
+                onChangeText={(text) => setBudgetRange(prev => ({ ...prev, min: text.replace(/[^0-9]/g, '') }))}
                 placeholder="Budget min"
-                keyboardType="numeric"
+                keyboardType="numeric" 
               />
             </View>
           </View>
@@ -244,9 +187,9 @@ export default function BuyBoatScreen() {
               <TextInput
                 style={styles.input}
                 value={budgetRange.max}
-                onChangeText={(text) => setBudgetRange(prev => ({ ...prev, max: text }))}
+                onChangeText={(text) => setBudgetRange(prev => ({ ...prev, max: text.replace(/[^0-9]/g, '') }))}
                 placeholder="Budget max"
-                keyboardType="numeric"
+                keyboardType="numeric" 
               />
             </View>
           </View>
@@ -254,6 +197,73 @@ export default function BuyBoatScreen() {
       </View>
     </>
   );
+});
+
+export default function BuyBoatScreen() {
+  const params = useLocalSearchParams(); 
+  const { user } = useAuth();
+
+  // Déclarez les états yearRange et budgetRange ici, dans le composant parent
+  // pour pouvoir y accéder dans handleSubmit
+  const [yearRange, setYearRange] = useState({ min: '', max: '' });
+  const [budgetRange, setBudgetRange] = useState({ min: '', max: '' });
+
+  const handleSubmit = async (formData: any) => {
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié. Veuillez vous connecter.');
+      return;
+    }
+
+    // Construire la description détaillée de la demande
+    let description = `Demande de recherche de bateau:\n`;
+    description += `Type de bateau: ${formData.boatType || 'Non spécifié'}\n`;
+    description += `Constructeur: ${formData.manufacturer || 'Non spécifié'}\n`;
+    description += `Modèle: ${formData.model || 'Non spécifié'}\n`;
+    description += `Année de construction: ${yearRange.min || 'Min'} - ${yearRange.max || 'Max'}\n`;
+    description += `Budget: ${budgetRange.min || 'Min'}€ - ${budgetRange.max || 'Max'}€`;
+
+
+    if (!description.trim()) {
+      Alert.alert('Erreur', 'Veuillez remplir au moins un critère de recherche.');
+      return;
+    }
+
+    try {
+      // 1. Obtenir l'ID de la catégorie "Achat/Vente"
+      const id_service = await getAchatVenteCategoryId();
+
+      // 2. Résoudre le Boat Manager basé sur le port d'attache de l'utilisateur et son historique
+      const id_boat_manager = await findBestBoatManagerForClient(user.id);
+
+      // 3. Insérer la demande dans service_request
+      const { error } = await supabase
+        .from('service_request')
+        .insert({
+          id_client: user.id,
+          id_boat: null, // Important: NULL car l'utilisateur ne possède pas encore ce bateau
+          id_service: id_service,
+          description: description,
+          urgence: 'normal', // Par défaut à normal, peut être rendu configurable
+          statut: 'submitted',
+          date: new Date().toISOString().split('T')[0],
+          id_boat_manager: id_boat_manager, // Peut être NULL si aucun BM n'est trouvé
+          prix: null, // Le budget est dans la description, pas de prix unique ici
+          // L'ID est auto-incrémenté, donc nous ne l'insérons pas.
+          // Les autres champs (duree_estimee, id_companie, etat, note_add) sont null par défaut si non spécifiés.
+        });
+
+      if (error) {
+        console.error('Error inserting service request:', error);
+        Alert.alert('Erreur', `Échec de l'envoi de la demande: ${error.message}`);
+      } else {
+        Alert.alert('Succès', 'Votre demande de recherche a été envoyée avec succès !');
+        router.back(); // Revenir à la page précédente
+      }
+    } catch (e) {
+      console.error('Unexpected error during submission:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'envoi de la demande.');
+    }
+  };
 
   return (
     <ScrollView style={styles.container}>
@@ -280,16 +290,11 @@ export default function BuyBoatScreen() {
               placeholder: 'Oceanis, Sun Odyssey...',
               icon: Info,
             },
-            {
-              name: 'location',
-              label: 'Zone de recherche',
-              placeholder: 'Méditerranée, Atlantique...',
-              icon: MapPin,
-            },
           ]}
           submitLabel="Soumettre ma demande"
           onSubmit={handleSubmit}
-          customContent={<RangeInputs />}
+          // Passez les props yearRange, setYearRange, budgetRange, setBudgetRange à RangeInputs
+          customContent={<RangeInputs yearRange={yearRange} setYearRange={setYearRange} budgetRange={budgetRange} setBudgetRange={setBudgetRange} />}
         />
       </View>
     </ScrollView>

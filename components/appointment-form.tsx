@@ -295,7 +295,7 @@ const AppointmentForm = ({
             {allClients.map(client => (
               <TouchableOpacity key={client.id} style={styles.modalItem} onPress={() => handleSelectClient(client)}>
                 <User size={20} color="#0066CC" />
-                <Text style={styles.modalItemText}>{client.name}</Text>
+                <Text style={styles.modalItemText}>{String(client.name)}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -315,13 +315,22 @@ const AppointmentForm = ({
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.modalBody}>
-            {selectedClient?.boats.map(boat => (
-              <TouchableOpacity key={boat.id} style={styles.modalItem} onPress={() => handleSelectBoat(boat)}>
-                <Boat size={20} color="#0066CC" />
-                <Text style={styles.modalItemText}>{boat.name} ({boat.type})</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+  {(selectedClient?.boats ?? []).map((boat) => (
+    <TouchableOpacity
+      key={boat.id}
+      style={styles.modalItem}
+      onPress={() => handleSelectBoat(boat)}
+      activeOpacity={0.8}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Boat size={20} color="#0066CC" />
+        <Text style={styles.modalItemText}>
+          {`${String(boat?.name ?? 'Nom inconnu')} (${String(boat?.type ?? 'Type inconnu')})`}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  ))}
+</ScrollView>
         </View>
       </View>
     </Modal>
@@ -341,7 +350,7 @@ const AppointmentForm = ({
             {allServiceCategories.map(category => (
               <TouchableOpacity key={category.id} style={styles.modalItem} onPress={() => handleSelectServiceCategory(category)}>
                 <FileText size={20} color="#0066CC" />
-                <Text style={styles.modalItemText}>{category.description1}</Text>
+                <Text style={styles.modalItemText}>{String(category.description1)}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>

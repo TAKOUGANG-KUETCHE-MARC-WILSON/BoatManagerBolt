@@ -312,13 +312,16 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
 
 
 // Extracted AvatarModal component (unchanged)
-const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
+const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => {
+  if (!visible) return null; // ← évite le Modal vide
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View /> 
     {/* <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
         <Text style={styles.modalTitle}>Réinitialiser la photo</Text>
@@ -341,7 +344,8 @@ const AvatarModal = memo(({ visible, onClose, onSelectAvatar }) => (
       </View>
     </View> */}
   </Modal>
-));
+  );
+});
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -1229,7 +1233,7 @@ const { error } = await supabase
             </TouchableOpacity>
           )}
         </View>
-      ) : ( // Reviews tab
+      ) : ( /* Reviews tab */
         <View style={styles.reviewsContainer}>
           {myReviews.length > 0 ? (
             myReviews.map((review) => (

@@ -489,7 +489,7 @@ export default function CompanyRequestScreen() {
         urgence: form.urgency,
         date: form.date,
         etat: 'pending', // Default state
-        avis_client: null,
+       // avis_client: null,
         note_add: form.notes || null,
         // place_de_port is NOT inserted into service_request
       };

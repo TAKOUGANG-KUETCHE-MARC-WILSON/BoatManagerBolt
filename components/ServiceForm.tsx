@@ -1,31 +1,64 @@
-import { useState } from 'react';
+import { useState, useEffect , useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Platform } from 'react-native';
 import { withAuthCheck } from '@/context/AuthContext';
 
-interface ServiceFormProps {
+// types
+type Field = {
+  name: string;
+  label: string;
+  placeholder?: string;
+  icon?: any;
+  multiline?: boolean;
+  keyboardType?: 'default' | 'numeric' | 'email-address' | 'phone-pad';
+};
+
+type ServiceFormProps = {
   title: string | React.ReactNode;
   description?: string;
-  fields: Array<{
-    name: string;
-    label: string;
-    placeholder: string;
-    icon: React.ComponentType<any>;
-    multiline?: boolean;
-    keyboardType?: 'default' | 'numeric' | 'email-address';
-    value?: string;
-  }>;
-  submitLabel: string;
-  onSubmit: (data: any) => void;
+  fields: Field[];
+  submitLabel?: string;
+  onSubmit: (formData: Record<string, string>) => void;
   customContent?: React.ReactNode;
-}
+  initialValues?: Record<string, string>; // <-- NOUVEAU
+};
 
-function ServiceForm({ title, description, fields, submitLabel, onSubmit, customContent }: ServiceFormProps) {
-  const initialFormData = fields.reduce((acc, field) => ({
-    ...acc,
-    [field.name]: field.value || ''
-  }), {});
+function ServiceForm({
+  title,
+  description,
+  fields,
+  submitLabel = 'Valider',
+  onSubmit,
+  customContent,
+  initialValues = {}, // <-- Valeur par défaut
+}: ServiceFormProps) {
+  const [form, setForm] = useState<Record<string, string>>(() => {
+    const base = Object.fromEntries(fields.map(f => [f.name, '']));
+    return { ...base, ...initialValues }; // <-- Pré-remplissage au mount
+  });
 
-  const [formData, setFormData] = useState<Record<string, string>>(initialFormData);
+  // clefs stables pour déclencher l'effet seulement si le CONTENU change
+const fieldsKey = useMemo(() => fields.map(f => f.name).join('|'), [fields]);
+const initialValuesKey = useMemo(() => JSON.stringify(initialValues ?? {}), [initialValues]);
+
+
+  useEffect(() => {
+  const next: Record<string, string> = {};
+  fields.forEach(field => {
+    next[field.name] = initialValues[field.name] ?? '';
+  });
+
+  // Ne met à jour l'état que si ça change VRAIMENT
+  setForm(prev => {
+    const prevKeys = Object.keys(prev);
+    const nextKeys = Object.keys(next);
+    if (prevKeys.length !== nextKeys.length) return next;
+    for (const k of nextKeys) {
+      if ((prev[k] ?? '') !== (next[k] ?? '')) return next;
+    }
+    return prev; // identique → pas de re-render
+  });
+}, [initialValuesKey, fieldsKey]);
+
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const validateForm = () => {
@@ -33,7 +66,7 @@ function ServiceForm({ title, description, fields, submitLabel, onSubmit, custom
     let hasErrors = false;
 
     fields.forEach(field => {
-      if (!formData[field.name]?.trim()) {
+      if (!form[field.name]?.trim()) { // Utilise 'form' au lieu de 'formData'
         newErrors[field.name] = 'Ce champ est requis';
         hasErrors = true;
       }
@@ -44,9 +77,9 @@ function ServiceForm({ title, description, fields, submitLabel, onSubmit, custom
     return !hasErrors;
   };
 
-  const handleSubmit = () => {
+  const handleSubmitLocal = () => { // Renommé pour éviter le conflit avec la prop onSubmit
     if (validateForm()) {
-      onSubmit(formData);
+      onSubmit(form); // Utilise 'form' au lieu de 'formData'
     }
   };
 
@@ -63,7 +96,7 @@ function ServiceForm({ title, description, fields, submitLabel, onSubmit, custom
       <View style={styles.form}>
         <View style={styles.inputGroup}>
           {fields.map((field, index) => (
-            <View key={index} style={[
+            <View key={field.name} style={[ // Utilise field.name comme clé
               styles.inputContainer,
               field.multiline && styles.fullHeightInputContainer
             ]}>
@@ -73,16 +106,16 @@ function ServiceForm({ title, description, fields, submitLabel, onSubmit, custom
                 field.multiline && styles.multilineInputWrapper,
                 errors[field.name] && styles.inputWrapperError
               ]}>
-                <field.icon size={20} color={errors[field.name] ? '#ff4444' : '#666'} />
+                {field.icon && <field.icon size={20} color={errors[field.name] ? '#ff4444' : '#666'} />}
                 <TextInput
                   style={[
                     styles.input,
                     field.multiline && styles.multilineInput
                   ]}
                   placeholder={field.placeholder}
-                  value={formData[field.name]}
+                  value={String(form[field.name] ?? '')} // Utilise 'form' et nullish coalescing, convertit en String
                   onChangeText={(text) => {
-                    setFormData(prev => ({ ...prev, [field.name]: text }));
+                    setForm(prev => ({ ...prev, [field.name]: text }));
                     if (errors[field.name]) {
                       setErrors(prev => ({ ...prev, [field.name]: '' }));
                     }
@@ -104,7 +137,7 @@ function ServiceForm({ title, description, fields, submitLabel, onSubmit, custom
         
         <TouchableOpacity 
           style={styles.submitButton}
-          onPress={handleSubmit}>
+          onPress={handleSubmitLocal}> {/* Utilise handleSubmitLocal */}
           <Text style={styles.submitButtonText}>{submitLabel}</Text>
         </TouchableOpacity>
       </View>

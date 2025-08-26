@@ -29,8 +29,8 @@ interface BoatDetails {
   id: string;
   name: string;
   type: string;
-  image: string;
-  id_port: number; // Added for Supabase mapping
+  image: string; // Added for boat image URL
+  portName: string; // Added for boat's port name
 }
 
 interface BoatManagerDetails {
@@ -186,7 +186,7 @@ const serviceCategories: ServiceCategory[] = [
         id: 302, // Corresponds to 'Je cherche un bateau' service in Supabase
         name: 'Je cherche un bateau', 
         icon: Cart,
-        route: '/services/buy',
+        route: '/services/buy', // <-- Modifié pour pointer directement vers buy.tsx
         description: 'Trouvez le bateau idéal'
       },
     ],
@@ -360,22 +360,36 @@ setAssociatedBoatManagers(formattedBms);
         }
       }
 
-      // 4. Fetch user's boats
+      // 4. Fetch user's boats with image and port name
       const { data: boatsData, error: boatsError } = await supabase
         .from('boat')
-        .select('id, name, type, image, id_port')
+        .select(`
+          id,
+          name,
+          type,
+          image,
+          id_port,
+          ports(name) // Select port name
+        `)
         .eq('id_user', user.id);
 
       if (boatsError) {
         console.error('Error fetching user boats:', boatsError);
       } else {
-        setUserBoats(boatsData.map(boat => ({
-          id: boat.id.toString(),
-          name: boat.name,
-          type: boat.type,
-          image: boat.image || 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
-          id_port: boat.id_port,
-        })));
+        const formattedBoats = await Promise.all(
+  (boatsData ?? []).map(async (boat) => {
+    const imageUrl = await getAvatarUrl(boat.image); // réutilisation de ta fonction
+    return {
+      id: boat.id.toString(),
+      name: boat.name,
+      type: boat.type,
+      image: imageUrl || 'https://images.pexels.com/photos/163236/...',
+      portName: boat.ports?.name || 'Port non spécifié',
+    };
+  })
+);
+
+setUserBoats(formattedBoats);
       }
     };
 
@@ -576,11 +590,11 @@ setAssociatedBoatManagers(formattedBms);
                 </View>
                 
                 <TouchableOpacity 
-                  style={styles.contactTemporaryBoatManagerButton}
+                  style={styles.contactBoatManagerButton}
                   onPress={() => handleContactBoatManager(bm.id)}
                 >
                   <MessageSquare size={20} color="white" />
-                  <Text style={styles.contactTemporaryBoatManagerText}>Contacter</Text>
+                  <Text style={styles.contactBoatManagerText}>Contacter</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -610,6 +624,18 @@ setAssociatedBoatManagers(formattedBms);
       return;
     }
 
+    // Si le service est "Je cherche un bateau", naviguer directement
+    if (service.id === 302) { // ID pour "Je cherche un bateau"
+      router.push({
+        pathname: service.route, // app/services/buy.tsx
+        params: {
+          serviceCategoryId: service.id, // Passer l'ID de la catégorie de service
+        },
+      });
+      return; // Arrêter la fonction ici
+    }
+
+    // Pour les autres services, la logique de sélection de bateau reste la même
     if (userBoats.length === 0) {
       Alert.alert(
         'Aucun bateau enregistré',
@@ -670,23 +696,28 @@ setAssociatedBoatManagers(formattedBms);
           </View>
 
           <ScrollView style={styles.boatList}>
-            {userBoats.map(boat => (
-              <TouchableOpacity
-                key={boat.id}
-                style={styles.boatItem}
-                onPress={() => handleSelectBoatForRequest(boat)}
-              >
-                <Image source={{ uri: boat.image }} style={styles.boatImage} />
-                <View style={styles.boatItemInfo}>
-                  <Text style={styles.boatItemName}>{boat.name}</Text>
-                  <Text style={styles.boatItemDetails}>
-                    {boat.type} • {boat.id_port ? `Port ID: ${boat.id_port}` : 'Port non spécifié'}
-                  </Text>
-                </View>
-                <ChevronRight size={20} color="#666" />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+  {userBoats.map((boat) => (
+    <TouchableOpacity
+      key={boat.id}
+      style={styles.boatItem}
+      onPress={() => handleSelectBoatForRequest(boat)}
+      activeOpacity={0.8}
+    >
+      <Image source={{ uri: boat.image }} style={styles.boatItemImage} />
+
+      {/* ← Regroupe tout le texte dans une View, et CHAQUE morceau est un <Text> */}
+      <View style={styles.boatItemInfo}>
+        <Text style={styles.boatItemName}>{String(boat.name ?? '')}</Text>
+        <Text style={styles.boatItemDetails}>{String(boat.type ?? '')}</Text>
+        <Text style={styles.boatItemPort}>{String(boat.portName ?? '')}</Text>
+      </View>
+
+      <View>
+        <ChevronRight size={20} color="#666" />
+      </View>
+    </TouchableOpacity>
+  ))}
+</ScrollView>
         </View>
       </View>
     </Modal>
@@ -1227,13 +1258,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  contactTemporaryBoatManagerButton: {
+  contactBoatManagerButton: {
     backgroundColor: '#0066CC',
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
   },
-  contactTemporaryBoatManagerText: {
+  contactBoatManagerText: {
     fontSize: 16,
     color: 'white',
     fontWeight: '500',
@@ -1290,13 +1321,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f0f0f0',
   },
-  boatImage: {
+  boatItemImage: { // New style for boat image in modal
     width: 80,
     height: 80,
+    marginRight: 12,
+    resizeMode: 'cover',
   },
   boatItemInfo: {
     flex: 1,
-    padding: 12,
+    paddingVertical: 8, // Add some vertical padding
   },
   boatItemName: {
     fontSize: 16,
@@ -1308,5 +1341,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 2,
+  },
+  boatItemPort: { // New style for port name
+    fontSize: 12,
+    color: '#999',
+    marginTop: 4,
   },
 });

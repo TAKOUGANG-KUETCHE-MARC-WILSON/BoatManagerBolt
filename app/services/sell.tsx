@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Text, Modal, Image, Alert } from 'react-native';
 import { Ship, Euro, Info, Calendar, Wrench, Clock, Ruler, MapPin, ChevronRight, X, Bot as Boat, TriangleAlert as AlertTriangle } from 'lucide-react-native';
 import ServiceForm from '@/components/ServiceForm';
@@ -185,6 +185,22 @@ export default function SellBoatScreen() {
   const [selectedBoat, setSelectedBoat] = useState<BoatDetails | null>(null);
   const [userBoats, setUserBoats] = useState<BoatDetails[]>([]);
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent'>('normal');
+
+
+  // `initialValues` est un objet qui sera passé à ServiceForm pour pré-remplir les champs.
+  // Il est mis à jour chaque fois que `selectedBoat` change.
+  const initialValues = useMemo(() => ({
+    boatName:         selectedBoat?.name             ?? '',
+    boatType:         selectedBoat?.type             ?? '',
+    manufacturer:     selectedBoat?.manufacturer     ?? '',
+    model:            selectedBoat?.model            ?? '',
+    constructionYear: selectedBoat?.constructionYear ?? '',
+    engine:           selectedBoat?.engine           ?? '',
+    engineHours:      selectedBoat?.engineHours      ?? '',
+    length:           selectedBoat?.length           ?? '',
+    homePort:         selectedBoat?.homePort         ?? '',
+  }), [selectedBoat]);
+
 
   // Fetch user's boats when component mounts
   useEffect(() => {
@@ -413,74 +429,20 @@ export default function SellBoatScreen() {
         {isAuthenticated && userBoats.length > 0 && <BoatSelector />}
 
         <ServiceForm
+          key={selectedBoat?.id || 'manual'} // La clé force le re-rendu du formulaire quand le bateau sélectionné change
           title="Je souhaite vendre mon bateau"
           description="Remplissez le formulaire ci-dessous pour mettre en vente votre bateau"
+          initialValues={initialValues} // Les valeurs initiales sont passées ici
           fields={[
-            {
-              name: 'boatName',
-              label: 'Nom du bateau',
-              placeholder: 'ex: Le Grand Bleu',
-              icon: Boat,
-              value: selectedBoat?.name,
-            },
-            {
-              name: 'boatType',
-              label: 'Type de bateau',
-              placeholder: 'ex: Voilier, Motoryacht, Catamaran,...',
-              icon: Ship,
-              value: selectedBoat?.type,
-            },
-            {
-              name: 'manufacturer',
-              label: 'Constructeur',
-              placeholder: 'ex: Bénéteau, Jeanneau,...',
-              icon: Info,
-              value: selectedBoat?.manufacturer,
-            },
-            {
-              name: 'model',
-              label: 'Modèle',
-              placeholder: 'ex: Oceanis 45',
-              icon: Info,
-              value: selectedBoat?.model,
-            },
-            {
-              name: 'constructionYear',
-              label: 'Année de construction',
-              placeholder: 'ex: 2020',
-              icon: Calendar,
-              keyboardType: 'numeric',
-              value: selectedBoat?.constructionYear,
-            },
-            {
-              name: 'engine',
-              label: 'Moteur',
-              placeholder: 'ex: Volvo Penta D2-50',
-              icon: Wrench,
-              value: selectedBoat?.engine,
-            },
-            {
-              name: 'engineHours',
-              label: 'Heures moteur',
-              placeholder: 'ex: 500',
-              icon: Clock,
-              keyboardType: 'numeric',
-              value: selectedBoat?.engineHours,
-            },
-            {
-              name: 'length',
-              label: 'Longueur',
-              placeholder: 'ex: 12m',
-              icon: Ruler,
-              value: selectedBoat?.length,
-            },
-            {
-              name: 'homePort',
-              label: 'Port d\'attache',
-              placeholder: 'ex: Marseille, Brest, ...',
-              icon: MapPin,
-              value: selectedBoat?.homePort,
-            },
+            { name: 'boatName',         label: 'Nom du bateau',          placeholder: 'ex: Le Grand Bleu', icon: Boat },
+            { name: 'boatType',         label: 'Type de bateau',         placeholder: 'ex: Voilier…',      icon: Ship },
+            { name: 'manufacturer',     label: 'Constructeur',           placeholder: 'ex: Bénéteau…',     icon: Info },
+            { name: 'model',            label: 'Modèle',                 placeholder: 'ex: Oceanis 45',    icon: Info },
+            { name: 'constructionYear', label: 'Année de construction',  placeholder: 'ex: 2020',          icon: Calendar, keyboardType: 'numeric' },
+            { name: 'engine',           label: 'Moteur',                 placeholder: 'ex: Volvo Penta…',  icon: Wrench },
+            { name: 'engineHours',      label: 'Heures moteur',          placeholder: 'ex: 500',            icon: Clock, keyboardType: 'numeric' },
+            { name: 'length',           label: 'Longueur',               placeholder: 'ex: 12m',            icon: Ruler },
+            { name: 'homePort',         label: "Port d'attache",         placeholder: 'ex: Marseille…',     icon: MapPin },
           ]}
           submitLabel="Envoyer"
           onSubmit={handleSubmit}
