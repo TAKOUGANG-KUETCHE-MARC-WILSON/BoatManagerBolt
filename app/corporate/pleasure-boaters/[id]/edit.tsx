@@ -1,393 +1,432 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Alert, Modal } from 'react-native';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image, ActivityIndicator, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, User, Mail, Phone, MapPin, Check, X, Plus } from 'lucide-react-native';
+import { ArrowLeft, Search, Filter, User, ChevronRight, X, Phone, Mail, MapPin, Bot as Boat, Plus, Edit, Trash } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
+import PortSelectionModal from '@/components/PortSelectionModal'; // Import PortSelectionModal
 
-interface BoatManager {
-  id: string;
-  name: string;
-}
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 
-interface Port {
-  id: string;
-  name: string;
-  boatManagerId: string;
-}
+// Fonctions utilitaires pour les URLs d'avatars (extraites du fichier de profil)
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
 
-interface PortAssignment {
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+
+// Interface pour un port avec son Boat Manager (tel qu'affiché/sélectionné dans l'UI)
+interface EditablePort {
   portId: string;
   portName: string;
-  boatManagerId: string;
-  boatManagerName: string;
+  assignedBmId: string | null;
+  assignedBmName: string | null;
 }
 
-interface PleasureBoater {
-  id: string;
+// Interface pour les données du formulaire du plaisancier
+interface PleasureBoaterForm {
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
   avatar: string;
-  ports: Array<{
-    id: string;
-    name: string;
-    boatManagerId: string;
-    boatManagerName: string;
-  }>;
+  ports: EditablePort[]; // Les ports du plaisancier avec le BM sélectionné
 }
 
-// Mock data
-const mockPorts: Port[] = [
-  { id: 'p1', name: 'Port de Marseille', boatManagerId: 'bm1' },
-  { id: 'p2', name: 'Port de Nice', boatManagerId: 'bm2' },
-  { id: 'p3', name: 'Port de Cannes', boatManagerId: 'bm3' },
-  { id: 'p4', name: 'Port de Saint-Tropez', boatManagerId: 'bm4' },
-];
+// Interface pour un Boat Manager (pour la sélection)
+interface BoatManagerOption {
+  id: string;
+  name: string;
+  ports: string[]; // Noms des ports gérés par ce BM
+}
 
-const mockBoatManagers: BoatManager[] = [
-  { id: 'bm1', name: 'Marie Martin' },
-  { id: 'bm2', name: 'Pierre Dubois' },
-  { id: 'bm3', name: 'Sophie Laurent' },
-  { id: 'bm4', name: 'Lucas Bernard' },
-];
+// --- Modale pour la sélection du Boat Manager ---
+const BoatManagerSelectionModal = memo(({
+  visible,
+  onClose,
+  availableBoatManagers,
+  onSelectBm,
+  currentSelectedBmId,
+  portName,
+}) => {
+  const [searchBmQuery, setSearchBmQuery] = useState('');
 
-// Mock plaisanciers pour récupérer les données
-const mockPleasureBoaters: Record<string, PleasureBoater> = {
-  'pb1': {
-    id: 'pb1',
-    firstName: 'Jean',
-    lastName: 'Dupont',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p1',
-        name: 'Port de Marseille',
-        boatManagerId: 'bm1',
-        boatManagerName: 'Marie Martin'
-      },
-      {
-        id: 'p2',
-        name: 'Port de Nice',
-        boatManagerId: 'bm2',
-        boatManagerName: 'Pierre Dubois'
-      }
-    ]
-  },
-  'pb2': {
-    id: 'pb2',
-    firstName: 'Sophie',
-    lastName: 'Martin',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p1',
-        name: 'Port de Marseille',
-        boatManagerId: 'bm1',
-        boatManagerName: 'Marie Martin'
-      }
-    ]
-  }
-};
+  const filteredBms = availableBoatManagers.filter(bm =>
+    bm.name.toLowerCase().includes(searchBmQuery.toLowerCase()) ||
+    bm.ports.some(p => p.toLowerCase().includes(searchBmQuery.toLowerCase()))
+  );
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un Boat Manager pour {portName}</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.searchContainer}>
+            <Search size={20} color="#666" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Rechercher un Boat Manager..."
+              value={searchBmQuery}
+              onChangeText={setSearchBmQuery}
+            />
+          </View>
+
+          <ScrollView style={styles.modalBody}>
+            {filteredBms.length > 0 ? (
+              filteredBms.map(bm => (
+                <TouchableOpacity
+                  key={bm.id}
+                  style={[
+                    styles.modalItem,
+                    currentSelectedBmId === bm.id && styles.modalItemSelected
+                  ]}
+                  onPress={() => onSelectBm(bm)}
+                >
+                  <User size={20} color={currentSelectedBmId === bm.id ? '#0066CC' : '#666'} />
+                  <View style={styles.modalItemInfo}>
+                    <Text style={[
+                      styles.modalItemText,
+                      currentSelectedBmId === bm.id && styles.modalItemTextSelected
+                    ]}>
+                      {bm.name}
+                    </Text>
+                    <Text style={styles.modalItemSubtext}>{bm.ports.join(', ')}</Text>
+                  </View>
+                  {currentSelectedBmId === bm.id && (
+                    <Check size={20} color="#0066CC" />
+                  )}
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.emptyModalText}>Aucun Boat Manager trouvé.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+});
 
 export default function EditPleasureBoaterScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<PleasureBoaterForm>({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
+    avatar: DEFAULT_AVATAR,
+    ports: [],
   });
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [portAssignments, setPortAssignments] = useState<PortAssignment[]>([]);
-  const [showPortModal, setShowPortModal] = useState(false);
-  const [showBoatManagerModal, setShowBoatManagerModal] = useState(false);
-  const [selectedPort, setSelectedPort] = useState<Port | null>(null);
-  const [selectedBoatManager, setSelectedBoatManager] = useState<BoatManager | null>(null);
-  const [editingAssignmentIndex, setEditingAssignmentIndex] = useState<number | null>(null);
+  const [errors, setErrors] = useState<Partial<PleasureBoaterForm>>({});
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
+  const [allPorts, setAllPorts] = useState<{ id: string; name: string }[]>([]);
+  const [allBoatManagers, setAllBoatManagers] = useState<BoatManagerOption[]>([]);
+
+  const [showBmSelectionModal, setShowBmSelectionModal] = useState(false);
+  const [showPortSelectionModal, setShowPortSelectionModal] = useState(false); // NEW STATE
+  const [currentPortForBmSelection, setCurrentPortForBmSelection] = useState<EditablePort | null>(null);
+
+  const [portSearch, setPortSearch] = useState(''); // NEW STATE for port search in modal
+
+  // Fetch initial data
   useEffect(() => {
-    // Simuler le chargement des données du plaisancier
-    if (id && typeof id === 'string' && mockPleasureBoaters[id]) {
-      const boater = mockPleasureBoaters[id];
-      
-      setFormData({
-        firstName: boater.firstName,
-        lastName: boater.lastName,
-        email: boater.email,
-        phone: boater.phone,
-      });
-      
-      // Convertir les ports en portAssignments
-      const assignments = boater.ports.map(port => ({
-        portId: port.id,
-        portName: port.name,
-        boatManagerId: port.boatManagerId,
-        boatManagerName: port.boatManagerName
-      }));
-      
-      setPortAssignments(assignments);
-      setLoading(false);
-    } else {
-      // Rediriger si l'ID n'est pas valide
-      Alert.alert(
-        'Erreur',
-        'Plaisancier non trouvé',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
-    }
+    const fetchInitialData = async () => {
+      if (!id) {
+        console.log('DEBUG: ID du plaisancier est manquant.');
+        setFetchError('ID du plaisancier manquant.');
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setFetchError(null);
+
+      try {
+        console.log('DEBUG: Tentative de récupération du plaisancier avec ID:', id);
+        // 1. Fetch all ports
+        const { data: portsData, error: portsError } = await supabase
+          .from('ports')
+          .select('id, name');
+        if (portsError) {
+          console.error('DEBUG: Erreur lors de la récupération des ports:', portsError);
+          throw portsError;
+        }
+        setAllPorts(portsData.map(p => ({ id: p.id.toString(), name: p.name })));
+
+        // 2. Fetch all boat managers
+        const { data: bmsData, error: bmsError } = await supabase
+          .from('users')
+          .select(`
+            id,
+            first_name,
+            last_name,
+            user_ports(port_id, ports(name))
+          `)
+          .eq('profile', 'boat_manager');
+        if (bmsError) {
+          console.error('DEBUG: Erreur lors de la récupération des Boat Managers:', bmsError);
+          throw bmsError;
+        }
+
+        const processedBms: BoatManagerOption[] = bmsData.map(bm => ({
+          id: bm.id,
+          name: `${bm.first_name} ${bm.last_name}`,
+          ports: bm.user_ports.map((up: any) => up.ports?.name).filter(Boolean),
+        }));
+        setAllBoatManagers(processedBms);
+
+        // 3. Fetch pleasure boater details
+        const { data: boaterData, error: boaterError } = await supabase
+          .from('users')
+          .select(`
+            id,
+            first_name,
+            last_name,
+            e_mail,
+            phone,
+            avatar,
+            user_ports(port_id)
+          `)
+          .eq('id', id)
+          .eq('profile', 'pleasure_boater')
+          .single();
+
+        if (boaterError) {
+          console.log('DEBUG: Aucune donnée de plaisancier retournée pour l\'ID:', id);
+          throw boaterError;
+        }
+
+        console.log('DEBUG: Données du plaisancier récupérées avec succès:', boaterData);
+        const signedAvatar = await getSignedAvatarUrl(boaterData.avatar);
+
+        // Populate form data
+        const boaterPorts: EditablePort[] = boaterData.user_ports.map((up: any) => {
+          const portName = portsData.find(p => p.id === up.port_id)?.name || 'Port inconnu';
+          // Find a BM implicitly assigned to this port (for display purposes only)
+          const bmForPort = processedBms.find(bm => bm.ports.includes(portName));
+          return {
+            portId: up.port_id.toString(),
+            portName: portName,
+            assignedBmId: bmForPort?.id || null,
+            assignedBmName: bmForPort?.name || null,
+          };
+        });
+
+        setFormData({
+          firstName: boaterData.first_name,
+          lastName: boaterData.last_name,
+          email: boaterData.e_mail,
+          phone: boaterData.phone,
+          avatar: signedAvatar || DEFAULT_AVATAR,
+          ports: boaterPorts,
+        });
+
+      } catch (e: any) {
+        console.error('DEBUG: Erreur inattendue dans fetchInitialData:', e);
+        setFetchError('Échec du chargement des données du plaisancier.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
   }, [id]);
 
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+    const newErrors: Partial<PleasureBoaterForm> = {};
     
-    if (!formData.firstName.trim()) {
-      newErrors.firstName = 'Le prénom est requis';
-    }
-    
-    if (!formData.lastName.trim()) {
-      newErrors.lastName = 'Le nom est requis';
-    }
-    
+    if (!formData.firstName.trim()) newErrors.firstName = 'Le prénom est requis';
+    if (!formData.lastName.trim()) newErrors.lastName = 'Le nom est requis';
     if (!formData.email.trim()) {
       newErrors.email = 'L\'email est requis';
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = 'L\'email n\'est pas valide';
     }
-    
-    if (!formData.phone.trim()) {
-      newErrors.phone = 'Le téléphone est requis';
-    }
-    
-    if (portAssignments.length === 0) {
-      newErrors.ports = 'Au moins un port d\'attache est requis';
-    }
-    
+    if (!formData.phone.trim()) newErrors.phone = 'Le téléphone est requis';
+    if (formData.ports.length === 0) newErrors.ports = 'Au moins un port d\'attache est requis';
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSelectPort = (port: Port) => {
-    setSelectedPort(port);
-    
-    // Trouver automatiquement le Boat Manager associé au port
-    const boatManager = mockBoatManagers.find(bm => bm.id === port.boatManagerId);
-    if (boatManager) {
-      setSelectedBoatManager(boatManager);
-    } else {
-      setSelectedBoatManager(null);
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return;
     }
-    
-    setShowPortModal(false);
-    
-    // Si on est en mode ajout, ouvrir directement le modal de sélection du Boat Manager
-    if (editingAssignmentIndex === null) {
-      setShowBoatManagerModal(true);
-    }
-  };
 
-  const handleSelectBoatManager = (boatManager: BoatManager) => {
-    setSelectedBoatManager(boatManager);
-    setShowBoatManagerModal(false);
-    
-    // Si on est en mode ajout, ajouter l'assignation
-    if (editingAssignmentIndex === null && selectedPort) {
-      const newAssignment: PortAssignment = {
-        portId: selectedPort.id,
-        portName: selectedPort.name,
-        boatManagerId: boatManager.id,
-        boatManagerName: boatManager.name
-      };
-      
-      setPortAssignments([...portAssignments, newAssignment]);
-      setSelectedPort(null);
-      setSelectedBoatManager(null);
-    } 
-    // Si on est en mode édition, mettre à jour l'assignation
-    else if (editingAssignmentIndex !== null && selectedPort) {
-      const updatedAssignments = [...portAssignments];
-      updatedAssignments[editingAssignmentIndex] = {
-        portId: selectedPort.id,
-        portName: selectedPort.name,
-        boatManagerId: boatManager.id,
-        boatManagerName: boatManager.name
-      };
-      
-      setPortAssignments(updatedAssignments);
-      setEditingAssignmentIndex(null);
-      setSelectedPort(null);
-      setSelectedBoatManager(null);
+    setLoading(true);
+    try {
+      // 1. Update pleasure boater's personal details
+      const { error: userUpdateError } = await supabase
+        .from('users')
+        .update({
+          first_name: formData.firstName,
+          last_name: formData.lastName,
+          e_mail: formData.email,
+          phone: formData.phone,
+          // avatar is not updated here, handled separately
+        })
+        .eq('id', id);
+
+      if (userUpdateError) throw userUpdateError;
+
+      // 2. Update pleasure boater's ports (delete existing, insert new ones)
+      // First, delete all existing port assignments for this user
+      const { error: deletePortsError } = await supabase
+        .from('user_ports')
+        .delete()
+        .eq('user_id', id);
+      if (deletePortsError) throw deletePortsError;
+
+      // Then, insert the new port assignments
+      const newPortAssignments = formData.ports.map(p => ({
+        user_id: id,
+        port_id: parseInt(p.portId),
+        // Note: assignedBmId cannot be saved here with current schema
+      }));
+      const { error: insertPortsError } = await supabase
+        .from('user_ports')
+        .insert(newPortAssignments);
+      if (insertPortsError) throw insertPortsError;
+
+      Alert.alert('Succès', 'Le plaisancier a été mis à jour avec succès.');
+      router.back();
+
+    } catch (e: any) {
+      console.error('Error updating pleasure boater:', e);
+      Alert.alert('Erreur', `Échec de la mise à jour du plaisancier: ${e.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleAddPortAssignment = () => {
-    setEditingAssignmentIndex(null);
-    setSelectedPort(null);
-    setSelectedBoatManager(null);
-    setShowPortModal(true);
+  const handleDeleteBoater = async () => {
+    Alert.alert(
+      'Supprimer le plaisancier',
+      'Êtes-vous sûr de vouloir supprimer ce plaisancier ? Cette action est irréversible.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              // 1. Delete the user (and all related data via ON DELETE CASCADE in DB)
+              // The SQL commands provided previously (ON DELETE CASCADE) will handle
+              // the deletion of related records in 'quotes', 'service_request', 'boat',
+              // 'user_ports', 'reviews', 'quote_items', 'quote_documents',
+              // 'boat_inventory', 'user_documents', 'boat_technical_records', 'boat_usage_types', etc.
+              // if the foreign keys are correctly configured in the database.
+
+              const { error: deleteUserError } = await supabase
+                .from('users')
+                .delete()
+                .eq('id', id);
+
+              if (deleteUserError) {
+                throw deleteUserError;
+              }
+
+              Alert.alert('Succès', 'Le plaisancier a été supprimé avec succès.');
+              router.back(); // Go back to the list, which will trigger a re-fetch
+            } catch (e: any) {
+              console.error('Error deleting boater:', e.message);
+              Alert.alert('Erreur', `Échec de la suppression du plaisancier: ${e.message}`);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
-  const handleEditPortAssignment = (index: number) => {
-    const assignment = portAssignments[index];
-    const port = mockPorts.find(p => p.id === assignment.portId);
-    const boatManager = mockBoatManagers.find(bm => bm.id === assignment.boatManagerId);
-    
-    if (port) {
-      setSelectedPort(port);
+  const handleAddPort = (port: { id: string; name: string }) => {
+    if (!formData.ports.some(p => p.portId === port.id)) {
+      setFormData(prev => ({
+        ...prev,
+        ports: [...prev.ports, { portId: port.id, portName: port.name, assignedBmId: null, assignedBmName: null }]
+      }));
+      if (errors.ports) setErrors(prev => ({ ...prev, ports: undefined }));
     }
     
-    if (boatManager) {
-      setSelectedBoatManager(boatManager);
+    setPortSearch(''); // Clear search after selection
+    setShowPortSelectionModal(false); // Close the port selection modal
+  };
+
+  const handleRemovePort = (portId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      ports: prev.ports.filter(p => p.portId !== portId)
+    }));
+  };
+
+  const handleSelectBmForPort = (selectedBm: BoatManagerOption) => {
+    if (currentPortForBmSelection) {
+      setFormData(prev => ({
+        ...prev,
+        ports: prev.ports.map(p =>
+          p.portId === currentPortForBmSelection.portId
+            ? { ...p, assignedBmId: selectedBm.id, assignedBmName: selectedBm.name }
+            : p
+        ),
+      }));
     }
-    
-    setEditingAssignmentIndex(index);
-    setShowPortModal(true);
+    setShowBmSelectionModal(false);
   };
-
-  const handleRemovePortAssignment = (index: number) => {
-    const updatedAssignments = [...portAssignments];
-    updatedAssignments.splice(index, 1);
-    setPortAssignments(updatedAssignments);
-  };
-
-  const handleSubmit = () => {
-    if (validateForm()) {
-      // Simuler la mise à jour d'un plaisancier
-      Alert.alert(
-        'Succès',
-        'Le plaisancier a été mis à jour avec succès',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
-    }
-  };
-
-  // Modal pour sélectionner un port
-  const PortSelectionModal = () => (
-    <Modal
-      visible={showPortModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowPortModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Sélectionner un port</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowPortModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            {mockPorts.map((port) => (
-              <TouchableOpacity 
-                key={port.id}
-                style={[
-                  styles.modalItem,
-                  selectedPort?.id === port.id && styles.modalItemSelected
-                ]}
-                onPress={() => handleSelectPort(port)}
-              >
-                <MapPin size={20} color={selectedPort?.id === port.id ? '#0066CC' : '#666'} />
-                <Text style={[
-                  styles.modalItemText,
-                  selectedPort?.id === port.id && styles.modalItemTextSelected
-                ]}>
-                  {port.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  // Modal pour sélectionner un Boat Manager
-  const BoatManagerSelectionModal = () => (
-    <Modal
-      visible={showBoatManagerModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowBoatManagerModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Sélectionner un Boat Manager</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowBoatManagerModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            {mockBoatManagers.map((manager) => (
-              <TouchableOpacity 
-                key={manager.id}
-                style={[
-                  styles.modalItem,
-                  selectedBoatManager?.id === manager.id && styles.modalItemSelected
-                ]}
-                onPress={() => handleSelectBoatManager(manager)}
-              >
-                <User size={20} color={selectedBoatManager?.id === manager.id ? '#0066CC' : '#666'} />
-                <Text style={[
-                  styles.modalItemText,
-                  selectedBoatManager?.id === manager.id && styles.modalItemTextSelected
-                ]}>
-                  {manager.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <ArrowLeft size={24} color="#1a1a1a" />
-          </TouchableOpacity>
-          <Text style={styles.title}>Modifier le plaisancier</Text>
-        </View>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Chargement...</Text>
-        </View>
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des données du plaisancier...</Text>
+      </View>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{fetchError}</Text>
+        <TouchableOpacity
+          style={styles.errorButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity 
           style={styles.backButton}
@@ -398,138 +437,165 @@ export default function EditPleasureBoaterScreen() {
         <Text style={styles.title}>Modifier le plaisancier</Text>
       </View>
 
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.formContainer}>
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Informations personnelles</Text>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Prénom</Text>
-              <View style={[styles.inputContainer, errors.firstName && styles.inputError]}>
-                <User size={20} color={errors.firstName ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  value={formData.firstName}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, firstName: text }))}
-                  placeholder="Prénom"
-                />
-              </View>
-              {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Nom</Text>
-              <View style={[styles.inputContainer, errors.lastName && styles.inputError]}>
-                <User size={20} color={errors.lastName ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  value={formData.lastName}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, lastName: text }))}
-                  placeholder="Nom"
-                />
-              </View>
-              {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Email</Text>
-              <View style={[styles.inputContainer, errors.email && styles.inputError]}>
-                <Mail size={20} color={errors.email ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  value={formData.email}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, email: text }))}
-                  placeholder="Email"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </View>
-              {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Téléphone</Text>
-              <View style={[styles.inputContainer, errors.phone && styles.inputError]}>
-                <Phone size={20} color={errors.phone ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  value={formData.phone}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, phone: text }))}
-                  placeholder="Téléphone"
-                  keyboardType="phone-pad"
-                />
-              </View>
-              {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
-            </View>
-          </View>
+      <View style={styles.form}>
+        <View style={styles.formSection}>
+          <Text style={styles.sectionTitle}>Informations personnelles</Text>
           
-          <View style={styles.formSection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Ports d'attache et Boat Managers</Text>
-              <TouchableOpacity 
-                style={styles.addButton}
-                onPress={handleAddPortAssignment}
-              >
-                <Plus size={20} color="#0066CC" />
-                <Text style={styles.addButtonText}>Ajouter</Text>
-              </TouchableOpacity>
-            </View>
-            
-            {errors.ports && <Text style={styles.errorText}>{errors.ports}</Text>}
-            
-            {portAssignments.length > 0 ? (
-              <View style={styles.assignmentsList}>
-                {portAssignments.map((assignment, index) => (
-                  <View key={index} style={styles.assignmentItem}>
-                    <View style={styles.assignmentInfo}>
-                      <View style={styles.portInfo}>
-                        <MapPin size={16} color="#0066CC" />
-                        <Text style={styles.portName}>{assignment.portName}</Text>
-                      </View>
-                      <View style={styles.boatManagerInfo}>
-                        <User size={16} color="#0066CC" />
-                        <Text style={styles.boatManagerName}>{assignment.boatManagerName}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.assignmentActions}>
-                      <TouchableOpacity 
-                        style={styles.editAssignmentButton}
-                        onPress={() => handleEditPortAssignment(index)}
-                      >
-                        <Text style={styles.editAssignmentText}>Modifier</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={styles.removeAssignmentButton}
-                        onPress={() => handleRemovePortAssignment(index)}
-                      >
-                        <X size={16} color="#ff4444" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.emptyAssignments}>
-                <Text style={styles.emptyAssignmentsText}>
-                  Aucun port d'attache assigné. Cliquez sur "Ajouter" pour en ajouter un.
-                </Text>
-              </View>
-            )}
+          <View style={styles.profileImageContainer}>
+            <Image source={{ uri: formData.avatar }} style={styles.profileImage} />
+            {/* Avatar editing logic would go here if needed */}
           </View>
-          
-          <TouchableOpacity 
-            style={styles.submitButton}
-            onPress={handleSubmit}
-          >
-            <Check size={20} color="white" />
-            <Text style={styles.submitButtonText}>Enregistrer les modifications</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
 
-      <PortSelectionModal />
-      <BoatManagerSelectionModal />
-    </View>
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Prénom</Text>
+            <View style={[styles.inputWrapper, errors.firstName && styles.inputWrapperError]}>
+              <User size={20} color={errors.firstName ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={formData.firstName}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, firstName: text }))}
+                placeholder="Prénom"
+                autoCapitalize="words"
+              />
+            </View>
+            {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
+          </View>
+          
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Nom</Text>
+            <View style={[styles.inputWrapper, errors.lastName && styles.inputWrapperError]}>
+              <User size={20} color={errors.lastName ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={formData.lastName}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, lastName: text }))}
+                placeholder="Nom"
+                autoCapitalize="words"
+              />
+            </View>
+            {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
+          </View>
+          
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Email</Text>
+            <View style={[styles.inputWrapper, errors.email && styles.inputWrapperError]}>
+              <Mail size={20} color={errors.email ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={formData.email}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, email: text }))}
+                placeholder="Email"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+            {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+          </View>
+          
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Téléphone</Text>
+            <View style={[styles.inputWrapper, errors.phone && styles.inputWrapperError]}>
+              <Phone size={20} color={errors.phone ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={formData.phone}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, phone: text }))}
+                placeholder="Téléphone"
+                keyboardType="phone-pad"
+              />
+            </View>
+            {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
+          </View>
+        </View>
+        
+        <View style={styles.formSection}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Ports d'attache</Text>
+            <TouchableOpacity 
+              style={styles.addButton}
+              onPress={() => setShowPortSelectionModal(true)} // CORRECTED: Open PortSelectionModal
+            >
+              <Plus size={20} color="#0066CC" />
+              <Text style={styles.addButtonText}>Ajouter</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {errors.ports && <Text style={styles.errorText}>{errors.ports}</Text>}
+          
+          {formData.ports.length > 0 ? (
+            <View style={styles.portsList}>
+              {formData.ports.map((port) => (
+                <View key={port.portId} style={styles.portItem}>
+                  <View style={styles.portInfo}>
+                    <MapPin size={20} color="#0066CC" />
+                    <Text style={styles.portName}>{port.portName}</Text>
+                  </View>
+                  <View style={styles.portActions}>
+                    <TouchableOpacity
+                      style={styles.assignBmButton}
+                      onPress={() => {
+                        setCurrentPortForBmSelection(port);
+                        setShowBmSelectionModal(true);
+                      }}
+                    >
+                      <User size={16} color="#0066CC" />
+                      <Text style={styles.assignBmText}>
+                        {port.assignedBmName || 'Assigner un BM'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removePortButton}
+                      onPress={() => handleRemovePort(port.portId)}
+                    >
+                      <X size={20} color="#ff4444" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun port d'attache assigné.</Text>
+            </View>
+          )}
+        </View>
+        
+        <TouchableOpacity 
+          style={styles.submitButton}
+          onPress={handleSubmit}
+        >
+          <Text style={styles.submitButtonText}>Enregistrer les modifications</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.deleteAccountButton}
+          onPress={handleDeleteBoater}
+        >
+          <Trash size={20} color="#ff4444" />
+          <Text style={styles.deleteAccountButtonText}>Supprimer le plaisancier</Text>
+        </TouchableOpacity>
+      </View>
+
+      <BoatManagerSelectionModal
+        visible={showBmSelectionModal}
+        onClose={() => setShowBmSelectionModal(false)}
+        availableBoatManagers={allBoatManagers}
+        onSelectBm={handleSelectBmForPort}
+        currentSelectedBmId={currentPortForBmSelection?.assignedBmId || null}
+        portName={currentPortForBmSelection?.portName || ''}
+      />
+
+      {/* Port Selection Modal */}
+      <PortSelectionModal
+        visible={showPortSelectionModal}
+        onClose={() => setShowPortSelectionModal(false)}
+        onSelectPort={handleAddPort}
+        selectedPortId={null} // No pre-selected port when adding
+        portsData={allPorts}
+        searchQuery={portSearch}
+        onSearchQueryChange={setPortSearch}
+      />
+    </ScrollView>
   );
 }
 
@@ -537,6 +603,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+  },
+  errorText: {
+    color: '#ff4444',
+    fontSize: 12,
+    marginTop: 4,
+    marginLeft: 4,
+  },
+  errorButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  errorButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -555,19 +648,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#666',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  formContainer: {
+  form: {
     padding: 16,
     gap: 24,
   },
@@ -595,7 +676,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 18,
@@ -613,8 +694,20 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
-  formGroup: {
+  profileImageContainer: {
+    position: 'relative',
+    alignSelf: 'center',
     marginBottom: 16,
+  },
+  profileImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 3,
+    borderColor: '#0066CC',
+  },
+  inputContainer: {
+    gap: 4,
   },
   label: {
     fontSize: 14,
@@ -622,7 +715,7 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 8,
   },
-  inputContainer: {
+  inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#f8fafc',
@@ -632,7 +725,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     height: 48,
   },
-  inputError: {
+  inputWrapperError: {
     borderColor: '#ff4444',
     backgroundColor: '#fff5f5',
   },
@@ -647,16 +740,10 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
-    marginTop: 4,
-    marginLeft: 4,
-  },
-  assignmentsList: {
+  portsList: {
     gap: 12,
   },
-  assignmentItem: {
+  portItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -665,10 +752,6 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-  },
-  assignmentInfo: {
-    flex: 1,
-    gap: 8,
   },
   portInfo: {
     flexDirection: 'row',
@@ -680,41 +763,81 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#1a1a1a',
   },
-  boatManagerInfo: {
+  portActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  boatManagerName: {
-    fontSize: 14,
-    color: '#0066CC',
-  },
-  assignmentActions: {
+  assignBmButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 4,
+    backgroundColor: 'white',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#0066CC',
   },
-  editAssignmentButton: {
-    padding: 8,
-  },
-  editAssignmentText: {
-    fontSize: 14,
+  assignBmText: {
+    fontSize: 12,
     color: '#0066CC',
     fontWeight: '500',
   },
-  removeAssignmentButton: {
-    padding: 8,
+  removePortButton: {
+    padding: 4,
   },
-  emptyAssignments: {
+  emptyState: {
     padding: 16,
     backgroundColor: '#f8fafc',
     borderRadius: 8,
     alignItems: 'center',
   },
-  emptyAssignmentsText: {
+  emptyStateText: {
     fontSize: 14,
     color: '#666',
     textAlign: 'center',
+  },
+  submitButton: {
+    backgroundColor: '#0066CC',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0066CC',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
+      },
+    }),
+  },
+  submitButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#fff5f5',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 12,
+  },
+  deleteAccountButtonText: {
+    fontSize: 16,
+    color: '#ff4444',
+    fontWeight: '500',
   },
   modalOverlay: {
     flex: 1,
@@ -759,6 +882,28 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 4,
   },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    margin: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1a1a1a',
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      },
+    }),
+  },
   modalBody: {
     padding: 16,
     maxHeight: 300,
@@ -774,6 +919,9 @@ const styles = StyleSheet.create({
   modalItemSelected: {
     backgroundColor: '#f0f7ff',
   },
+  modalItemInfo: {
+    flex: 1,
+  },
   modalItemText: {
     fontSize: 16,
     color: '#1a1a1a',
@@ -782,32 +930,29 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
-  submitButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#0066CC',
-    padding: 16,
-    borderRadius: 12,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#0066CC',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
-      },
-    }),
+  modalItemSubtext: {
+    fontSize: 12,
+    color: '#666',
   },
-  submitButtonText: {
+  emptyModalText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: 'white',
+    color: '#666',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  textAreaWrapper: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 12,
+    minHeight: 120, // Increased minHeight for biography
+  },
+  textArea: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1a1a1a',
+    textAlignVertical: 'top',
   },
 });
+

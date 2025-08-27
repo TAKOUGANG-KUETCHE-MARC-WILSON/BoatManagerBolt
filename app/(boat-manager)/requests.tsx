@@ -35,6 +35,11 @@ interface Request {
       type: string;
     };
   };
+  boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle
+    id: string;
+    name: string;
+    type: string;
+  };
   boatManager?: { // Optional, as not all requests have a BM directly involved in creation
     id: string;
     name: string; // Derived from first_name, last_name
@@ -177,7 +182,7 @@ export default function RequestsScreen() {
             id_companie,
             categorie_service(description1),
             users!id_client(id, first_name, last_name, avatar, e_mail, phone),
-            boat(name, type, place_de_port)
+            boat(id, name, type, place_de_port)
           `)
         .eq('id_boat_manager', user.id); // Filter by the connected Boat Manager's ID
 
@@ -265,6 +270,12 @@ export default function RequestsScreen() {
               type: req.boat.type
             }
           },
+          // MODIFICATION: Vérifier si id_boat est null avant d'assigner
+          boat: req.id_boat ? {
+            id: req.id_boat.id.toString(),
+            name: req.id_boat.name,
+            type: req.id_boat.type,
+          } : undefined, // Assign undefined if id_boat is null
           boatManager: boatManagerDetails,
           company: companyDetails,
           notes: req.note_add,
@@ -325,7 +336,8 @@ export default function RequestsScreen() {
         request.company?.name?.toLowerCase().includes(query) ||
         request.title.toLowerCase().includes(query) ||
         request.type.toLowerCase().includes(query) ||
-        request.client.boat.name.toLowerCase().includes(query)
+        // MODIFICATION: Vérifier si request.boat existe avant d'accéder à request.boat.name
+        (request.boat && request.boat.name.toLowerCase().includes(query))
       );
     }
 
@@ -693,7 +705,7 @@ export default function RequestsScreen() {
           <TouchableOpacity 
             style={[
               styles.summaryCard, 
-              { backgroundColor: '#FEE2E2' },
+              { backgroundColor: '#FEE2F2' },
               selectedUrgency === 'urgent' && styles.summaryCardSelected
             ]}
             onPress={() => handleFilterByUrgency('urgent')}
@@ -859,12 +871,15 @@ export default function RequestsScreen() {
                     <View style={styles.clientInfo}>
                       <User size={16} color="#666" />
                       <Text style={styles.clientName}>{request.client.name}</Text>
-                      <View style={styles.boatInfo}>
-                        <Boat size={16} color="#666" />
-                        <Text style={styles.boatType}>
-                          {request.client.boat.name} • {request.client.boat.type}
-                        </Text>
-                      </View>
+                      {/* MODIFICATION: Afficher les informations du bateau uniquement si request.boat existe */}
+                      {request.boat && (
+                        <View style={styles.boatInfo}>
+                          <Boat size={16} color="#666" />
+                          <Text style={styles.boatType}>
+                            {request.boat.name} • {request.boat.type}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                     
                     {request.boatManager && (
@@ -911,13 +926,13 @@ export default function RequestsScreen() {
                   </View>
 
                   <View style={styles.requestActions}>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.actionButton}
                       onPress={() => handleMessage(request.client.id)}
                     >
                       <MessageSquare size={20} color="#0066CC" />
                     </TouchableOpacity>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.actionButton}
                       onPress={() => handleRequestDetails(request.id)}
                     >
@@ -1258,10 +1273,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  statusContainer: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1271,15 +1282,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  sourceBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 16,
-  },
-  sourceText: {
     fontSize: 12,
     fontWeight: '500',
   },
@@ -1464,9 +1466,24 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 16, // MODIFICATION ICI : borderRadius uniforme
+    width: '90%', // MODIFICATION ICI : Largeur de 90%
+    maxWidth: 500, // MODIFICATION ICI : Largeur maximale de 500px
     maxHeight: '80%',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
   },
   modalHeader: {
     flexDirection: 'row',

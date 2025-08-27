@@ -1,136 +1,220 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Modal, Alert } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Modal, Alert, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Euro, FileText, ChevronRight, TriangleAlert as AlertTriangle, Calendar, Building, User, Bot as Boat, ChartBar as BarChart3, ChartPie as PieChart, Filter, ChevronDown, ArrowUpDown, Download } from 'lucide-react-native';
+import { ArrowLeft, Euro, FileText, ChevronRight, TriangleAlert as AlertTriangle, Calendar, Building, User, ChartBar as BarChart3, ChartPie as PieChart, Filter, ChevronDown, ArrowUpDown, Download, Check, X } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
-import DateTimePickerModal from 'react-native-modal-datetime-picker'; // Import DateTimePickerModal
+import { supabase } from '@/src/lib/supabase';
+import * as FileSystem from 'expo-file-system'; // Import FileSystem
+import * as Sharing from 'expo-sharing'; // Import Sharing
 
 // Types pour les filtres de période
 type PeriodFilter = 'month' | 'quarter' | 'year' | 'custom';
 
+// Fonction utilitaire pour exporter le CSV
+const exportCsv = async (csvContent: string, filename: string) => {
+  try {
+    if (Platform.OS === 'web') {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const fileUri = FileSystem.cacheDirectory + filename;
+      await FileSystem.writeAsStringAsync(fileUri, csvContent, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(fileUri);
+    }
+  } catch (error) {
+    console.error('Error exporting CSV:', error);
+    Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement du rapport.');
+  }
+};
+
 export default function FinancesScreen() {
   const { user } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('month');
-  const [showDateRangePicker, setShowDateRangePicker] = useState(false);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  
+  // --- DÉCLARATIONS DES ÉTATS : CES LIGNES DOIVENT ÊTRE ICI ---
   const [showPartnerDetails, setShowPartnerDetails] = useState(false);
   const [showServiceDetails, setShowServiceDetails] = useState(false);
+  const [showYearMonthPickerModal, setShowYearMonthPickerModal] = useState(false);
 
-  const [isStartPickerVisible, setStartPickerVisible] = useState(false); // New state for start date picker visibility
-  const [isEndPickerVisible, setEndPickerVisible] = useState(false); // New state for end date picker visibility
+  const currentYear = new Date().getFullYear();
+  const [selectedYears, setSelectedYears] = useState<number[]>([currentYear]);
+  const [selectedMonths, setSelectedMonths] = useState<number[]>([]); // Empty means all months for selected years
 
-  // Données financières
   const [financialData, setFinancialData] = useState({
-    totalRevenue: 45600,
-    paidInvoices: 13,
+    totalRevenue: 0,
+    paidInvoices: 0,
     partnerRevenue: {
-      nauticalCompany: 28500,
-      boatManager: 17100
+      nauticalCompany: 0,
+      boatManager: 0
     },
     serviceRevenue: {
-      entretien: 12000,
-      amelioration: 8000,
-      reparation: 7000,
-      controle: 6000,
-      acces: 4000,
-      securite: 3600,
-      representation: 3000,
-      achatVente: 2000
+      entretien: 0, amelioration: 0, reparation: 0, controle: 0,
+      acces: 0, securite: 0, representation: 0, achatVente: 0
     },
-    partnerDetails: [
-      { id: 'p1', name: 'Nautisme Pro', type: 'nautical_company', revenue: 15200, invoices: 7 },
-      { id: 'p2', name: 'Marine Services', type: 'nautical_company', revenue: 13300, invoices: 5 },
-      { id: 'p3', name: 'Marie Martin', type: 'boat_manager', revenue: 9800, invoices: 4 },
-      { id: 'p4', name: 'Pierre Dubois', type: 'boat_manager', revenue: 7300, invoices: 2 }
-    ]
+    partnerDetails: [] as { id: string; name: string; type: 'nautical_company' | 'boat_manager'; revenue: number; invoices: number }[]
   });
+  // --- FIN DES DÉCLARATIONS DES ÉTATS ---
 
   // Vérifier si l'utilisateur a les permissions nécessaires
-  const hasFinancePermission = user?.role === 'corporate' && 
+  const hasFinancePermission = user?.role === 'corporate' &&
                               user.permissions?.canAccessFinancials === true;
+
+  // Calculer les dates de début et de fin en fonction des années et mois sélectionnés
+  const calculateDateRange = useCallback((years: number[], months: number[]) => {
+    let start: Date;
+    let end: Date;
+
+    const effectiveYears = years.length > 0 ? years : [new Date().getFullYear()];
+    const effectiveMonths = months.length > 0 ? months : Array.from({ length: 12 }, (_, i) => i + 1);
+
+    const minYear = Math.min(...effectiveYears);
+    const maxYear = Math.max(...effectiveYears);
+    const minMonth = Math.min(...effectiveMonths);
+    const maxMonth = Math.max(...effectiveMonths);
+
+    // Start date: first day of the earliest selected month in the earliest selected year
+    start = new Date(minYear, minMonth - 1, 1);
+
+    // End date: last day of the latest selected month in the latest selected year
+    end = new Date(maxYear, maxMonth, 0); // Day 0 of next month is last day of current month
+
+    return {
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0]
+    };
+  }, []);
+
+  // Fonction pour récupérer les données financières depuis Supabase
+  const fetchFinancialData = useCallback(async () => {
+    if (!hasFinancePermission) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setFetchError(null);
+
+    try {
+      const { start, end } = calculateDateRange(selectedYears, selectedMonths);
+
+      // 1. Fetch all relevant service requests within the date range
+      const { data: serviceRequests, error: srError } = await supabase
+        .from('service_request')
+        .select(`
+          id,
+          prix,
+          statut,
+          id_boat_manager,
+          id_companie,
+          categorie_service(description1)
+        `)
+        .gte('date', start)
+        .lte('date', end);
+
+      if (srError) throw srError;
+
+      let currentTotalRevenue = 0;
+      let currentPaidInvoices = 0;
+      const currentPartnerRevenue = { nauticalCompany: 0, boatManager: 0 };
+      const currentServiceRevenue = {
+        entretien: 0, amelioration: 0, reparation: 0, controle: 0,
+        acces: 0, securite: 0, representation: 0, achatVente: 0
+      };
+      const partnerAggregates = new Map<string, { id: string; type: 'nautical_company' | 'boat_manager'; revenue: number; invoices: number }>();
+
+      // Process paid requests
+      const paidRequests = serviceRequests.filter(req => req.statut === 'paid');
+
+      for (const req of paidRequests) {
+        const price = req.prix || 0;
+        currentTotalRevenue += price;
+        currentPaidInvoices++;
+
+        // Aggregate by partner type
+        if (req.id_boat_manager) {
+          currentPartnerRevenue.boatManager += price;
+          const partnerKey = `bm-${req.id_boat_manager}`;
+          const existing = partnerAggregates.get(partnerKey) || { id: req.id_boat_manager, type: 'boat_manager', revenue: 0, invoices: 0 };
+          existing.revenue += price;
+          existing.invoices++;
+          partnerAggregates.set(partnerKey, existing);
+        } else if (req.id_companie) {
+          currentPartnerRevenue.nauticalCompany += price;
+          const partnerKey = `nc-${req.id_companie}`;
+          const existing = partnerAggregates.get(partnerKey) || { id: req.id_companie, type: 'nautical_company', revenue: 0, invoices: 0 };
+          existing.revenue += price;
+          existing.invoices++;
+          partnerAggregates.set(partnerKey, existing);
+        }
+
+        // Aggregate by service type
+        const serviceType = req.categorie_service?.description1;
+        if (serviceType) {
+          // Map service type from DB to internal key
+          const mappedKey = serviceType.toLowerCase().replace(/[^a-z0-9]/g, ''); // Simple mapping
+          if (currentServiceRevenue.hasOwnProperty(mappedKey)) {
+            currentServiceRevenue[mappedKey] += price;
+          } else {
+            // Handle cases where service type might not be directly mapped
+            // For example, if 'Administratif' is 'representation'
+            if (serviceType === 'Administratif') {
+              currentServiceRevenue.representation += price;
+            } else if (serviceType === 'Achat/Vente') {
+              currentServiceRevenue.achatVente += price;
+            }
+          }
+        }
+      }
+
+      // Fetch partner names for partnerDetails
+      const partnerDetailsPromises = Array.from(partnerAggregates.values()).map(async (agg) => {
+        const { data: partnerUser, error: partnerUserError } = await supabase
+          .from('users')
+          .select('first_name, last_name, company_name')
+          .eq('id', agg.id)
+          .single();
+
+        if (partnerUserError) {
+          console.error('Error fetching partner user:', partnerUserError);
+          return { ...agg, name: 'Inconnu' };
+        }
+        const name = agg.type === 'boat_manager'
+          ? `${partnerUser.first_name} ${partnerUser.last_name}`
+          : partnerUser.company_name;
+        return { ...agg, name: name || 'Inconnu' };
+      });
+
+      const currentPartnerDetails = await Promise.all(partnerDetailsPromises);
+
+      setFinancialData({
+        totalRevenue: currentTotalRevenue,
+        paidInvoices: currentPaidInvoices,
+        partnerRevenue: currentPartnerRevenue,
+        serviceRevenue: currentServiceRevenue,
+        partnerDetails: currentPartnerDetails,
+      });
+
+    } catch (e: any) {
+      console.error('Dashboard data fetch error:', e);
+      setFetchError('Une erreur inattendue est survenue lors du chargement des données financières.');
+    } finally {
+      setLoading(false);
+    }
+  }, [hasFinancePermission, selectedYears, selectedMonths, calculateDateRange]);
 
   useEffect(() => {
     if (!hasFinancePermission) {
-      // Rediriger si l'utilisateur n'a pas les permissions nécessaires
-      router.replace('/(corporate)/dashboard');
+      router.replace('/corporate/dashboard');
+      return;
     }
-  }, [hasFinancePermission]);
-
-  // Fonction pour appliquer les filtres et mettre à jour les données
-  const applyFilters = () => {
-    setLoading(true);
-    
-    // Simuler un appel API avec un délai
-    setTimeout(() => {
-      // Dans une vraie application, vous feriez un appel API ici
-      // Pour cette démo, nous allons simplement modifier les données aléatoirement
-      
-      let multiplier = 1;
-      
-      // Ajuster le multiplicateur en fonction de la période
-      switch(periodFilter) {
-        case 'month':
-          multiplier = 1;
-          break;
-        case 'quarter':
-          multiplier = 3;
-          break;
-        case 'year':
-          multiplier = 12;
-          break;
-        case 'custom':
-          // Calculer le nombre de jours entre les dates
-          if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end = new Date(endDate);
-            const diffTime = Math.abs(end.getTime() - start.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            multiplier = diffDays / 30; // Approximation en mois
-          }
-          break;
-      }
-      
-      // Calculer les nouvelles valeurs
-      const nauticalCompanyRevenue = 28500 * multiplier;
-      const boatManagerRevenue = 17100 * multiplier;
-      const totalRevenue = nauticalCompanyRevenue + boatManagerRevenue;
-      
-      // Mettre à jour les données
-      setFinancialData({
-        totalRevenue: Math.round(totalRevenue),
-        paidInvoices: Math.round(13 * multiplier),
-        partnerRevenue: {
-          nauticalCompany: Math.round(nauticalCompanyRevenue),
-          boatManager: Math.round(boatManagerRevenue)
-        },
-        serviceRevenue: {
-          entretien: Math.round(12000 * multiplier),
-          amelioration: Math.round(8000 * multiplier),
-          reparation: Math.round(7000 * multiplier),
-          controle: Math.round(6000 * multiplier),
-          acces: Math.round(4000 * multiplier),
-          securite: Math.round(3600 * multiplier),
-          representation: Math.round(3000 * multiplier),
-          achatVente: Math.round(2000 * multiplier)
-        },
-        partnerDetails: [
-          { id: 'p1', name: 'Nautisme Pro', type: 'nautical_company', revenue: Math.round(15200 * multiplier), invoices: Math.round(7 * multiplier) },
-          { id: 'p2', name: 'Marine Services', type: 'nautical_company', revenue: Math.round(13300 * multiplier), invoices: Math.round(5 * multiplier) },
-          { id: 'p3', name: 'Marie Martin', type: 'boat_manager', revenue: Math.round(9800 * multiplier), invoices: Math.round(4 * multiplier) },
-          { id: 'p4', name: 'Pierre Dubois', type: 'boat_manager', revenue: Math.round(7300 * multiplier), invoices: Math.round(2 * multiplier) }
-        ]
-      });
-      
-      setLoading(false);
-    }, 500);
-  };
-
-  // Appliquer les filtres au chargement initial
-  useEffect(() => {
-    applyFilters();
-  }, [periodFilter]);
+    fetchFinancialData();
+  }, [hasFinancePermission, fetchFinancialData]);
 
   // Formater les montants en euros
   const formatAmount = (amount: number) => {
@@ -149,94 +233,161 @@ export default function FinancesScreen() {
 
   // Obtenir la période actuelle en texte
   const getCurrentPeriodText = () => {
-    const now = new Date();
-    
-    switch(periodFilter) {
-      case 'month':
-        return now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-      case 'quarter':
-        const quarter = Math.floor(now.getMonth() / 3) + 1;
-        return `T${quarter} ${now.getFullYear()}`;
-      case 'year':
-        return now.getFullYear().toString();
-      case 'custom':
-        if (startDate && endDate) {
-          return `${new Date(startDate).toLocaleDateString('fr-FR')} - ${new Date(endDate).toLocaleDateString('fr-FR')}`;
-        }
-        return 'Période personnalisée';
-      default:
-        return '';
+    if (selectedYears.length === 0) {
+      return "Sélectionnez une période";
+    }
+
+    const yearsText = selectedYears.length === 1 ?
+      selectedYears[0].toString() :
+      `${Math.min(...selectedYears)} - ${Math.max(...selectedYears)}`;
+
+    if (selectedMonths.length === 0) {
+      return `Année(s) : ${yearsText} (Tous les mois)`;
+    } else if (selectedMonths.length === 12) {
+      return `Année(s) : ${yearsText} (Tous les mois)`;
+    } else {
+      const monthNames = [
+        "Jan", "Fév", "Mar", "Avr", "Mai", "Juin",
+        "Juil", "Août", "Sep", "Oct", "Nov", "Déc"
+      ];
+      const sortedMonths = [...selectedMonths].sort((a, b) => a - b);
+      const monthsText = sortedMonths.map(m => monthNames[m - 1]).join(', ');
+      return `Année(s) : ${yearsText} - Mois : ${monthsText}`;
     }
   };
 
-  // Modal pour sélectionner une période personnalisée
-  const DateRangePickerModal = () => (
-    <Modal
-      visible={showDateRangePicker}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowDateRangePicker(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Sélectionner une période</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowDateRangePicker(false)}
-            >
-              <ArrowLeft size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.modalBody}>
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Date de début</Text>
-              <View style={styles.inputContainer}>
-                <Calendar size={20} color="#666" />
-                <TouchableOpacity // Replaced TextInput with TouchableOpacity
-                  style={styles.datePickerButton}
-                  onPress={() => setStartPickerVisible(true)}
-                >
-                  <Text style={styles.datePickerText}>
-                    {startDate || 'AAAA-MM-JJ'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+  // --- DÉBUT DES DÉFINITIONS DES MODALES : ELLES DOIVENT ÊTRE ICI ---
+
+  // Modal pour sélectionner une période (années et mois)
+  const YearMonthSelectionModal = () => {
+    const [tempSelectedYears, setTempSelectedYears] = useState<number[]>(selectedYears);
+    const [tempSelectedMonths, setTempSelectedMonths] = useState<number[]>(selectedMonths);
+
+    const availableYears = Array.from({ length: 5 }, (_, i) => currentYear - 4 + i); // Current year and previous 4 years
+    const monthNamesFull = [
+      "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+      "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+    ];
+
+    const toggleYear = (year: number) => {
+      setTempSelectedYears(prev =>
+        prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year].sort((a, b) => a - b)
+      );
+    };
+
+    const toggleMonth = (month: number) => {
+      setTempSelectedMonths(prev =>
+        prev.includes(month) ? prev.filter(m => m !== month) : [...prev, month].sort((a, b) => a - b)
+      );
+    };
+
+    const selectAllMonths = () => {
+      setTempSelectedMonths(Array.from({ length: 12 }, (_, i) => i + 1));
+    };
+
+    const clearAllMonths = () => {
+      setTempSelectedMonths([]);
+    };
+
+    const handleApply = () => {
+      setSelectedYears(tempSelectedYears);
+      setSelectedMonths(tempSelectedMonths);
+      setShowYearMonthPickerModal(false);
+    };
+
+    return (
+      <Modal
+        visible={showYearMonthPickerModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowYearMonthPickerModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Sélectionner une période</Text>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setShowYearMonthPickerModal(false)}
+              >
+                <X size={24} color="#666" />
+              </TouchableOpacity>
             </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Date de fin</Text>
-              <View style={styles.inputContainer}>
-                <Calendar size={20} color="#666" />
-                <TouchableOpacity // Replaced TextInput with TouchableOpacity
-                  style={styles.datePickerButton}
-                  onPress={() => setEndPickerVisible(true)}
-                >
-                  <Text style={styles.datePickerText}>
-                    {endDate || 'AAAA-MM-JJ'}
-                  </Text>
-                </TouchableOpacity>
+
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.formGroup}>
+                <Text style={styles.label}>Année(s)</Text>
+                <View style={styles.selectionGrid}>
+                  {availableYears.map(year => (
+                    <TouchableOpacity
+                      key={year}
+                      style={[
+                        styles.selectionItem,
+                        tempSelectedYears.includes(year) && styles.selectionItemSelected
+                      ]}
+                      onPress={() => toggleYear(year)}
+                    >
+                      <Text style={[
+                        styles.selectionItemText,
+                        tempSelectedYears.includes(year) && styles.selectionItemTextSelected
+                      ]}>
+                        {year}
+                      </Text>
+                      {tempSelectedYears.includes(year) && <Check size={16} color="white" />}
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.label}>Mois</Text>
+                <View style={styles.monthActions}>
+                  <TouchableOpacity style={styles.monthActionButton} onPress={selectAllMonths}>
+                    <Text style={styles.monthActionButtonText}>Sélectionner tout</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.monthActionButton} onPress={clearAllMonths}>
+                    <Text style={styles.monthActionButtonText}>Effacer tout</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.selectionGrid}>
+                  {monthNamesFull.map((monthName, index) => {
+                    const monthNumber = index + 1;
+                    return (
+                      <TouchableOpacity
+                        key={monthNumber}
+                        style={[
+                          styles.selectionItem,
+                          tempSelectedMonths.includes(monthNumber) && styles.selectionItemSelected
+                        ]}
+                        onPress={() => toggleMonth(monthNumber)}
+                      >
+                        <Text style={[
+                          styles.selectionItemText,
+                          tempSelectedMonths.includes(monthNumber) && styles.selectionItemTextSelected
+                        ]}>
+                          {monthName.substring(0, 3)}
+                        </Text>
+                        {tempSelectedMonths.includes(monthNumber) && <Check size={16} color="white" />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.applyButton}
+                onPress={handleApply}
+              >
+                <Text style={styles.applyButtonText}>Appliquer</Text>
+              </TouchableOpacity>
             </View>
-          </View>
-          
-          <View style={styles.modalFooter}>
-            <TouchableOpacity 
-              style={styles.applyButton}
-              onPress={() => {
-                setPeriodFilter('custom');
-                setShowDateRangePicker(false);
-                applyFilters();
-              }}
-            >
-              <Text style={styles.applyButtonText}>Appliquer</Text>
-            </TouchableOpacity>
           </View>
         </View>
-      </View>
-    </Modal>
-  );
+      </Modal>
+    );
+  };
 
   // Modal pour afficher les détails des revenus par partenaire
   const PartnerDetailsModal = () => (
@@ -250,45 +401,48 @@ export default function FinancesScreen() {
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Revenus par partenaire</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.closeButton}
               onPress={() => setShowPartnerDetails(false)}
             >
               <ArrowLeft size={24} color="#666" />
             </TouchableOpacity>
           </View>
-          
+
           <ScrollView style={styles.modalScrollView}>
             <View style={styles.partnerDetailsList}>
-              {financialData.partnerDetails.map((partner) => (
-                <View key={partner.id} style={styles.partnerDetailItem}>
-                  <View style={styles.partnerDetailInfo}>
-                    <View style={styles.partnerDetailHeader}>
-                      {partner.type === 'nautical_company' ? (
-                        <Building size={20} color="#8B5CF6" />
+              {financialData.partnerDetails.length > 0 ? (
+                financialData.partnerDetails.map((partner) => (
+                  <View key={partner.id} style={styles.partnerDetailItem}>
+                    <View style={styles.partnerDetailInfo}>
+                      <View style={styles.partnerDetailHeader}>
+                        {partner.type === 'nautical_company' ? (
+                          <Building size={20} color="#8B5CF6" />
                       ) : (
-                        <User size={20} color="#10B981" />
+                          <User size={20} color="#10B981" />
                       )}
-                      <Text style={styles.partnerDetailName}>{partner.name}</Text>
+                        <Text style={styles.partnerDetailName}>{partner.name}</Text>
+                      </View>
+                      <Text style={styles.partnerDetailType}>
+                        {partner.type === 'nautical_company' ? 'Entreprise du nautisme' : 'Boat Manager'}
+                      </Text>
+                      <Text style={styles.partnerDetailInvoices}>
+                        {partner.invoices} facture{partner.invoices > 1 ? 's' : ''}
+                      </Text>
                     </View>
-                    <Text style={styles.partnerDetailType}>
-                      {partner.type === 'nautical_company' ? 'Entreprise du nautisme' : 'Boat Manager'}
-                    </Text>
-                    <Text style={styles.partnerDetailInvoices}>
-                      {partner.invoices} facture{partner.invoices > 1 ? 's' : ''}
+                    <Text style={styles.partnerDetailRevenue}>
+                      {formatAmount(partner.revenue)}
                     </Text>
                   </View>
-                  <Text style={styles.partnerDetailRevenue}>
-                    {formatAmount(partner.revenue)}
-                  </Text>
-                </View>
-              ))}
+                ))
+              ) : (
+                <Text style={styles.emptyModalText}>Aucun partenaire trouvé pour cette période.</Text>
+              )}
             </View>
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.downloadButton}
               onPress={() => {
-                // Générer un rapport CSV
                 const csvContent = [
                   ['Partenaire', 'Type', 'Factures', 'Revenu'],
                   ...financialData.partnerDetails.map(partner => [
@@ -298,15 +452,8 @@ export default function FinancesScreen() {
                     partner.revenue.toString()
                   ])
                 ].map(row => row.join(',')).join('\n');
-                
-                // En production, cela déclencherait un téléchargement
-                console.log('Téléchargement du rapport CSV:', csvContent);
-                
-                if (Platform.OS === 'web') {
-                  alert('Le rapport a été téléchargé au format CSV.');
-                } else {
-                  Alert.alert('Succès', 'Le rapport a été téléchargé au format CSV.');
-                }
+
+                exportCsv(csvContent, 'rapport_partenaires.csv');
               }}
             >
               <Download size={20} color="#0066CC" />
@@ -330,242 +477,62 @@ export default function FinancesScreen() {
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Revenus par type de service</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.closeButton}
               onPress={() => setShowServiceDetails(false)}
             >
               <ArrowLeft size={24} color="#666" />
             </TouchableOpacity>
           </View>
-          
+
           <ScrollView style={styles.modalScrollView}>
             <View style={styles.serviceDetailsList}>
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Entretien</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.entretien, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
+              {Object.entries(financialData.serviceRevenue).length > 0 ? (
+                Object.entries(financialData.serviceRevenue).map(([key, value]) => (
+                  <View key={key} style={styles.serviceDetailItem}>
+                    <View style={styles.serviceDetailInfo}>
+                      <Text style={styles.serviceDetailName}>{key.charAt(0).toUpperCase() + key.slice(1)}</Text>
+                      <View style={styles.serviceDetailPercentage}>
+                        <View style={styles.serviceDetailProgressContainer}>
+                          <View
+                            style={[
+                              styles.serviceDetailProgress,
+                              {
+                                width: `${calculatePercentage(value, financialData.totalRevenue)}%`,
+                                backgroundColor: '#0066CC'
+                              }
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.serviceDetailPercentageText}>
+                          {calculatePercentage(value, financialData.totalRevenue)}%
+                        </Text>
+                      </View>
                     </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.entretien, financialData.totalRevenue)}%
+                    <Text style={styles.serviceDetailRevenue}>
+                      {formatAmount(value)}
                     </Text>
                   </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.entretien)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Amélioration</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.amelioration, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.amelioration, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.amelioration)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Réparation</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.reparation, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.reparation, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.reparation)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Contrôle</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.controle, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.controle, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.controle)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Gestion des accès</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.acces, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.acces, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.acces)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Sécurité</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.securite, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.securite, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.securite)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Représentation</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.representation, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.representation, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.representation)}
-                </Text>
-              </View>
-              
-              <View style={styles.serviceDetailItem}>
-                <View style={styles.serviceDetailInfo}>
-                  <Text style={styles.serviceDetailName}>Achat/Vente</Text>
-                  <View style={styles.serviceDetailPercentage}>
-                    <View style={styles.serviceDetailProgressContainer}>
-                      <View 
-                        style={[
-                          styles.serviceDetailProgress, 
-                          { 
-                            width: `${calculatePercentage(financialData.serviceRevenue.achatVente, financialData.totalRevenue)}%`,
-                            backgroundColor: '#0066CC'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.serviceDetailPercentageText}>
-                      {calculatePercentage(financialData.serviceRevenue.achatVente, financialData.totalRevenue)}%
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.serviceDetailRevenue}>
-                  {formatAmount(financialData.serviceRevenue.achatVente)}
-                </Text>
-              </View>
+                ))
+              ) : (
+                <Text style={styles.emptyModalText}>Aucun service trouvé pour cette période.</Text>
+              )}
             </View>
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.downloadButton}
               onPress={() => {
-                // Générer un rapport CSV
                 const csvContent = [
                   ['Service', 'Revenu', 'Pourcentage'],
-                  ['Entretien', financialData.serviceRevenue.entretien.toString(), `${calculatePercentage(financialData.serviceRevenue.entretien, financialData.totalRevenue)}%`],
-                  ['Amélioration', financialData.serviceRevenue.amelioration.toString(), `${calculatePercentage(financialData.serviceRevenue.amelioration, financialData.totalRevenue)}%`],
-                  ['Réparation', financialData.serviceRevenue.reparation.toString(), `${calculatePercentage(financialData.serviceRevenue.reparation, financialData.totalRevenue)}%`],
-                  ['Contrôle', financialData.serviceRevenue.controle.toString(), `${calculatePercentage(financialData.serviceRevenue.controle, financialData.totalRevenue)}%`],
-                  ['Gestion des accès', financialData.serviceRevenue.acces.toString(), `${calculatePercentage(financialData.serviceRevenue.acces, financialData.totalRevenue)}%`],
-                  ['Sécurité', financialData.serviceRevenue.securite.toString(), `${calculatePercentage(financialData.serviceRevenue.securite, financialData.totalRevenue)}%`],
-                  ['Représentation', financialData.serviceRevenue.representation.toString(), `${calculatePercentage(financialData.serviceRevenue.representation, financialData.totalRevenue)}%`],
-                  ['Achat/Vente', financialData.serviceRevenue.achatVente.toString(), `${calculatePercentage(financialData.serviceRevenue.achatVente, financialData.totalRevenue)}%`],
+                  ...Object.entries(financialData.serviceRevenue).map(([key, value]) => [
+                    key.charAt(0).toUpperCase() + key.slice(1),
+                    value.toString(),
+                    `${calculatePercentage(value, financialData.totalRevenue)}%`
+                  ]),
                   ['Total', financialData.totalRevenue.toString(), '100%']
                 ].map(row => row.join(',')).join('\n');
-                
-                // En production, cela déclencherait un téléchargement
-                console.log('Téléchargement du rapport CSV:', csvContent);
-                
-                if (Platform.OS === 'web') {
-                  alert('Le rapport a été téléchargé au format CSV.');
-                } else {
-                  Alert.alert('Succès', 'Le rapport a été téléchargé au format CSV.');
-                }
+
+                exportCsv(csvContent, 'rapport_services.csv');
               }}
             >
               <Download size={20} color="#0066CC" />
@@ -577,11 +544,13 @@ export default function FinancesScreen() {
     </Modal>
   );
 
+  // --- FIN DES DÉFINITIONS DES MODALES ---
+
   if (!hasFinancePermission) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -600,10 +569,33 @@ export default function FinancesScreen() {
     );
   }
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des données financières...</Text>
+      </View>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{fetchError}</Text>
+        <TouchableOpacity
+          style={styles.errorButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -616,24 +608,25 @@ export default function FinancesScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Aperçu financier</Text>
-            <View style={styles.periodSelector}>
-              <Text style={styles.periodText}>{getCurrentPeriodText()}</Text>
-              <TouchableOpacity 
-                style={styles.periodDropdown}
-                onPress={() => setShowDateRangePicker(true)}
-              >
-                <ChevronDown size={20} color="#0066CC" />
-              </TouchableOpacity>
-            </View>
           </View>
-          
+          {/* Le bouton de sélection de période est maintenant ici, en dessous du titre */}
+          <View style={styles.periodSelector}>
+            <Text style={styles.periodText}>{getCurrentPeriodText()}</Text>
+            <TouchableOpacity
+              style={styles.periodDropdown}
+              onPress={() => setShowYearMonthPickerModal(true)}
+            >
+              <ChevronDown size={20} color="#0066CC" />
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.statsGrid}>
             <View style={styles.statCard}>
               <Euro size={24} color="#10B981" />
               <Text style={styles.statNumber}>{formatAmount(financialData.totalRevenue)}</Text>
               <Text style={styles.statLabel}>Revenu total</Text>
             </View>
-            
+
             <View style={styles.statCard}>
               <FileText size={24} color="#10B981" />
               <Text style={styles.statNumber}>{financialData.paidInvoices}</Text>
@@ -648,7 +641,7 @@ export default function FinancesScreen() {
               <BarChart3 size={24} color="#0066CC" />
               <Text style={styles.sectionTitle}>Revenus par type de partenaire</Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.viewDetailsButton}
               onPress={() => setShowPartnerDetails(true)}
             >
@@ -656,7 +649,7 @@ export default function FinancesScreen() {
               <ChevronRight size={20} color="#0066CC" />
             </TouchableOpacity>
           </View>
-          
+
           <View style={styles.partnerRevenueCard}>
             <View style={styles.partnerRevenueHeader}>
               <View style={styles.partnerTypeContainer}>
@@ -667,10 +660,10 @@ export default function FinancesScreen() {
             </View>
             <View style={styles.progressBarContainer}>
               <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.partnerRevenue.nauticalCompany, financialData.totalRevenue)}%`, 
-                  backgroundColor: '#8B5CF6' 
+                styles.progressBar,
+                {
+                  width: `${calculatePercentage(financialData.partnerRevenue.nauticalCompany, financialData.totalRevenue)}%`,
+                  backgroundColor: '#8B5CF6'
                 }
               ]} />
             </View>
@@ -678,7 +671,7 @@ export default function FinancesScreen() {
               {calculatePercentage(financialData.partnerRevenue.nauticalCompany, financialData.totalRevenue)}% du revenu total
             </Text>
           </View>
-          
+
           <View style={styles.partnerRevenueCard}>
             <View style={styles.partnerRevenueHeader}>
               <View style={styles.partnerTypeContainer}>
@@ -689,10 +682,10 @@ export default function FinancesScreen() {
             </View>
             <View style={styles.progressBarContainer}>
               <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.partnerRevenue.boatManager, financialData.totalRevenue)}%`, 
-                  backgroundColor: '#10B981' 
+                styles.progressBar,
+                {
+                  width: `${calculatePercentage(financialData.partnerRevenue.boatManager, financialData.totalRevenue)}%`,
+                  backgroundColor: '#10B981'
                 }
               ]} />
             </View>
@@ -708,7 +701,7 @@ export default function FinancesScreen() {
               <PieChart size={24} color="#0066CC" />
               <Text style={styles.sectionTitle}>Revenus par type de service</Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.viewDetailsButton}
               onPress={() => setShowServiceDetails(true)}
             >
@@ -716,184 +709,35 @@ export default function FinancesScreen() {
               <ChevronRight size={20} color="#0066CC" />
             </TouchableOpacity>
           </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Entretien</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.entretien)}</Text>
+
+          {Object.entries(financialData.serviceRevenue).map(([key, value]) => (
+            <View key={key} style={styles.serviceRevenueCard}>
+              <View style={styles.serviceRevenueHeader}>
+                <Text style={styles.serviceTypeText}>{key.charAt(0).toUpperCase() + key.slice(1)}</Text>
+                <Text style={styles.serviceRevenueAmount}>{formatAmount(value)}</Text>
+              </View>
+              <View style={styles.progressBarContainer}>
+                <View style={[
+                  styles.progressBar,
+                  {
+                    width: `${calculatePercentage(value, financialData.totalRevenue)}%`,
+                    backgroundColor: '#0066CC'
+                  }
+                ]} />
+              </View>
+              <Text style={styles.serviceRevenuePercentage}>
+                {calculatePercentage(value, financialData.totalRevenue)}% du revenu total
+              </Text>
             </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.entretien, financialData.totalRevenue)}%`, 
-                  backgroundColor: '#0066CC' 
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.entretien, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Amélioration</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.amelioration)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.amelioration, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.amelioration, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Réparation</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.reparation)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.reparation, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.reparation, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Contrôle</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.controle)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.controle, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.controle, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Gestion des accès</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.acces)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.acces, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.acces, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Sécurité</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.securite)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.securite, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.securite, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Représentation</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.representation)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.representation, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.representation, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
-          
-          <View style={styles.serviceRevenueCard}>
-            <View style={styles.serviceRevenueHeader}>
-              <Text style={styles.serviceTypeText}>Achat/Vente</Text>
-              <Text style={styles.serviceRevenueAmount}>{formatAmount(financialData.serviceRevenue.achatVente)}</Text>
-            </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[
-                styles.progressBar, 
-                { 
-                  width: `${calculatePercentage(financialData.serviceRevenue.achatVente, financialData.totalRevenue)}%`,
-                  backgroundColor: '#0066CC'
-                }
-              ]} />
-            </View>
-            <Text style={styles.serviceRevenuePercentage}>
-              {calculatePercentage(financialData.serviceRevenue.achatVente, financialData.totalRevenue)}% du revenu total
-            </Text>
-          </View>
+          ))}
         </View>
       </ScrollView>
 
-      <DateRangePickerModal />
+      {/* --- APPEL DES MODALES : CES LIGNES DOIVENT ÊTRE ICI --- */}
+      <YearMonthSelectionModal />
       <PartnerDetailsModal />
       <ServiceDetailsModal />
-
-      <DateTimePickerModal
-        isVisible={isStartPickerVisible}
-        mode="date"
-        onConfirm={(date) => {
-          setStartDate(date.toISOString().split('T')[0]);
-          setStartPickerVisible(false);
-        }}
-        onCancel={() => setStartPickerVisible(false)}
-      />
-
-      <DateTimePickerModal
-        isVisible={isEndPickerVisible}
-        mode="date"
-        onConfirm={(date) => {
-          setEndDate(date.toISOString().split('T')[0]);
-          setEndPickerVisible(false);
-        }}
-        onCancel={() => setEndPickerVisible(false)}
-      />
+      {/* --- FIN DE L'APPEL DES MODALES --- */}
     </View>
   );
 }
@@ -902,6 +746,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -951,6 +800,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
+    // Styles pour le positionner sous le titre
+    alignSelf: 'flex-start', // Pour qu'il ne prenne pas toute la largeur
+    marginTop: 8, // Ajustement pour le rapprocher du titre
+    marginBottom: 16, // Espace après le sélecteur
   },
   periodText: {
     fontSize: 14,
@@ -1373,5 +1226,60 @@ const styles = StyleSheet.create({
   datePickerText: {
     fontSize: 16,
     color: '#1a1a1a',
+  },
+  emptyModalText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  selectionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  selectionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: 'white',
+  },
+  selectionItemSelected: {
+    backgroundColor: '#0066CC',
+    borderColor: '#0066CC',
+  },
+  selectionItemText: {
+    fontSize: 14,
+    color: '#1a1a1a',
+  },
+  selectionItemTextSelected: {
+    color: 'white',
+    fontWeight: '500',
+  },
+  monthActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  monthActionButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#f0f7ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  monthActionButtonText: {
+    fontSize: 14,
+    color: '#0066CC',
+    fontWeight: '500',
   },
 });

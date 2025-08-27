@@ -1,11 +1,69 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image } from 'react-native';
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Search, Filter, User, ChevronRight, X, Phone, Mail, MapPin, Bot as Boat, Plus, Edit, Trash } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native';
 
-type SortKey = 'name' | 'port';
+console.log('DEBUG: Fichier pleasure-boaters.tsx chargé.');
 
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars (extraites du fichier de profil)
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  console.log('DEBUG: getSignedAvatarUrl appelé avec:', value);
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) {
+    console.error('DEBUG: Erreur getSignedAvatarUrl:', error);
+    return '';
+  }
+  console.log('DEBUG: getSignedAvatarUrl succès:', data.signedUrl);
+  return data.signedUrl;
+};
+
+// Interface pour les données brutes du plaisancier récupérées de Supabase
+interface RawPleasureBoater {
+  id: string;
+  first_name: string;
+  last_name: string;
+  avatar: string;
+  e_mail: string;
+  phone: string;
+  status: 'active' | 'pending' | 'inactive'; // Corresponds to 'status' in DB
+  last_login?: string; // Corresponds to 'last_contact' in DB
+  created_at: string;
+  boat: Array<{
+    id: string;
+    name: string;
+    type: string;
+    place_de_port?: string;
+  }>;
+  user_ports: Array<{
+    port_id: number;
+    ports: { name: string };
+  }>;
+}
+
+// Interface pour les données de port traitées pour l'affichage
+interface ProcessedPort {
+  id: string;
+  name: string;
+  boatManagerId: string | null;
+  boatManagerName: string | null;
+}
+
+// Interface pour le plaisancier final après traitement
 interface PleasureBoater {
   id: string;
   firstName: string;
@@ -13,346 +71,116 @@ interface PleasureBoater {
   email: string;
   phone: string;
   avatar: string;
-  ports: Array<{
-    id: string;
-    name: string;
-    boatManagerId: string;
-    boatManagerName: string;
-  }>;
+  ports: ProcessedPort[];
   boats: Array<{
     id: string;
     name: string;
     type: string;
+    place_de_port?: string;
   }>;
   createdAt: string;
   lastLogin?: string;
+  status: 'active' | 'pending' | 'inactive';
 }
 
-// Mock data for pleasure boaters
-const mockPleasureBoaters: PleasureBoater[] = [
-  {
-    id: 'pb1',
-    firstName: 'Jean',
-    lastName: 'Dupont',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p1',
-        name: 'Port de Marseille',
-        boatManagerId: 'bm1',
-        boatManagerName: 'Marie Martin'
-      },
-      {
-        id: 'p2',
-        name: 'Port de Nice',
-        boatManagerId: 'bm2',
-        boatManagerName: 'Pierre Dubois'
-      }
-    ],
-    boats: [
-      {
-        id: 'b1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    ],
-    createdAt: '2024-01-15',
-    lastLogin: '2024-02-20'
-  },
-  {
-    id: 'pb2',
-    firstName: 'Sophie',
-    lastName: 'Martin',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p1',
-        name: 'Port de Marseille',
-        boatManagerId: 'bm1',
-        boatManagerName: 'Marie Martin'
-      }
-    ],
-    boats: [
-      {
-        id: 'b2',
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      },
-      {
-        id: 'b3',
-        name: "L'Aventurier",
-        type: 'Catamaran'
-      }
-    ],
-    createdAt: '2024-01-20',
-    lastLogin: '2024-02-19'
-  },
-  {
-    id: 'pb3',
-    firstName: 'Pierre',
-    lastName: 'Dubois',
-    email: 'pierre.dubois@example.com',
-    phone: '+33 6 34 56 78 90',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p2',
-        name: 'Port de Nice',
-        boatManagerId: 'bm2',
-        boatManagerName: 'Pierre Dubois'
-      }
-    ],
-    boats: [
-      {
-        id: 'b4',
-        name: 'Le Navigateur',
-        type: 'Voilier'
-      }
-    ],
-    createdAt: '2024-01-25',
-    lastLogin: '2024-02-18'
-  },
-  {
-    id: 'pb4',
-    firstName: 'Marie',
-    lastName: 'Leroy',
-    email: 'marie.leroy@example.com',
-    phone: '+33 6 45 67 89 01',
-    avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=2070&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p3',
-        name: 'Port de Cannes',
-        boatManagerId: 'bm3',
-        boatManagerName: 'Sophie Laurent'
-      }
-    ],
-    boats: [
-      {
-        id: 'b5',
-        name: 'La Sirène',
-        type: 'Yacht'
-      }
-    ],
-    createdAt: '2024-02-01',
-    lastLogin: '2024-02-17'
-  },
-  {
-    id: 'pb5',
-    firstName: 'Thomas',
-    lastName: 'Bernard',
-    email: 'thomas.bernard@example.com',
-    phone: '+33 6 56 78 90 12',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?q=80&w=2574&auto=format&fit=crop',
-    ports: [
-      {
-        id: 'p4',
-        name: 'Port de Saint-Tropez',
-        boatManagerId: 'bm4',
-        boatManagerName: 'Lucas Bernard'
-      }
-    ],
-    boats: [
-      {
-        id: 'b6',
-        name: 'Le Dauphin',
-        type: 'Voilier'
-      }
-    ],
-    createdAt: '2024-02-05',
-    lastLogin: '2024-02-16'
+type SortKey = 'name' | 'port';
+
+// Fonction utilitaire pour formater les dates (déplacée en dehors du composant principal)
+const formatDate = (dateString: string) => {
+  if (!dateString) return 'N/A';
+  return new Date(dateString).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+};
+
+// --- Modale pour les détails du plaisancier ---
+const BoaterDetailsModal = memo(({
+  visible,
+  onClose,
+  selectedBoater,
+  handleEditBoater,
+}) => {
+  console.log('DEBUG: Rendu de BoaterDetailsModal. Visible:', visible, 'Boater:', selectedBoater?.firstName);
+  if (!visible || !selectedBoater) {
+    return null;
   }
-];
 
-export default function PleasureBoatersScreen() {
-  const { user } = useAuth();
-  const [pleasureBoaters, setPleasureBoaters] = useState<PleasureBoater[]>(mockPleasureBoaters);
-  const [filteredBoaters, setFilteredBoaters] = useState<PleasureBoater[]>(mockPleasureBoaters);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPort, setSelectedPort] = useState<string | null>(null);
-  const [showFilters, setShowFilters] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>('name');
-  const [sortAsc, setSortAsc] = useState(true);
-  const [selectedBoater, setSelectedBoater] = useState<PleasureBoater | null>(null);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
-
-  // Get unique ports for filtering
-  const uniquePorts = [...new Set(pleasureBoaters.flatMap(boater => boater.ports.map(port => port.name)))];
-
-  // Apply filters and sorting
-  useEffect(() => {
-    let result = [...pleasureBoaters];
-    
-    // Apply search filter
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(boater => 
-        `${boater.firstName} ${boater.lastName}`.toLowerCase().includes(query) ||
-        boater.email.toLowerCase().includes(query) ||
-        boater.ports.some(port => port.name.toLowerCase().includes(query)) ||
-        boater.ports.some(port => port.boatManagerName.toLowerCase().includes(query)) ||
-        boater.boats.some(boat => boat.name.toLowerCase().includes(query))
-      );
-    }
-    
-    // Apply port filter
-    if (selectedPort) {
-      result = result.filter(boater => boater.ports.some(port => port.name === selectedPort));
-    }
-    
-    // Apply sorting
-    result.sort((a, b) => {
-      let valueA, valueB;
-      
-      switch (sortKey) {
-        case 'name':
-          valueA = `${a.firstName} ${a.lastName}`.toLowerCase();
-          valueB = `${b.firstName} ${b.lastName}`.toLowerCase();
-          break;
-        case 'port':
-          valueA = a.ports[0]?.name.toLowerCase() || '';
-          valueB = b.ports[0]?.name.toLowerCase() || '';
-          break;
-        default:
-          valueA = `${a.firstName} ${a.lastName}`.toLowerCase();
-          valueB = `${b.firstName} ${b.lastName}`.toLowerCase();
-      }
-      
-      if (valueA < valueB) return sortAsc ? -1 : 1;
-      if (valueA > valueB) return sortAsc ? 1 : -1;
-      return 0;
-    });
-    
-    setFilteredBoaters(result);
-  }, [pleasureBoaters, searchQuery, selectedPort, sortKey, sortAsc]);
-
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortKey(key);
-      setSortAsc(true);
-    }
-  };
-
-  const handleViewDetails = (boater: PleasureBoater) => {
-    setSelectedBoater(boater);
-    setShowDetailsModal(true);
-  };
-
-  const handleAddBoater = () => {
-    router.push('/corporate/pleasure-boaters/new');
-  };
-
-  const handleEditBoater = () => {
-    if (selectedBoater) {
-      setShowDetailsModal(false);
-      router.push(`/corporate/pleasure-boaters/${selectedBoater.id}/edit`);
-    }
-  };
-
-  const handleDeleteBoater = () => {
-    setShowDeleteConfirmModal(true);
-  };
-
-  const confirmDeleteBoater = () => {
-    if (selectedBoater) {
-      // Filtrer le plaisancier sélectionné de la liste
-      const updatedBoaters = pleasureBoaters.filter(boater => boater.id !== selectedBoater.id);
-      setPleasureBoaters(updatedBoaters);
-      setShowDeleteConfirmModal(false);
-      setShowDetailsModal(false);
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-FR', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric'
-    });
-  };
-
-  // Modal component for user details
-  const BoaterDetailsModal = () => (
+  return (
     <Modal
-      visible={showDetailsModal}
+      visible={visible}
       transparent
       animationType="slide"
-      onRequestClose={() => setShowDetailsModal(false)}
+      onRequestClose={onClose}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Détails du plaisancier</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.closeButton}
-              onPress={() => setShowDetailsModal(false)}
+              onPress={onClose}
             >
               <X size={24} color="#666" />
             </TouchableOpacity>
           </View>
-          
-          {selectedBoater && (
-            <ScrollView style={styles.modalBody}>
-              <View style={styles.userProfileHeader}>
-                <Image source={{ uri: selectedBoater.avatar }} style={styles.userProfileImage} />
-                <View style={styles.userProfileInfo}>
-                  <Text style={styles.userProfileName}>
-                    {selectedBoater.firstName} {selectedBoater.lastName}
-                  </Text>
-                  <Text style={styles.userProfileDate}>
-                    Membre depuis {formatDate(selectedBoater.createdAt)}
-                  </Text>
+
+          <ScrollView style={styles.modalBody}>
+            <View style={styles.userProfileHeader}>
+              <Image source={{ uri: selectedBoater.avatar }} style={styles.userProfileImage} />
+              <View style={styles.userProfileInfo}>
+                <Text style={styles.userProfileName}>
+                  {selectedBoater.firstName} {selectedBoater.lastName}
+                </Text>
+                <Text style={styles.userProfileDate}>
+                  Membre depuis {formatDate(selectedBoater.createdAt)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsSectionTitle}>Informations de contact</Text>
+
+              <View style={styles.detailItem}>
+                <Mail size={20} color="#0066CC" />
+                <View style={styles.detailContent}>
+                  <Text style={styles.detailLabel}>Email</Text>
+                  <Text style={styles.detailValue}>{selectedBoater.email}</Text>
                 </View>
               </View>
-              
-              <View style={styles.detailsSection}>
-                <Text style={styles.detailsSectionTitle}>Informations de contact</Text>
-                
-                <View style={styles.detailItem}>
-                  <Mail size={20} color="#0066CC" />
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Email</Text>
-                    <Text style={styles.detailValue}>{selectedBoater.email}</Text>
-                  </View>
-                </View>
-                
-                <View style={styles.detailItem}>
-                  <Phone size={20} color="#0066CC" />
-                  <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Téléphone</Text>
-                    <Text style={styles.detailValue}>{selectedBoater.phone}</Text>
-                  </View>
+
+              <View style={styles.detailItem}>
+                <Phone size={20} color="#0066CC" />
+                <View style={styles.detailContent}>
+                  <Text style={styles.detailLabel}>Téléphone</Text>
+                  <Text style={styles.detailValue}>{selectedBoater.phone}</Text>
                 </View>
               </View>
-              
-              <View style={styles.detailsSection}>
-                <Text style={styles.detailsSectionTitle}>Ports d'attache et Boat Managers</Text>
-                
-                {selectedBoater.ports.map((port, index) => (
-                  <View key={index} style={styles.portItem}>
-                    <MapPin size={20} color="#0066CC" />
-                    <View style={styles.portInfo}>
-                      <Text style={styles.portName}>{port.name}</Text>
-                      <View style={styles.boatManagerInfo}>
-                        <User size={16} color="#0066CC" />
-                        <Text style={styles.boatManagerName}>{port.boatManagerName}</Text>
-                      </View>
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsSectionTitle}>Ports d'attache et Boat Managers</Text>
+
+              {selectedBoater.ports.map((port, index) => (
+                <View key={index} style={styles.portItem}>
+                  <MapPin size={20} color="#0066CC" />
+                  <View style={styles.portInfo}>
+                    <Text style={styles.portName}>{port.name}</Text>
+                    <View style={styles.boatManagerInfo}>
+                      <User size={16} color="#0066CC" />
+                      <Text style={styles.boatManagerName}>{port.boatManagerName || 'Non assigné'}</Text>
                     </View>
                   </View>
-                ))}
-              </View>
-              
-              <View style={styles.detailsSection}>
-                <Text style={styles.detailsSectionTitle}>Bateaux</Text>
-                
-                {selectedBoater.boats.map((boat) => (
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsSectionTitle}>Bateaux</Text>
+
+              {selectedBoater.boats.length > 0 ? (
+                selectedBoater.boats.map((boat) => (
                   <View key={boat.id} style={styles.boatItem}>
                     <Boat size={20} color="#0066CC" />
                     <View style={styles.boatInfo}>
@@ -360,34 +188,28 @@ export default function PleasureBoatersScreen() {
                       <Text style={styles.boatType}>{boat.type}</Text>
                     </View>
                   </View>
-                ))}
+                ))
+              ) : (
+                <Text style={styles.emptyModalText}>Aucun bateau enregistré.</Text>
+              )}
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsSectionTitle}>Activité</Text>
+
+              <View style={styles.activityItem}>
+                <Text style={styles.activityLabel}>Dernière connexion</Text>
+                <Text style={styles.activityValue}>
+                  {selectedBoater.lastLogin ? formatDate(selectedBoater.lastLogin) : 'Jamais'}
+                </Text>
               </View>
-              
-              <View style={styles.detailsSection}>
-                <Text style={styles.detailsSectionTitle}>Activité</Text>
-                
-                <View style={styles.activityItem}>
-                  <Text style={styles.activityLabel}>Dernière connexion</Text>
-                  <Text style={styles.activityValue}>
-                    {selectedBoater.lastLogin ? formatDate(selectedBoater.lastLogin) : 'Jamais'}
-                  </Text>
-                </View>
-              </View>
-            </ScrollView>
-          )}
-          
+            </View>
+          </ScrollView>
+
           <View style={styles.modalFooter}>
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={handleDeleteBoater}
-              >
-                <Trash size={20} color="white" />
-                <Text style={styles.deleteButtonText}>Supprimer</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.editButton}
+              <TouchableOpacity
+                style={styles.editButton} // Only one button: "Modifier"
                 onPress={handleEditBoater}
               >
                 <Edit size={20} color="white" />
@@ -399,14 +221,25 @@ export default function PleasureBoatersScreen() {
       </View>
     </Modal>
   );
+});
 
-  // Modal de confirmation de suppression
-  const DeleteConfirmModal = () => (
+// --- Modale de confirmation de suppression ---
+const DeleteConfirmModal = memo(({
+  visible,
+  onClose,
+  confirmDeleteBoater,
+}) => {
+  console.log('DEBUG: Rendu de DeleteConfirmModal. Visible:', visible);
+  if (!visible) {
+    return null;
+  }
+
+  return (
     <Modal
-      visible={showDeleteConfirmModal}
+      visible={visible}
       transparent
       animationType="slide"
-      onRequestClose={() => setShowDeleteConfirmModal(false)}
+      onRequestClose={onClose}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.confirmModalContent}>
@@ -414,16 +247,16 @@ export default function PleasureBoatersScreen() {
           <Text style={styles.confirmModalText}>
             Êtes-vous sûr de vouloir supprimer ce plaisancier ? Cette action est irréversible.
           </Text>
-          
+
           <View style={styles.confirmModalActions}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.cancelButton}
-              onPress={() => setShowDeleteConfirmModal(false)}
+              onPress={onClose}
             >
               <Text style={styles.cancelButtonText}>Annuler</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.confirmDeleteButton}
               onPress={confirmDeleteBoater}
             >
@@ -434,18 +267,363 @@ export default function PleasureBoatersScreen() {
       </View>
     </Modal>
   );
+});
+
+export default function PleasureBoatersScreen () {
+  console.log('DEBUG: Début du composant PleasureBoatersScreen');
+  const { user, loading: authLoading } = useAuth();
+  const [pleasureBoaters, setPleasureBoaters] = useState<PleasureBoater[]>([]);
+  const [filteredBoaters, setFilteredBoaters] = useState<PleasureBoater[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedPort, setSelectedPort] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortAsc, setSortAsc] = useState(true);
+  const [selectedBoater, setSelectedBoater] = useState<PleasureBoater | null>(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const searchInputRef = useRef<TextInput>(null); // Create a ref for the TextInput
+
+  // Get unique ports for filtering (from fetched data)
+  const uniquePorts = useMemo(() => {
+    const ports = new Set<string>();
+    pleasureBoaters.forEach(boater => {
+      boater.ports.forEach(port => ports.add(port.name));
+    });
+    return Array.from(ports);
+  }, [pleasureBoaters]);
+
+  const fetchPleasureBoaters = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    console.log('DEBUG: Début de fetchPleasureBoaters');
+
+    try {
+      // 1. Fetch all pleasure boaters with their boats and user_ports
+      const { data: rawBoaters, error: boaterError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          first_name,
+          last_name,
+          avatar,
+          e_mail,
+          phone,
+          status,
+          last_login,
+          created_at,
+          boat(id, name, type, place_de_port),
+          user_ports(port_id, ports(name))
+        `)
+        .eq('profile', 'pleasure_boater');
+
+      if (boaterError) throw boaterError;
+      console.log('DEBUG: Données brutes des plaisanciers récupérées:', rawBoaters);
+
+      // 2. Fetch all boat managers and their port assignments
+      const { data: rawBoatManagers, error: bmError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          first_name,
+          last_name,
+          user_ports(port_id)
+        `)
+        .eq('profile', 'boat_manager');
+
+      if (bmError) throw bmError;
+      console.log('DEBUG: Boat Managers bruts récupérés:', rawBoatManagers);
+
+      // Create a map of port_id to boat_manager_name
+      const portToBmMap = new Map<number, { id: string; name: string }>();
+      rawBoatManagers.forEach(bm => {
+        bm.user_ports.forEach(up => {
+          portToBmMap.set(up.port_id, { id: bm.id, name: `${bm.first_name} ${bm.last_name}` });
+        });
+      });
+      console.log('DEBUG: Map portToBmMap créée:', portToBmMap);
+
+      // 3. Process raw boater data
+      const processedBoaters: PleasureBoater[] = await Promise.all(rawBoaters.map(async (rawBoater: RawPleasureBoater) => {
+        const avatarUrl = await getSignedAvatarUrl(rawBoater.avatar);
+
+        const processedPorts: ProcessedPort[] = rawBoater.user_ports.map(up => {
+          const bmInfo = portToBmMap.get(up.port_id);
+          return {
+            id: up.port_id.toString(),
+            name: up.ports.name,
+            boatManagerId: bmInfo?.id || null,
+            boatManagerName: bmInfo?.name || null,
+          };
+        });
+
+        return {
+          id: rawBoater.id,
+          firstName: rawBoater.first_name,
+          lastName: rawBoater.last_name,
+          email: rawBoater.e_mail,
+          phone: rawBoater.phone,
+          avatar: avatarUrl || DEFAULT_AVATAR,
+          ports: processedPorts,
+          boats: rawBoater.boat || [],
+          createdAt: rawBoater.created_at,
+          lastLogin: rawBoater.last_login || undefined,
+          status: rawBoater.status,
+        };
+      }));
+      console.log('DEBUG: Plaisanciers traités:', processedBoaters);
+
+      setPleasureBoaters(processedBoaters);
+      console.log('DEBUG: pleasureBoaters mis à jour. Nombre:', processedBoaters.length);
+
+    } catch (e: any) {
+      console.error('DEBUG: Erreur dans fetchPleasureBoaters:', e.message);
+      setError('Échec du chargement des plaisanciers.');
+    } finally {
+      setLoading(false);
+      console.log('DEBUG: Fin de fetchPleasureBoaters. Loading:', false);
+    }
+  }, []);
+
+  // Use useFocusEffect to re-fetch pleasure boaters when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      console.log('DEBUG: useFocusEffect déclenché.');
+      fetchPleasureBoaters();
+      // No cleanup needed for this effect, as it's just fetching data
+    }, [fetchPleasureBoaters]) // Dependency on the memoized fetch function
+  );
+
+  // Apply filters and sorting
+  useEffect(() => {
+    console.log('DEBUG: Exécution du useEffect de filtrage/tri');
+    let result = [...pleasureBoaters];
+
+    // Apply search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(boater =>
+        `${boater.firstName} ${boater.lastName}`.toLowerCase().includes(query) ||
+        boater.email.toLowerCase().includes(query) ||
+        boater.phone.toLowerCase().includes(query) ||
+        boater.ports.some(port => port.name.toLowerCase().includes(query)) ||
+        boater.ports.some(port => (port.boatManagerName || '').toLowerCase().includes(query)) ||
+        boater.boats.some(boat => boat.name.toLowerCase().includes(query))
+      );
+    }
+
+    // Apply port filter
+    if (selectedPort) {
+      result = result.filter(boater => boater.ports.some(port => port.name === selectedPort));
+    }
+
+    // Apply sorting
+    result.sort((a, b) => {
+      let valueA: any, valueB: any;
+
+      switch (sortKey) {
+        case 'name':
+          // MODIFICATION ICI : Tri par nom de famille
+          valueA = a.lastName.toLowerCase();
+          valueB = b.lastName.toLowerCase();
+          break;
+        case 'port':
+          valueA = a.ports[0]?.name.toLowerCase() || '';
+          valueB = b.ports[0]?.name.toLowerCase() || '';
+          break;
+        default:
+          // Fallback to sorting by full name if sortKey is not 'name' or 'port'
+          valueA = `${a.firstName} ${a.lastName}`.toLowerCase();
+          valueB = `${b.firstName} ${b.lastName}`.toLowerCase();
+      }
+
+      if (valueA < valueB) return sortAsc ? -1 : 1;
+      if (valueA > valueB) return sortAsc ? 1 : -1;
+      return 0;
+    });
+
+    setFilteredBoaters(result);
+    console.log('DEBUG: filteredBoaters mis à jour. Nombre:', result.length);
+  }, [pleasureBoaters, searchQuery, selectedPort, sortKey, sortAsc]);
+
+  const handleSort = (key: SortKey) => {
+    console.log('DEBUG: handleSort appelé avec la clé:', key);
+    if (sortKey === key) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  };
+
+  const handleViewDetails = (boater: PleasureBoater) => {
+    console.log('DEBUG: handleViewDetails appelé pour le plaisancier:', boater.id);
+    setSelectedBoater(boater);
+    setShowDetailsModal(true);
+  };
+
+  const handleAddBoater = () => {
+    console.log('DEBUG: handleAddBoater appelé.');
+    router.push('/corporate/pleasure-boaters/new');
+  };
+
+  const handleEditBoater = () => {
+    console.log('DEBUG: handleEditBoater appelé pour le plaisancier:', selectedBoater?.id);
+    if (selectedBoater) {
+      setShowDetailsModal(false);
+      router.push(`/corporate/pleasure-boaters/${selectedBoater.id}/edit`);
+    }
+  };
+
+  const handleDeleteBoater = () => {
+    console.log('DEBUG: handleDeleteBoater appelé.');
+    setShowDeleteConfirmModal(true);
+  };
+
+  const confirmDeleteBoater = async () => {
+    console.log('DEBUG: confirmDeleteBoater appelé pour le plaisancier:', selectedBoater?.id);
+    if (!selectedBoater) return;
+
+    setLoading(true);
+    try {
+      // 1. Get all related IDs for cascade deletion
+      const { data: boaterBoats, error: boatsError } = await supabase
+        .from('boat')
+        .select('id')
+        .eq('id_user', selectedBoater.id);
+      if (boatsError) throw boatsError;
+      const boatIds = boaterBoats.map(b => b.id);
+      console.log('DEBUG: Bateaux du plaisancier à supprimer:', boatIds);
+
+      const { data: boaterServiceRequests, error: srError } = await supabase
+        .from('service_request')
+        .select('id')
+        .eq('id_client', selectedBoater.id);
+      if (srError) throw srError;
+      const serviceRequestIds = boaterServiceRequests.map(sr => sr.id);
+      console.log('DEBUG: Demandes de service du plaisancier à supprimer:', serviceRequestIds);
+
+      const { data: boaterQuotes, error: quotesError } = await supabase
+        .from('quotes')
+        .select('id')
+        .eq('id_client', selectedBoater.id);
+      if (quotesError) throw quotesError;
+      const quoteIds = boaterQuotes.map(q => q.id);
+      console.log('DEBUG: Devis du plaisancier à supprimer:', quoteIds);
+
+      // 2. Delete from leaf tables upwards
+      // Delete quote_items and quote_documents related to quotes
+      if (quoteIds.length > 0) {
+        console.log('DEBUG: Suppression des quote_items pour les devis:', quoteIds);
+        await supabase.from('quote_items').delete().in('quote_id', quoteIds);
+        console.log('DEBUG: Suppression des quote_documents pour les devis:', quoteIds);
+        await supabase.from('quote_documents').delete().in('quote_id', quoteIds);
+      }
+
+      // Delete reviews related to service_requests
+      if (serviceRequestIds.length > 0) {
+        console.log('DEBUG: Suppression des reviews pour les demandes de service:', serviceRequestIds);
+        await supabase.from('reviews').delete().in('service_request_id', serviceRequestIds);
+      }
+
+      // Delete boat_inventory, user_documents, boat_technical_records, boat_usage_types related to boats
+      if (boatIds.length > 0) {
+        console.log('DEBUG: Suppression des boat_inventory pour les bateaux:', boatIds);
+        await supabase.from('boat_inventory').delete().in('boat_id', boatIds);
+        console.log('DEBUG: Suppression des user_documents pour les bateaux:', boatIds);
+        await supabase.from('user_documents').delete().in('id_boat', boatIds);
+        console.log('DEBUG: Suppression des boat_technical_records pour les bateaux:', boatIds);
+        await supabase.from('boat_technical_records').delete().in('boat_id', boatIds);
+        console.log('DEBUG: Suppression des boat_usage_types pour les bateaux:', boatIds);
+        await supabase.from('boat_usage_types').delete().in('boat_id', boatIds);
+      }
+
+      // 3. Delete main records
+      console.log('DEBUG: Suppression des devis principaux:', quoteIds);
+      await supabase.from('quotes').delete().in('id', quoteIds);
+      console.log('DEBUG: Suppression des demandes de service principales:', serviceRequestIds);
+      await supabase.from('service_request').delete().in('id', serviceRequestIds);
+      console.log('DEBUG: Suppression des bateaux principaux:', boatIds);
+      await supabase.from('boat').delete().in('id', boatIds);
+      console.log('DEBUG: Suppression des user_ports pour le plaisancier:', selectedBoater.id);
+      await supabase.from('user_ports').delete().eq('user_id', selectedBoater.id);
+
+      // 4. Finally, delete the user
+      console.log('DEBUG: Suppression de l\'utilisateur plaisancier:', selectedBoater.id);
+      const { error: deleteUserError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', selectedBoater.id);
+
+      if (deleteUserError) {
+        throw deleteUserError;
+      }
+
+      Alert.alert('Succès', 'Le plaisancier a été supprimé avec succès.');
+      setShowDeleteConfirmModal(false);
+      setShowDetailsModal(false);
+      fetchPleasureBoaters(); // Re-fetch the list to update UI
+    } catch (e: any) {
+      console.error('DEBUG: Erreur lors de la suppression du plaisancier:', e.message);
+      Alert.alert('Erreur', `Échec de la suppression du plaisancier: ${e.message}`);
+    } finally {
+      setLoading(false);
+      console.log('DEBUG: Fin de confirmDeleteBoater. Loading:', false);
+    }
+  };
+
+  if (authLoading) {
+    console.log('DEBUG: Auth loading, affichage de l\'indicateur.');
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement de l'authentification...</Text>
+      </View>
+    );
+  }
+
+  if (!user) {
+    console.log('DEBUG: Utilisateur non authentifié, affichage du message d\'erreur.');
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>Accès non autorisé. Veuillez vous connecter.</Text>
+      </View>
+    );
+  }
+
+  if (loading) {
+    console.log('DEBUG: Données des plaisanciers en cours de chargement.');
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des plaisanciers...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    console.log('DEBUG: Erreur lors du chargement des plaisanciers:', error);
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
           <ArrowLeft size={24} color="#1a1a1a" />
         </TouchableOpacity>
         <Text style={styles.title}>Plaisanciers</Text>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.addButton}
           onPress={handleAddBoater}
         >
@@ -454,17 +632,52 @@ export default function PleasureBoatersScreen() {
       </View>
 
       <View style={styles.searchContainer}>
-        <View style={styles.searchInputContainer}>
+        <TouchableOpacity // Wrap Search icon and TextInput in TouchableOpacity
+          style={styles.searchInputContainer}
+          onPress={() => searchInputRef.current?.focus()} // Focus TextInput on press
+        >
           <Search size={20} color="#666" />
           <TextInput
+            ref={searchInputRef} // Assign ref to TextInput
             style={styles.searchInput}
             placeholder="Rechercher un plaisancier..."
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
-        </View>
-        
-        <TouchableOpacity 
+        </TouchableOpacity>
+
+        {showFilters && (
+          <View style={styles.filtersContainer}>
+            <Text style={styles.filterTitle}>Port d'attache</Text>
+            <View style={styles.filterOptions}>
+              <TouchableOpacity
+                style={[
+                  styles.filterOption,
+                  selectedPort === null && styles.filterOptionSelected
+                ]}
+                onPress={() => setSelectedPort(null)}
+              >
+                <Text style={styles.filterOptionText}>Tous</Text>
+              </TouchableOpacity>
+
+              {uniquePorts.map((port) => (
+                <TouchableOpacity
+                  key={port}
+                  style={[
+                    styles.filterOption,
+                    selectedPort === port && styles.filterOptionSelected
+                  ]}
+                  onPress={() => setSelectedPort(port)}
+                >
+                  <MapPin size={16} color="#0066CC" />
+                  <Text style={styles.filterOptionText}>{port}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <TouchableOpacity
           style={[styles.filterButton, showFilters && styles.filterButtonActive]}
           onPress={() => setShowFilters(!showFilters)}
         >
@@ -472,39 +685,8 @@ export default function PleasureBoatersScreen() {
         </TouchableOpacity>
       </View>
 
-      {showFilters && (
-        <View style={styles.filtersContainer}>
-          <Text style={styles.filterTitle}>Port d'attache</Text>
-          <View style={styles.filterOptions}>
-            <TouchableOpacity 
-              style={[
-                styles.filterOption,
-                selectedPort === null && styles.filterOptionSelected
-              ]}
-              onPress={() => setSelectedPort(null)}
-            >
-              <Text style={styles.filterOptionText}>Tous</Text>
-            </TouchableOpacity>
-            
-            {uniquePorts.map((port) => (
-              <TouchableOpacity 
-                key={port}
-                style={[
-                  styles.filterOption,
-                  selectedPort === port && styles.filterOptionSelected
-                ]}
-                onPress={() => setSelectedPort(port)}
-              >
-                <MapPin size={16} color="#0066CC" />
-                <Text style={styles.filterOptionText}>{port}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      )}
-
       <View style={styles.sortContainer}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.sortButton, sortKey === 'name' && styles.sortButtonActive]}
           onPress={() => handleSort('name')}
         >
@@ -512,8 +694,8 @@ export default function PleasureBoatersScreen() {
             Nom {sortKey === 'name' && (sortAsc ? '↑' : '↓')}
           </Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={[styles.sortButton, sortKey === 'port' && styles.sortButtonActive]}
           onPress={() => handleSort('port')}
         >
@@ -526,8 +708,8 @@ export default function PleasureBoatersScreen() {
       <ScrollView style={styles.boatersList}>
         {filteredBoaters.length > 0 ? (
           filteredBoaters.map((boater) => (
-            <TouchableOpacity 
-              key={boater.id} 
+            <TouchableOpacity
+              key={boater.id}
               style={styles.boaterCard}
               onPress={() => handleViewDetails(boater)}
             >
@@ -553,25 +735,44 @@ export default function PleasureBoatersScreen() {
         )}
       </ScrollView>
 
-      <BoaterDetailsModal />
-      <DeleteConfirmModal />
+      <BoaterDetailsModal
+        visible={showDetailsModal}
+        onClose={() => {
+          console.log('DEBUG: Fermeture de BoaterDetailsModal.');
+          setShowDetailsModal(false);
+        }}
+        selectedBoater={selectedBoater}
+        handleEditBoater={handleEditBoater}
+      />
+      <DeleteConfirmModal
+        visible={showDeleteConfirmModal}
+        onClose={() => {
+          console.log('DEBUG: Fermeture de DeleteConfirmModal.');
+          setShowDeleteConfirmModal(false);
+        }}
+        confirmDeleteBoater={confirmDeleteBoater}
+      />
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    justifyContent: 'space-between',
   },
   backButton: {
     padding: 8,
@@ -580,6 +781,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flex: 1,
+    textAlign: 'center',
   },
   addButton: {
     width: 40,
@@ -603,20 +806,26 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  searchContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 12,
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  searchInputContainer: {
-    flex: 1,
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+  },
+  searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 16,
     gap: 12,
     ...Platform.select({
       ios: {
@@ -633,8 +842,20 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  searchInputContainer: { // New style for the TouchableOpacity wrapper
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc', // Changed to match the input background
+    borderRadius: 12,
+    borderWidth: 1, // Added border to match input style
+    borderColor: '#e2e8f0', // Added border color
+    paddingHorizontal: 12, // Adjusted padding
+    height: 48, // Fixed height
+  },
   searchInput: {
     flex: 1,
+    marginLeft: 8, // Adjusted margin
     fontSize: 16,
     color: '#1a1a1a',
     ...Platform.select({
@@ -642,31 +863,6 @@ const styles = StyleSheet.create({
         outlineStyle: 'none',
       },
     }),
-  },
-  filterButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  filterButtonActive: {
-    backgroundColor: '#f0f7ff',
   },
   filtersContainer: {
     backgroundColor: 'white',
@@ -781,38 +977,15 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   emptyState: {
+    padding: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 40,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    marginTop: 20,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  emptyStateTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginTop: 16,
-    marginBottom: 8,
   },
   emptyStateText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666',
     textAlign: 'center',
+    lineHeight: 24,
   },
   modalOverlay: {
     flex: 1,
@@ -1079,7 +1252,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
+        boxBoxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
       },
     }),
   },
@@ -1113,3 +1286,4 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
+

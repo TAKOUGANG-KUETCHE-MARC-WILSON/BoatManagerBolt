@@ -1,122 +1,54 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image } from 'react-native';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'; // Import useRef
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Search, Filter, Building, ChevronRight, X, Phone, Mail, MapPin, Star, Award, Plus, Briefcase, Ship, CreditCard as Edit, Trash } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native';
 
-type SortKey = 'name' | 'rating' | 'port';
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 interface NauticalCompany {
   id: string;
-  name: string;
-  email: string;
-  phone: string;
-  logo: string;
-  address: string;
-  ports: string[];
-  rating: number;
-  reviewCount: number;
-  services: string[];
-  skills: string[];
-  boatTypes: string[];
-  certifications: string[];
-  createdAt: string;
-  lastLogin?: string;
+  name: string; // company_name
+  email: string; // e_mail
+  phone: string; // phone
+  logo: string; // avatar (signed URL)
+  address: string; // address
+  ports: string[]; // user_ports -> ports.name
+  rating?: number; // rating
+  reviewCount?: number; // review_count
+  services: string[]; // user_categorie_service -> categorie_service.description1 (these are the skills/services they offer)
+  skills: string[]; // Kept for consistency with mock, but will be empty or derived
+  boatTypes: string[]; // Kept for consistency with mock, but will be empty or derived
+  certifications: string[]; // Kept for consistency with mock, but will be empty or derived
+  createdAt: string; // created_at
+  lastLogin?: string; // last_login
 }
 
-// Mock data for nautical companies
-const mockNauticalCompanies: NauticalCompany[] = [
-  {
-    id: 'nc1',
-    name: 'Nautisme Pro',
-    email: 'contact@nautismepro.com',
-    phone: '+33 4 91 12 34 56',
-    logo: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    address: '123 Avenue du Port, 13000 Marseille',
-    ports: ['Port de Marseille', 'Port de Cassis'],
-    rating: 4.9,
-    reviewCount: 42,
-    services: ['Maintenance', 'Réparation', 'Installation'],
-    skills: ['Mécanique', 'Électronique', 'Voilerie'],
-    boatTypes: ['Voilier', 'Yacht', 'Catamaran'],
-    certifications: ['Expert Maritime', 'Certification Technique Nautique'],
-    createdAt: '2023-01-10',
-    lastLogin: '2024-02-20'
-  },
-  {
-    id: 'nc2',
-    name: 'Marine Services',
-    email: 'contact@marineservices.com',
-    phone: '+33 4 93 23 45 67',
-    logo: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop',
-    address: '45 Quai des Yachts, 06300 Nice',
-    ports: ['Port de Nice', 'Port de Cannes'],
-    rating: 4.7,
-    reviewCount: 28,
-    services: ['Maintenance', 'Contrôle', 'Amélioration'],
-    skills: ['Mécanique', 'Électronique', 'Plomberie'],
-    boatTypes: ['Voilier', 'Yacht', 'Motoryacht'],
-    certifications: ['Expert Maritime'],
-    createdAt: '2023-02-15',
-    lastLogin: '2024-02-19'
-  },
-  {
-    id: 'nc3',
-    name: 'Azur Nautique',
-    email: 'contact@azurnautique.com',
-    phone: '+33 4 94 34 56 78',
-    logo: 'https://images.unsplash.com/photo-1565884280295-98eb83e41c65?q=80&w=2148&auto=format&fit=crop',
-    address: '78 Boulevard du Littoral, 83990 Saint-Tropez',
-    ports: ['Port de Saint-Tropez'],
-    rating: 4.5,
-    reviewCount: 19,
-    services: ['Réparation', 'Installation', 'Vente d\'équipements'],
-    skills: ['Mécanique', 'Électronique', 'Menuiserie'],
-    boatTypes: ['Voilier', 'Yacht', 'Catamaran'],
-    certifications: ['Certification Technique Nautique'],
-    createdAt: '2023-03-20',
-    lastLogin: '2024-02-18'
-  },
-  {
-    id: 'nc4',
-    name: 'Méditerranée Yachting',
-    email: 'contact@mediterraneeyachting.com',
-    phone: '+33 4 95 45 67 89',
-    logo: 'https://images.unsplash.com/photo-1544919982-b61976f0ba43?q=80&w=2066&auto=format&fit=crop',
-    address: '12 Rue des Marins, 20000 Ajaccio',
-    ports: ['Port d\'Ajaccio'],
-    rating: 4.6,
-    reviewCount: 15,
-    services: ['Maintenance', 'Réparation', 'Hivernage'],
-    skills: ['Mécanique', 'Électronique', 'Peinture'],
-    boatTypes: ['Voilier', 'Yacht'],
-    certifications: ['Expert Maritime'],
-    createdAt: '2023-04-05',
-    lastLogin: '2024-02-17'
-  },
-  {
-    id: 'nc5',
-    name: 'Atlantique Nautisme',
-    email: 'contact@atlantiquenautisme.com',
-    phone: '+33 2 40 56 78 90',
-    logo: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-    address: '34 Quai de la Loire, 44000 Nantes',
-    ports: ['Port de Nantes', 'Port de La Baule'],
-    rating: 4.8,
-    reviewCount: 32,
-    services: ['Maintenance', 'Réparation', 'Vente d\'équipements'],
-    skills: ['Mécanique', 'Électronique', 'Voilerie'],
-    boatTypes: ['Voilier', 'Yacht', 'Catamaran', 'Motoryacht'],
-    certifications: ['Expert Maritime', 'Certification Technique Nautique'],
-    createdAt: '2023-05-12',
-    lastLogin: '2024-02-16'
-  }
-];
+type SortKey = 'name' | 'rating' | 'port';
 
 export default function NauticalCompaniesScreen() {
   const { user } = useAuth();
-  const [companies, setCompanies] = useState<NauticalCompany[]>(mockNauticalCompanies);
-  const [filteredCompanies, setFilteredCompanies] = useState<NauticalCompany[]>(mockNauticalCompanies);
+  const [companies, setCompanies] = useState<NauticalCompany[]>([]);
+  const [filteredCompanies, setFilteredCompanies] = useState<NauticalCompany[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPort, setSelectedPort] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -125,9 +57,88 @@ export default function NauticalCompaniesScreen() {
   const [selectedCompany, setSelectedCompany] = useState<NauticalCompany | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const searchInputRef = useRef<TextInput>(null); // Create a ref for the TextInput
 
   // Get unique ports for filtering
-  const uniquePorts = [...new Set(companies.flatMap(company => company.ports))];
+  const uniquePorts = useMemo(() => {
+    const ports = new Set<string>();
+    companies.forEach(company => {
+      company.ports.forEach(port => ports.add(port));
+    });
+    return Array.from(ports);
+  }, [companies]);
+
+  const fetchNauticalCompanies = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          company_name,
+          e_mail,
+          phone,
+          avatar,
+          address,
+          rating,
+          review_count,
+          created_at,
+          last_login,
+          user_ports(ports(name)),
+          user_categorie_service(categorie_service(description1))
+        `)
+        .eq('profile', 'nautical_company');
+
+      if (fetchError) {
+        console.error('Error fetching nautical companies:', fetchError);
+        setError('Échec du chargement des entreprises du nautisme.');
+        return;
+      }
+
+      const companiesWithDetails: NauticalCompany[] = await Promise.all(data.map(async (nc: any) => {
+        const signedLogoUrl = await getSignedAvatarUrl(nc.avatar);
+        const ports = nc.user_ports.map((up: any) => up.ports?.name).filter(Boolean);
+        const services = nc.user_categorie_service.map((ucs: any) => ucs.categorie_service?.description1).filter(Boolean);
+
+        return {
+          id: nc.id,
+          name: nc.company_name,
+          email: nc.e_mail,
+          phone: nc.phone,
+          logo: signedLogoUrl || DEFAULT_AVATAR,
+          address: nc.address,
+          ports: ports,
+          rating: nc.rating || 0,
+          reviewCount: nc.review_count || 0,
+          services: services,
+          skills: [], // Not directly from DB, keep empty or derive if possible
+          boatTypes: [], // Not directly from DB, keep empty or derive if possible
+          certifications: [], // Not directly from DB, keep empty or derive if possible
+          createdAt: nc.created_at,
+          lastLogin: nc.last_login,
+        };
+      }));
+
+      setCompanies(companiesWithDetails);
+    } catch (e: any) {
+      console.error('Unexpected error fetching nautical companies:', e);
+      setError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Use useFocusEffect to re-fetch companies when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchNauticalCompanies();
+      // No cleanup needed for this effect, as it's just fetching data
+    }, [fetchNauticalCompanies]) // Dependency on the memoized fetch function
+  );
 
   // Apply filters and sorting
   useEffect(() => {
@@ -137,12 +148,10 @@ export default function NauticalCompaniesScreen() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = result.filter(company => 
-        company.name.toLowerCase().includes(query) ||
-        company.email.toLowerCase().includes(query) ||
-        company.ports.some(port => port.toLowerCase().includes(query)) ||
-        company.services.some(service => service.toLowerCase().includes(query)) ||
-        company.skills.some(skill => skill.toLowerCase().includes(query)) ||
-        company.boatTypes.some(type => type.toLowerCase().includes(query))
+        company.name?.toLowerCase().includes(query) || // Correction ici
+        company.email?.toLowerCase().includes(query) || // Correction ici
+        company.ports.some(port => port?.toLowerCase().includes(query)) || // Correction ici
+        company.services.some(service => service?.toLowerCase().includes(query)) // Correction ici
       );
     }
     
@@ -157,8 +166,8 @@ export default function NauticalCompaniesScreen() {
       
       switch (sortKey) {
         case 'name':
-          valueA = a.name.toLowerCase();
-          valueB = b.name.toLowerCase();
+          valueA = a.name?.toLowerCase() || ''; // Correction ici
+          valueB = b.name?.toLowerCase() || ''; // Correction ici
           break;
         case 'rating':
           valueA = a.rating;
@@ -169,8 +178,8 @@ export default function NauticalCompaniesScreen() {
           valueB = b.ports[0]?.toLowerCase() || '';
           break;
         default:
-          valueA = a.name.toLowerCase();
-          valueB = b.name.toLowerCase();
+          valueA = a.name?.toLowerCase() || ''; // Correction ici
+          valueB = b.name?.toLowerCase() || ''; // Correction ici
       }
       
       if (typeof valueA === 'string' && typeof valueB === 'string') {
@@ -214,13 +223,50 @@ export default function NauticalCompaniesScreen() {
     setShowDeleteConfirmModal(true);
   };
 
-  const confirmDeleteCompany = () => {
-    if (selectedCompany) {
-      // Filtrer l'entreprise sélectionnée de la liste
-      const updatedCompanies = companies.filter(company => company.id !== selectedCompany.id);
-      setCompanies(updatedCompanies);
+  const confirmDeleteCompany = async () => {
+    if (!selectedCompany) return;
+
+    setLoading(true);
+    try {
+      // 1. Delete user_ports assignments
+      const { error: deleteUserPortsError } = await supabase
+        .from('user_ports')
+        .delete()
+        .eq('user_id', selectedCompany.id);
+
+      if (deleteUserPortsError) {
+        throw deleteUserPortsError;
+      }
+
+      // 2. Delete user_categorie_service assignments
+      const { error: deleteUserCategoriesError } = await supabase
+        .from('user_categorie_service')
+        .delete()
+        .eq('user_id', selectedCompany.id);
+
+      if (deleteUserCategoriesError) {
+        throw deleteUserCategoriesError;
+      }
+
+      // 3. Delete the user from the 'users' table
+      const { error: deleteUserError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', selectedCompany.id);
+
+      if (deleteUserError) {
+        throw deleteUserError;
+      }
+
+      Alert.alert('Succès', 'L\'entreprise a été supprimée avec succès.');
       setShowDeleteConfirmModal(false);
       setShowDetailsModal(false);
+      fetchNauticalCompanies(); // Re-fetch the list to update UI
+    } catch (e: any) {
+      console.error('Error deleting nautical company:', e.message);
+      Alert.alert('Erreur', `Échec de la suppression de l'entreprise: ${e.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -347,6 +393,8 @@ export default function NauticalCompaniesScreen() {
                 </View>
               </View>
               
+              {/* Removed Certifications Section */}
+              {/*
               <View style={styles.detailsSection}>
                 <Text style={styles.detailsSectionTitle}>Certifications</Text>
                 
@@ -359,6 +407,7 @@ export default function NauticalCompaniesScreen() {
                   ))}
                 </View>
               </View>
+              */}
               
               <View style={styles.detailsSection}>
                 <Text style={styles.detailsSectionTitle}>Activité</Text>
@@ -375,14 +424,7 @@ export default function NauticalCompaniesScreen() {
           
           <View style={styles.modalFooter}>
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={handleDeleteCompany}
-              >
-                <Trash size={20} color="white" />
-                <Text style={styles.deleteButtonText}>Supprimer</Text>
-              </TouchableOpacity>
-              
+              {/* Only one "Modifier" button */}
               <TouchableOpacity 
                 style={styles.editButton}
                 onPress={handleEditCompany}
@@ -432,6 +474,23 @@ export default function NauticalCompaniesScreen() {
     </Modal>
   );
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des entreprises du nautisme...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -451,15 +510,19 @@ export default function NauticalCompaniesScreen() {
       </View>
 
       <View style={styles.searchContainer}>
-        <View style={styles.searchInputContainer}>
+        <TouchableOpacity // Wrap Search icon and TextInput in TouchableOpacity
+          style={styles.searchInputContainer}
+          onPress={() => searchInputRef.current?.focus()} // Focus TextInput on press
+        >
           <Search size={20} color="#666" />
           <TextInput
+            ref={searchInputRef} // Assign ref to TextInput
             style={styles.searchInput}
             placeholder="Rechercher une entreprise..."
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
-        </View>
+        </TouchableOpacity>
         
         <TouchableOpacity 
           style={[styles.filterButton, showFilters && styles.filterButtonActive]}
@@ -566,14 +629,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    justifyContent: 'space-between',
   },
   backButton: {
     padding: 8,
@@ -582,6 +649,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flex: 1,
+    textAlign: 'center',
   },
   addButton: {
     width: 40,
@@ -605,20 +674,26 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  searchContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 12,
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  searchInputContainer: {
-    flex: 1,
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+  },
+  searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 16,
     gap: 12,
     ...Platform.select({
       ios: {
@@ -635,8 +710,20 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  searchInputContainer: { // New style for the TouchableOpacity wrapper
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc', // Changed to match the input background
+    borderRadius: 12,
+    borderWidth: 1, // Added border to match input style
+    borderColor: '#e2e8f0', // Added border color
+    paddingHorizontal: 12, // Adjusted padding
+    height: 48, // Fixed height
+  },
   searchInput: {
     flex: 1,
+    marginLeft: 8, // Adjusted margin
     fontSize: 16,
     color: '#1a1a1a',
     ...Platform.select({
@@ -644,31 +731,6 @@ const styles = StyleSheet.create({
         outlineStyle: 'none',
       },
     }),
-  },
-  filterButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  filterButtonActive: {
-    backgroundColor: '#f0f7ff',
   },
   filtersContainer: {
     backgroundColor: 'white',
@@ -804,15 +866,8 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  emptyStateTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginTop: 16,
-    marginBottom: 8,
-  },
   emptyStateText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666',
     textAlign: 'center',
   },
@@ -967,7 +1022,7 @@ const styles = StyleSheet.create({
   },
   portItem: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
     gap: 12,
     backgroundColor: '#f8fafc',
@@ -976,7 +1031,9 @@ const styles = StyleSheet.create({
   },
   portName: {
     fontSize: 16,
+    fontWeight: '500',
     color: '#1a1a1a',
+    marginBottom: 8,
   },
   servicesContainer: {
     flexDirection: 'row',
@@ -1127,7 +1184,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
+        boxBoxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
       },
     }),
   },

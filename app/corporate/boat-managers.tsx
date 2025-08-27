@@ -1,10 +1,28 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image } from 'react-native';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Search, Filter, User, ChevronRight, X, Phone, Mail, MapPin, Star, Plus, Users, CreditCard as Edit, Trash } from 'lucide-react-native';
+import { ArrowLeft, Search, Filter, User, ChevronRight, X, Phone, Mail, MapPin, Plus, Edit, Trash, Star } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
 
-type SortKey = 'name' | 'rating' | 'port';
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 interface BoatManager {
   id: string;
@@ -13,104 +31,21 @@ interface BoatManager {
   email: string;
   phone: string;
   avatar: string;
-  ports: string[];
-  rating: number;
-  reviewCount: number;
-  skills: string[];
-  boatTypes: string[];
-  clientCount: number;
+  ports: string[]; // Noms des ports
+  rating?: number;
+  reviewCount?: number;
+  skills: string[]; // Noms des compétences
+  boatTypes: string[]; // Noms des types de bateaux
   createdAt: string;
   lastLogin?: string;
 }
 
-// Mock data for boat managers
-const mockBoatManagers: BoatManager[] = [
-  {
-    id: 'bm1',
-    firstName: 'Marie',
-    lastName: 'Martin',
-    email: 'marie.martin@ybm.com',
-    phone: '+33 6 12 34 56 78',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    ports: ['Port de Marseille'],
-    rating: 4.8,
-    reviewCount: 36,
-    skills: ['Entretien', 'Amélioration', 'Réparation', 'Contrôle'],
-    boatTypes: ['Voilier', 'Yacht', 'Catamaran'],
-    clientCount: 12,
-    createdAt: '2023-01-15',
-    lastLogin: '2024-02-20'
-  },
-  {
-    id: 'bm2',
-    firstName: 'Pierre',
-    lastName: 'Dubois',
-    email: 'pierre.dubois@ybm.com',
-    phone: '+33 6 23 45 67 89',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    ports: ['Port de Nice'],
-    rating: 4.6,
-    reviewCount: 24,
-    skills: ['Entretien', 'Gestion des accès', 'Sécurité'],
-    boatTypes: ['Voilier', 'Yacht'],
-    clientCount: 8,
-    createdAt: '2023-03-10',
-    lastLogin: '2024-02-19'
-  },
-  {
-    id: 'bm3',
-    firstName: 'Sophie',
-    lastName: 'Laurent',
-    email: 'sophie.laurent@ybm.com',
-    phone: '+33 6 34 56 78 90',
-    avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=2070&auto=format&fit=crop',
-    ports: ['Port de Saint-Tropez'],
-    rating: 4.9,
-    reviewCount: 31,
-    skills: ['Entretien', 'Amélioration', 'Réparation', 'Représentation', 'Achat/Vente'],
-    boatTypes: ['Voilier', 'Yacht', 'Catamaran', 'Motoryacht'],
-    clientCount: 15,
-    createdAt: '2022-11-05',
-    lastLogin: '2024-02-18'
-  },
-  {
-    id: 'bm4',
-    firstName: 'Lucas',
-    lastName: 'Bernard',
-    email: 'lucas.bernard@ybm.com',
-    phone: '+33 6 45 67 89 01',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=2070&auto=format&fit=crop',
-    ports: ['Port de Cannes'],
-    rating: 4.7,
-    reviewCount: 22,
-    skills: ['Entretien', 'Contrôle', 'Gestion des accès'],
-    boatTypes: ['Voilier', 'Yacht'],
-    clientCount: 10,
-    createdAt: '2023-05-20',
-    lastLogin: '2024-02-17'
-  },
-  {
-    id: 'bm5',
-    firstName: 'Émilie',
-    lastName: 'Rousseau',
-    email: 'emilie.rousseau@ybm.com',
-    phone: '+33 6 56 78 90 12',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    ports: ['Port de Marseille', 'Port de Cassis'],
-    rating: 4.5,
-    reviewCount: 18,
-    skills: ['Entretien', 'Sécurité', 'Achat/Vente'],
-    boatTypes: ['Voilier', 'Catamaran'],
-    clientCount: 7,
-    createdAt: '2023-08-15',
-    lastLogin: '2024-02-16'
-  }
-];
+type SortKey = 'name' | 'rating' | 'port';
 
 export default function BoatManagersScreen() {
   const { user } = useAuth();
-  const [boatManagers, setBoatManagers] = useState<BoatManager[]>(mockBoatManagers);
-  const [filteredManagers, setFilteredManagers] = useState<BoatManager[]>(mockBoatManagers);
+  const [boatManagers, setBoatManagers] = useState<BoatManager[]>([]);
+  const [filteredManagers, setFilteredManagers] = useState<BoatManager[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPort, setSelectedPort] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -119,9 +54,82 @@ export default function BoatManagersScreen() {
   const [selectedManager, setSelectedManager] = useState<BoatManager | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const searchInputRef = useRef<TextInput>(null); // Create a ref for the TextInput
 
   // Get unique ports for filtering
-  const uniquePorts = [...new Set(boatManagers.flatMap(manager => manager.ports))];
+  const uniquePorts = useMemo(() => {
+    const ports = new Set<string>();
+    boatManagers.forEach(manager => {
+      manager.ports.forEach(port => ports.add(port));
+    });
+    return Array.from(ports);
+  }, [boatManagers]);
+
+  const fetchBoatManagers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          first_name,
+          last_name,
+          e_mail,
+          phone,
+          avatar,
+          rating,
+          review_count,
+          created_at,
+          last_login,
+          user_ports(ports(name)),
+          user_categorie_service(categorie_service(description1))
+        `)
+        .eq('profile', 'boat_manager');
+
+      if (fetchError) {
+        console.error('Error fetching boat managers:', fetchError);
+        setError('Échec du chargement des Boat Managers.');
+        return;
+      }
+
+      const managersWithDetails: BoatManager[] = await Promise.all(data.map(async (bm: any) => {
+        const signedAvatarUrl = await getSignedAvatarUrl(bm.avatar);
+        const ports = bm.user_ports.map((up: any) => up.ports?.name).filter(Boolean);
+        const skills = bm.user_categorie_service.map((ucs: any) => ucs.categorie_service?.description1).filter(Boolean);
+
+        return {
+          id: bm.id,
+          firstName: bm.first_name,
+          lastName: bm.last_name,
+          email: bm.e_mail,
+          phone: bm.phone,
+          avatar: signedAvatarUrl || DEFAULT_AVATAR,
+          ports: ports,
+          rating: bm.rating || 0,
+          reviewCount: bm.review_count || 0,
+          skills: skills,
+          boatTypes: [], // Not directly available in this query, might need another join or be hardcoded
+          createdAt: bm.created_at,
+          lastLogin: bm.last_login,
+        };
+      }));
+
+      setBoatManagers(managersWithDetails);
+    } catch (e: any) {
+      console.error('Unexpected error fetching boat managers:', e);
+      setError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBoatManagers();
+  }, [fetchBoatManagers]);
 
   // Apply filters and sorting
   useEffect(() => {
@@ -133,9 +141,9 @@ export default function BoatManagersScreen() {
       result = result.filter(manager => 
         `${manager.firstName} ${manager.lastName}`.toLowerCase().includes(query) ||
         manager.email.toLowerCase().includes(query) ||
+        manager.phone.toLowerCase().includes(query) ||
         manager.ports.some(port => port.toLowerCase().includes(query)) ||
-        manager.skills.some(skill => skill.toLowerCase().includes(query)) ||
-        manager.boatTypes.some(type => type.toLowerCase().includes(query))
+        manager.skills.some(skill => skill.toLowerCase().includes(query))
       );
     }
     
@@ -146,7 +154,7 @@ export default function BoatManagersScreen() {
     
     // Apply sorting
     result.sort((a, b) => {
-      let valueA, valueB;
+      let valueA: any, valueB: any;
       
       switch (sortKey) {
         case 'name':
@@ -183,7 +191,7 @@ export default function BoatManagersScreen() {
       setSortAsc(!sortAsc);
     } else {
       setSortKey(key);
-      setSortAsc(key === 'name'); // Default ascending for name, descending for rating
+      setSortAsc(true);
     }
   };
 
@@ -207,13 +215,31 @@ export default function BoatManagersScreen() {
     setShowDeleteConfirmModal(true);
   };
 
-  const confirmDeleteManager = () => {
-    if (selectedManager) {
-      // Filtrer le boat manager sélectionné de la liste
-      const updatedManagers = boatManagers.filter(manager => manager.id !== selectedManager.id);
-      setBoatManagers(updatedManagers);
+  const confirmDeleteManager = async () => {
+    if (!selectedManager) return;
+
+    setLoading(true);
+    try {
+      // The ON DELETE CASCADE in the database should handle related records.
+      // We only need to delete the user from the 'users' table.
+      const { error: deleteUserError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', selectedManager.id);
+
+      if (deleteUserError) {
+        throw deleteUserError;
+      }
+
+      Alert.alert('Succès', 'Le Boat Manager a été supprimé avec succès.');
       setShowDeleteConfirmModal(false);
       setShowDetailsModal(false);
+      fetchBoatManagers(); // Re-fetch the list to update UI
+    } catch (e: any) {
+      console.error('Error deleting boat manager:', e.message);
+      Alert.alert('Erreur', `Échec de la suppression du Boat Manager: ${e.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -324,11 +350,6 @@ export default function BoatManagersScreen() {
                 <Text style={styles.detailsSectionTitle}>Activité</Text>
                 
                 <View style={styles.activityItem}>
-                  <Text style={styles.activityLabel}>Nombre de clients</Text>
-                  <Text style={styles.activityValue}>{selectedManager.clientCount}</Text>
-                </View>
-                
-                <View style={styles.activityItem}>
                   <Text style={styles.activityLabel}>Dernière connexion</Text>
                   <Text style={styles.activityValue}>
                     {selectedManager.lastLogin ? formatDate(selectedManager.lastLogin) : 'Jamais'}
@@ -340,14 +361,6 @@ export default function BoatManagersScreen() {
           
           <View style={styles.modalFooter}>
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={handleDeleteManager}
-              >
-                <Trash size={20} color="white" />
-                <Text style={styles.deleteButtonText}>Supprimer</Text>
-              </TouchableOpacity>
-              
               <TouchableOpacity 
                 style={styles.editButton}
                 onPress={handleEditManager}
@@ -397,6 +410,23 @@ export default function BoatManagersScreen() {
     </Modal>
   );
 
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des Boat Managers...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -416,15 +446,19 @@ export default function BoatManagersScreen() {
       </View>
 
       <View style={styles.searchContainer}>
-        <View style={styles.searchInputContainer}>
+        <TouchableOpacity // Wrap Search icon and TextInput in TouchableOpacity
+          style={styles.searchInputContainer}
+          onPress={() => searchInputRef.current?.focus()} // Focus TextInput on press
+        >
           <Search size={20} color="#666" />
           <TextInput
+            ref={searchInputRef} // Assign ref to TextInput
             style={styles.searchInput}
             placeholder="Rechercher un Boat Manager..."
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
-        </View>
+        </TouchableOpacity>
         
         <TouchableOpacity 
           style={[styles.filterButton, showFilters && styles.filterButtonActive]}
@@ -513,7 +547,7 @@ export default function BoatManagersScreen() {
           ))
         ) : (
           <View style={styles.emptyState}>
-            <Users size={48} color="#ccc" />
+            <User size={48} color="#ccc" />
             <Text style={styles.emptyStateTitle}>Aucun Boat Manager trouvé</Text>
             <Text style={styles.emptyStateText}>
               Aucun Boat Manager ne correspond à vos critères de recherche.
@@ -533,22 +567,29 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    justifyContent: 'space-between', // Gardé pour la répartition
   },
   backButton: {
     padding: 8,
+    // Supprimé le marginRight pour laisser le flexbox gérer l'espacement
   },
   title: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flex: 1, // Ajouté pour que le titre prenne l'espace disponible
+    textAlign: 'center', // Centré le texte du titre
   },
   addButton: {
     width: 40,
@@ -572,20 +613,26 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  searchContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 12,
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  searchInputContainer: {
-    flex: 1,
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+  },
+  searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 16,
     gap: 12,
     ...Platform.select({
       ios: {
@@ -602,8 +649,20 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  searchInputContainer: { // New style for the TouchableOpacity wrapper
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc', // Changed to match the input background
+    borderRadius: 12,
+    borderWidth: 1, // Added border to match input style
+    borderColor: '#e2e8f0', // Added border color
+    paddingHorizontal: 12, // Adjusted padding
+    height: 48, // Fixed height
+  },
   searchInput: {
     flex: 1,
+    marginLeft: 8, // Adjusted margin
     fontSize: 16,
     color: '#1a1a1a',
     ...Platform.select({
@@ -611,31 +670,6 @@ const styles = StyleSheet.create({
         outlineStyle: 'none',
       },
     }),
-  },
-  filterButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  filterButtonActive: {
-    backgroundColor: '#f0f7ff',
   },
   filtersContainer: {
     backgroundColor: 'white',
@@ -771,15 +805,8 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  emptyStateTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginTop: 16,
-    marginBottom: 8,
-  },
   emptyStateText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666',
     textAlign: 'center',
   },
@@ -888,16 +915,6 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     marginBottom: 4,
   },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 4,
-  },
-  ratingText: {
-    fontSize: 14,
-    color: '#666',
-  },
   userProfileDate: {
     fontSize: 14,
     color: '#666',
@@ -934,7 +951,7 @@ const styles = StyleSheet.create({
   },
   portItem: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
     gap: 12,
     backgroundColor: '#f8fafc',
@@ -943,7 +960,9 @@ const styles = StyleSheet.create({
   },
   portName: {
     fontSize: 16,
+    fontWeight: '500',
     color: '#1a1a1a',
+    marginBottom: 8,
   },
   skillsContainer: {
     flexDirection: 'row',
@@ -965,8 +984,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    marginBottom: 16,
   },
   boatTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: '#f0f7ff',
     paddingVertical: 4,
     paddingHorizontal: 8,
@@ -1053,7 +1076,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
+        boxBoxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
       },
     }),
   },

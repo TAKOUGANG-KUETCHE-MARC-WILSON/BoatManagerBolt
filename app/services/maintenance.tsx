@@ -287,10 +287,7 @@ export default function MaintenanceScreen() {
       if (error) {
         console.error('Error inserting service request:', error);
         Alert.alert('Erreur', `Échec de l'envoi de la demande: ${error.message}`);
-      } else {
-        Alert.alert('Succès', 'Votre demande a été envoyée avec succès !');
-        router.back(); // Revenir à la page précédente
-      }
+      } 
     } catch (e) {
       console.error('Unexpected error during submission:', e);
       Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'envoi de la demande.');

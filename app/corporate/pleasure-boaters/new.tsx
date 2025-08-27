@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Alert, Modal, Switch } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Alert, Modal, Switch, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, User, Mail, Phone, MapPin, Check, X, Plus, Key, Send } from 'lucide-react-native';
+import { ArrowLeft, User, Mail, Phone, MapPin, Check, X, Plus, Key, Send, Lock } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import supabase
+import bcrypt from 'bcryptjs'; // Import bcryptjs
 
 interface BoatManager {
   id: string;
@@ -12,7 +14,6 @@ interface BoatManager {
 interface Port {
   id: string;
   name: string;
-  boatManagerId: string;
 }
 
 interface PortAssignment {
@@ -22,21 +23,6 @@ interface PortAssignment {
   boatManagerName: string;
 }
 
-// Mock data
-const mockPorts: Port[] = [
-  { id: 'p1', name: 'Port de Marseille', boatManagerId: 'bm1' },
-  { id: 'p2', name: 'Port de Nice', boatManagerId: 'bm2' },
-  { id: 'p3', name: 'Port de Cannes', boatManagerId: 'bm3' },
-  { id: 'p4', name: 'Port de Saint-Tropez', boatManagerId: 'bm4' },
-];
-
-const mockBoatManagers: BoatManager[] = [
-  { id: 'bm1', name: 'Marie Martin' },
-  { id: 'bm2', name: 'Pierre Dubois' },
-  { id: 'bm3', name: 'Sophie Laurent' },
-  { id: 'bm4', name: 'Lucas Bernard' },
-];
-
 export default function NewPleasureBoaterScreen() {
   const { user } = useAuth();
   const [formData, setFormData] = useState({
@@ -44,6 +30,7 @@ export default function NewPleasureBoaterScreen() {
     lastName: '',
     email: '',
     phone: '',
+    password: '', // Add password to form data
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [portAssignments, setPortAssignments] = useState<PortAssignment[]>([]);
@@ -53,6 +40,15 @@ export default function NewPleasureBoaterScreen() {
   const [selectedBoatManager, setSelectedBoatManager] = useState<BoatManager | null>(null);
   const [editingAssignmentIndex, setEditingAssignmentIndex] = useState<number | null>(null);
   
+  // Data from Supabase
+  const [allPorts, setAllPorts] = useState<Port[]>([]);
+  const [boatManagersForSelectedPort, setBoatManagersForSelectedPort] = useState<BoatManager[]>([]);
+  
+  // Loading states
+  const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingPorts, setIsFetchingPorts] = useState(true);
+  const [isFetchingBms, setIsFetchingBms] = useState(false);
+
   // Options d'envoi d'email
   const [sendCredentials, setSendCredentials] = useState(true);
   const [showEmailOptionsModal, setShowEmailOptionsModal] = useState(false);
@@ -68,6 +64,22 @@ export default function NewPleasureBoaterScreen() {
     'L\'équipe Your Boat Manager'
   );
   const [passwordExpiryDays, setPasswordExpiryDays] = useState('7');
+
+  // Fetch all ports on component mount
+  useEffect(() => {
+    const fetchPorts = async () => {
+      setIsFetchingPorts(true);
+      const { data, error } = await supabase.from('ports').select('id, name');
+      if (error) {
+        console.error('Error fetching ports:', error);
+        Alert.alert('Erreur', 'Impossible de charger les ports.');
+      } else {
+        setAllPorts(data.map(p => ({ id: p.id.toString(), name: p.name })));
+      }
+      setIsFetchingPorts(false);
+    };
+    fetchPorts();
+  }, []);
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
@@ -88,6 +100,12 @@ export default function NewPleasureBoaterScreen() {
     
     if (!formData.phone.trim()) {
       newErrors.phone = 'Le téléphone est requis';
+    }
+
+    if (!formData.password.trim()) {
+      newErrors.password = 'Le mot de passe est requis';
+    } else if (formData.password.length < 6) {
+      newErrors.password = 'Le mot de passe doit contenir au moins 6 caractères';
     }
     
     if (portAssignments.length === 0) {
@@ -112,20 +130,42 @@ export default function NewPleasureBoaterScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSelectPort = (port: Port) => {
+  const handleSelectPort = async (port: Port) => {
     setSelectedPort(port);
-    
-    // Trouver automatiquement le Boat Manager associé au port
-    const boatManager = mockBoatManagers.find(bm => bm.id === port.boatManagerId);
-    if (boatManager) {
-      setSelectedBoatManager(boatManager);
-    } else {
-      setSelectedBoatManager(null);
-    }
-    
     setShowPortModal(false);
     
-    // Si on est en mode ajout, ouvrir directement le modal de sélection du Boat Manager
+    // Fetch Boat Managers for the selected port
+    setIsFetchingBms(true);
+    const { data: userPorts, error: userPortsError } = await supabase
+      .from('user_ports')
+      .select('user_id')
+      .eq('port_id', parseInt(port.id));
+
+    if (userPortsError) {
+      console.error('Error fetching user_ports for selected port:', userPortsError);
+      Alert.alert('Erreur', 'Impossible de charger les Boat Managers pour ce port.');
+      setBoatManagersForSelectedPort([]);
+    } else if (userPorts.length > 0) {
+      const bmIds = userPorts.map(up => up.user_id);
+      const { data: bms, error: bmsError } = await supabase
+        .from('users')
+        .select('id, first_name, last_name')
+        .in('id', bmIds)
+        .eq('profile', 'boat_manager');
+
+      if (bmsError) {
+        console.error('Error fetching Boat Managers:', bmsError);
+        Alert.alert('Erreur', 'Impossible de charger les Boat Managers.');
+        setBoatManagersForSelectedPort([]);
+      } else {
+        setBoatManagersForSelectedPort(bms.map(bm => ({ id: bm.id.toString(), name: `${bm.first_name} ${bm.last_name}` })));
+      }
+    } else {
+      setBoatManagersForSelectedPort([]);
+    }
+    setIsFetchingBms(false);
+
+    // Open BM selection modal if in add mode
     if (editingAssignmentIndex === null) {
       setShowBoatManagerModal(true);
     }
@@ -135,7 +175,6 @@ export default function NewPleasureBoaterScreen() {
     setSelectedBoatManager(boatManager);
     setShowBoatManagerModal(false);
     
-    // Si on est en mode ajout, ajouter l'assignation
     if (editingAssignmentIndex === null && selectedPort) {
       const newAssignment: PortAssignment = {
         portId: selectedPort.id,
@@ -144,7 +183,6 @@ export default function NewPleasureBoaterScreen() {
         boatManagerName: boatManager.name
       };
       
-      // Vérifier si cette assignation existe déjà
       const exists = portAssignments.some(
         a => a.portId === selectedPort.id && a.boatManagerId === boatManager.id
       );
@@ -157,9 +195,7 @@ export default function NewPleasureBoaterScreen() {
       
       setSelectedPort(null);
       setSelectedBoatManager(null);
-    } 
-    // Si on est en mode édition, mettre à jour l'assignation
-    else if (editingAssignmentIndex !== null && selectedPort) {
+    } else if (editingAssignmentIndex !== null && selectedPort) {
       const updatedAssignments = [...portAssignments];
       updatedAssignments[editingAssignmentIndex] = {
         portId: selectedPort.id,
@@ -173,6 +209,9 @@ export default function NewPleasureBoaterScreen() {
       setSelectedPort(null);
       setSelectedBoatManager(null);
     }
+    if (errors.ports) {
+      setErrors(prev => ({ ...prev, ports: undefined }));
+    }
   };
 
   const handleAddPortAssignment = () => {
@@ -184,49 +223,98 @@ export default function NewPleasureBoaterScreen() {
 
   const handleEditPortAssignment = (index: number) => {
     const assignment = portAssignments[index];
-    const port = mockPorts.find(p => p.id === assignment.portId);
-    const boatManager = mockBoatManagers.find(bm => bm.id === assignment.boatManagerId);
+    const port = allPorts.find(p => p.id === assignment.portId);
     
     if (port) {
       setSelectedPort(port);
-    }
-    
-    if (boatManager) {
-      setSelectedBoatManager(boatManager);
+      // Re-fetch BMs for this port when editing
+      handleSelectPort(port); // This will also open BM modal
     }
     
     setEditingAssignmentIndex(index);
-    setShowPortModal(true);
   };
 
   const handleRemovePortAssignment = (index: number) => {
     const updatedAssignments = [...portAssignments];
     updatedAssignments.splice(index, 1);
     setPortAssignments(updatedAssignments);
+    if (errors.ports && updatedAssignments.length === 0) {
+      setErrors(prev => ({ ...prev, ports: 'Au moins un port d\'attache est requis' }));
+    }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (validateForm()) {
-      // Générer un mot de passe temporaire aléatoire
-      const temporaryPassword = generateTemporaryPassword();
-      
-      // Simuler l'ajout d'un plaisancier
-      if (sendCredentials) {
-        // Remplacer les variables dans le message
-        const personalizedMessage = emailMessage
-          .replace('{email}', formData.email)
-          .replace('{password}', temporaryPassword);
+      setIsLoading(true);
+      try {
+        const hashedPassword = await bcrypt.hash(formData.password, 10);
         
-        // Simuler l'envoi d'email
-        console.log('Envoi d\'email à', formData.email);
-        console.log('Objet:', emailSubject);
-        console.log('Message:', personalizedMessage);
-        console.log('Mot de passe temporaire:', temporaryPassword);
-        console.log('Validité du mot de passe:', passwordExpiryDays, 'jours');
-        
+        // 1. Check if user already exists
+        const { data: existingUsers, error: existingUserError } = await supabase
+          .from('users')
+          .select('id')
+          .eq('e_mail', formData.email);
+
+        if (existingUserError) {
+          throw new Error("Erreur lors de la vérification de l'utilisateur existant.");
+        }
+        if (existingUsers && existingUsers.length > 0) {
+          throw new Error('Un compte avec cet email existe déjà.');
+        }
+
+        // 2. Create the new pleasure boater user
+        const { data: newUser, error: userInsertError } = await supabase
+          .from('users')
+          .insert({
+            e_mail: formData.email,
+            password: hashedPassword,
+            first_name: formData.firstName,
+            last_name: formData.lastName,
+            phone: formData.phone,
+            profile: 'pleasure_boater',
+            status: 'active', // New users are active by default
+            last_login: new Date().toISOString(), // Set initial last_login
+            avatar: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop', // Default avatar
+          })
+          .select('id')
+          .single();
+
+        if (userInsertError) {
+          console.error('Error inserting user profile:', userInsertError);
+          throw new Error('Échec de la création du profil utilisateur.');
+        }
+
+        // 3. Assign ports to the new user
+        const userPortInserts = portAssignments.map((assignment) => ({
+          user_id: newUser.id,
+          port_id: parseInt(assignment.portId),
+        }));
+
+        const { error: userPortsInsertError } = await supabase
+          .from('user_ports')
+          .insert(userPortInserts);
+
+        if (userPortsInsertError) {
+          console.error('Error inserting user ports:', userPortsInsertError);
+          throw new Error("Échec de l'affectation des ports à l'utilisateur.");
+        }
+
+        // 4. Simulate email sending
+        if (sendCredentials) {
+          const temporaryPassword = formData.password; // Using the provided password for simulation
+          const personalizedMessage = emailMessage
+            .replace('{email}', formData.email)
+            .replace('{password}', temporaryPassword);
+          
+          Alert.alert(
+            'Email envoyé (simulation)',
+            `Objet: ${emailSubject}\n\nMessage:\n${personalizedMessage}\n\nMot de passe temporaire: ${temporaryPassword}\nValidité: ${passwordExpiryDays} jours`
+          );
+        }
+
         Alert.alert(
           'Succès',
-          `Le plaisancier a été ajouté avec succès et les identifiants ont été envoyés à ${formData.email}`,
+          'Le plaisancier a été ajouté avec succès.',
           [
             {
               text: 'OK',
@@ -234,22 +322,17 @@ export default function NewPleasureBoaterScreen() {
             }
           ]
         );
-      } else {
-        Alert.alert(
-          'Succès',
-          'Le plaisancier a été ajouté avec succès',
-          [
-            {
-              text: 'OK',
-              onPress: () => router.back()
-            }
-          ]
-        );
+
+      } catch (error: any) {
+        console.error('Submission error:', error);
+        Alert.alert('Erreur', error.message || 'Une erreur est survenue lors de l\'ajout du plaisancier.');
+      } finally {
+        setIsLoading(false);
       }
     }
   };
 
-  // Générer un mot de passe temporaire aléatoire
+  // Générer un mot de passe temporaire aléatoire (non utilisé si sendCredentials est activé avec le mot de passe du formulaire)
   const generateTemporaryPassword = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
     let password = '';
@@ -280,24 +363,30 @@ export default function NewPleasureBoaterScreen() {
           </View>
           
           <ScrollView style={styles.modalBody}>
-            {mockPorts.map((port) => (
-              <TouchableOpacity 
-                key={port.id}
-                style={[
-                  styles.modalItem,
-                  selectedPort?.id === port.id && styles.modalItemSelected
-                ]}
-                onPress={() => handleSelectPort(port)}
-              >
-                <MapPin size={20} color={selectedPort?.id === port.id ? '#0066CC' : '#666'} />
-                <Text style={[
-                  styles.modalItemText,
-                  selectedPort?.id === port.id && styles.modalItemTextSelected
-                ]}>
-                  {port.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {isFetchingPorts ? (
+              <ActivityIndicator size="large" color="#0066CC" />
+            ) : allPorts.length > 0 ? (
+              allPorts.map((port) => (
+                <TouchableOpacity 
+                  key={port.id}
+                  style={[
+                    styles.modalItem,
+                    selectedPort?.id === port.id && styles.modalItemSelected
+                  ]}
+                  onPress={() => handleSelectPort(port)}
+                >
+                  <MapPin size={20} color={selectedPort?.id === port.id ? '#0066CC' : '#666'} />
+                  <Text style={[
+                    styles.modalItemText,
+                    selectedPort?.id === port.id && styles.modalItemTextSelected
+                  ]}>
+                    {port.name}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.emptyModalText}>Aucun port disponible.</Text>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -325,24 +414,30 @@ export default function NewPleasureBoaterScreen() {
           </View>
           
           <ScrollView style={styles.modalBody}>
-            {mockBoatManagers.map((manager) => (
-              <TouchableOpacity 
-                key={manager.id}
-                style={[
-                  styles.modalItem,
-                  selectedBoatManager?.id === manager.id && styles.modalItemSelected
-                ]}
-                onPress={() => handleSelectBoatManager(manager)}
-              >
-                <User size={20} color={selectedBoatManager?.id === manager.id ? '#0066CC' : '#666'} />
-                <Text style={[
-                  styles.modalItemText,
-                  selectedBoatManager?.id === manager.id && styles.modalItemTextSelected
-                ]}>
-                  {manager.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {isFetchingBms ? (
+              <ActivityIndicator size="large" color="#0066CC" />
+            ) : boatManagersForSelectedPort.length > 0 ? (
+              boatManagersForSelectedPort.map((manager) => (
+                <TouchableOpacity 
+                  key={manager.id}
+                  style={[
+                    styles.modalItem,
+                    selectedBoatManager?.id === manager.id && styles.modalItemSelected
+                  ]}
+                  onPress={() => handleSelectBoatManager(manager)}
+                >
+                  <User size={20} color={selectedBoatManager?.id === manager.id ? '#0066CC' : '#666'} />
+                  <Text style={[
+                    styles.modalItemText,
+                    selectedBoatManager?.id === manager.id && styles.modalItemTextSelected
+                  ]}>
+                    {manager.name}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.emptyModalText}>Aucun Boat Manager trouvé pour ce port.</Text>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -514,6 +609,21 @@ export default function NewPleasureBoaterScreen() {
               </View>
               {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
             </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Mot de passe</Text>
+              <View style={[styles.inputContainer, errors.password && styles.inputError]}>
+                <Lock size={20} color={errors.password ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.input}
+                  value={formData.password}
+                  onChangeText={(text) => setFormData(prev => ({ ...prev, password: text }))}
+                  placeholder="Mot de passe"
+                  secureTextEntry
+                />
+              </View>
+              {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
+            </View>
           </View>
           
           <View style={styles.formSection}>
@@ -603,11 +713,18 @@ export default function NewPleasureBoaterScreen() {
           </View>
           
           <TouchableOpacity 
-            style={styles.submitButton}
+            style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
             onPress={handleSubmit}
+            disabled={isLoading}
           >
-            <Check size={20} color="white" />
-            <Text style={styles.submitButtonText}>Ajouter le plaisancier</Text>
+            {isLoading ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <>
+                <Check size={20} color="white" />
+                <Text style={styles.submitButtonText}>Ajouter le plaisancier</Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -997,4 +1114,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'white',
   },
+  emptyModalText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    paddingVertical: 20,
+  }
 });

@@ -1,26 +1,25 @@
-import { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput } from 'react-native';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native';
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
+import { useFocusEffect } from '@react-navigation/native';
 
-// Types de statuts simplifiés pour le Corporate
-type RequestStatus = 'new' | 'in_progress' | 'ready_to_bill' | 'to_pay' | 'paid';
+// Types de statuts pour les différents rôles (Corporate peut voir tous les statuts)
+type CorporateRequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
 type SortKey = 'date' | 'type' | 'client' | 'boatManager' | 'company';
-type RequestSource = 'pleasure_boater' | 'boat_manager' | 'nautical_company';
 
-// Interface pour les demandes
 interface Request {
   id: string;
   title: string;
   type: string;
-  status: RequestStatus;
-  originalStatus: string; // Statut original avant simplification
+  status: CorporateRequestStatus;
   urgency: UrgencyLevel;
   date: string;
   description: string;
   category: string;
-  source: RequestSource;
   client: {
     id: string;
     name: string;
@@ -32,7 +31,7 @@ interface Request {
       type: string;
     };
   };
-  boatManager: {
+  boatManager?: {
     id: string;
     name: string;
     port: string;
@@ -41,7 +40,11 @@ interface Request {
     id: string;
     name: string;
   };
-  currentHandler?: 'boat_manager' | 'company';
+  currentHandler?: 'boat_manager' | 'company' | 'client';
+  quoteIds?: string[];
+  location?: string;
+  notes?: string;
+  scheduledDate?: string;
   invoiceReference?: string;
   invoiceAmount?: number;
   invoiceDate?: string;
@@ -49,319 +52,342 @@ interface Request {
   hasStatusUpdate?: boolean;
 }
 
-// Exemples de demandes avec les différents statuts pour le Corporate
-const mockRequests: Request[] = [
-  {
-    id: '1',
-    title: 'Entretien moteur',
-    type: 'Maintenance',
-    status: 'in_progress',
-    originalStatus: 'in_progress',
-    urgency: 'normal',
-    date: '25-02-2024',
-    description: 'Révision complète du moteur et changement des filtres',
-    category: 'Services',
-    source: 'pleasure_boater',
-    client: {
-      id: '1',
-      name: 'Jean Dupont',
-      avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-      email: 'jean.dupont@example.com',
-      phone: '+33 6 12 34 56 78',
-      boat: {
-        name: 'Le Grand Bleu',
-        type: 'Voilier'
-      }
-    },
-    boatManager: {
-      id: 'bm1',
-      name: 'Marie Martin',
-      port: 'Port de Marseille'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '2',
-    title: 'Installation GPS',
-    type: 'Amélioration',
-    status: 'in_progress',
-    originalStatus: 'forwarded',
-    urgency: 'normal',
-    date: '23-02-2024',
-    description: 'Installation d\'un nouveau système GPS pour navigation côtière',
-    category: 'Services',
-    source: 'boat_manager',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    currentHandler: 'company'
-  },
-  {
-    id: '3',
-    title: 'Nettoyage coque',
-    type: 'Maintenance',
-    status: 'in_progress',
-    originalStatus: 'quote_accepted',
-    urgency: 'normal',
-    date: '21-02-2024',
-    description: 'Nettoyage complet de la coque et traitement antifouling',
-    category: 'Services',
-    source: 'nautical_company',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    }
-  },
-  {
-    id: '4',
-    title: 'Renouvellement assurance',
-    type: 'Administratif',
-    status: 'ready_to_bill',
-    originalStatus: 'ready_to_bill',
-    urgency: 'normal',
-    date: '18-02-2024',
-    description: 'Assistance pour le renouvellement de l\'assurance du bateau',
-    category: 'Administratif',
-    source: 'boat_manager',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm4',
-      name: 'Lucas Bernard',
-      port: 'Port de Saint-Tropez'
-    }
-  },
-  {
-    id: '5',
-    title: 'Remplacement hélice',
-    type: 'Réparation',
-    status: 'to_pay',
-    originalStatus: 'to_pay',
-    urgency: 'normal',
-    date: '17-02-2024',
-    description: 'Remplacement de l\'hélice endommagée',
-    category: 'Services',
-    source: 'nautical_company',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    company: {
-      id: 'nc1',
-      name: 'Nautisme Pro'
-    },
-    invoiceReference: 'FAC-2024-001',
-    invoiceAmount: 850,
-    invoiceDate: '20-02-2024'
-  },
-  {
-    id: '6',
-    title: 'Contrôle annuel',
-    type: 'Contrôle',
-    status: 'paid',
-    originalStatus: 'paid',
-    urgency: 'normal',
-    date: '16-02-2024',
-    description: 'Contrôle technique annuel obligatoire',
-    category: 'Services',
-    source: 'boat_manager',
-    client: {
-      id: '2',
-      name: 'Sophie Martin',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-      email: 'sophie.martin@example.com',
-      phone: '+33 6 23 45 67 89',
-      boat: {
-        name: 'Le Petit Prince',
-        type: 'Yacht'
-      }
-    },
-    boatManager: {
-      id: 'bm2',
-      name: 'Pierre Dubois',
-      port: 'Port de Nice'
-    },
-    invoiceReference: 'FAC-2024-002',
-    invoiceAmount: 450,
-    invoiceDate: '18-02-2024'
-  }
-];
-
-// Configuration des statuts simplifiés pour le Corporate
-const statusConfig = {
-  new: {
+// Configuration des statuts détaillés (pour l'affichage des cartes individuelles et la modale)
+const detailedStatusConfig = {
+  submitted: {
     icon: Clock,
-    color: '#F59E0B',
+    color: '#F97316', // Orange vif
     label: 'Nouvelle',
-    description: 'Demande soumise par le client',
+    description: 'En attente de prise en charge',
   },
   in_progress: {
     icon: CircleDot,
-    color: '#3B82F6',
+    color: '#3B82F6', // Bleu vif
     label: 'En cours',
-    description: 'En cours de traitement',
+    description: 'Intervention en cours',
+  },
+  forwarded: {
+    icon: Upload,
+    color: '#A855F7', // Violet
+    label: 'Transmise',
+    description: 'Transmise à une entreprise',
+  },
+  quote_sent: {
+    icon: FileText,
+    color: '#22C55E', // Vert clair
+    label: 'Devis envoyé',
+    description: 'En attente de réponse du client',
+  },
+  quote_accepted: {
+    icon: CheckCircle2,
+    color: '#15803D', // Vert foncé
+    label: 'Devis accepté',
+    description: 'Le client a accepté le devis',
+  },
+  scheduled: {
+    icon: Calendar,
+    color: '#2563EB', // Bleu plus foncé
+    label: 'Planifiée',
+    description: 'Intervention planifiée',
+  },
+  completed: {
+    icon: CheckCircle2,
+    color: '#0EA5E9', // Bleu ciel
+    label: 'Terminée',
+    description: 'Intervention terminée',
   },
   ready_to_bill: {
     icon: Upload,
-    color: '#8B5CF6',
+    color: '#F59E0B', // Jaune du dashboard pour "Bon à facturer"
     label: 'Bon à facturer',
     description: 'Prêt pour facturation',
   },
   to_pay: {
     icon: FileText,
-    color: '#3B82F6',
+    color: '#10B981', // Vert du dashboard pour "Factures émises"
     label: 'À régler',
     description: 'Facture envoyée au client',
   },
   paid: {
     icon: Euro,
-    color: '#10B981',
+    color: '#a6acaf', // Gris
     label: 'Réglée',
     description: 'Facture payée',
+  },
+  cancelled: {
+    icon: XCircle,
+    color: '#DC2626', // Rouge vif
+    label: 'Annulée',
+    description: 'Demande annulée',
   }
 };
 
-// Configuration des sources de demandes
-const sourceConfig = {
-  pleasure_boater: {
-    label: 'Plaisancier',
-    color: '#0EA5E9',
+// Nouvelles catégories de résumé pour la vue Corporate
+type CorporateSummaryCategory = 'total' | 'new_requests' | 'in_progress_group' | 'ready_to_bill_group' | 'to_pay_group' | 'paid_group' | 'cancelled_group' | 'urgent';
+
+interface CorporateSummaryConfig {
+  label: string;
+  color: string;
+  icon?: any; // Lucide icon
+  statuses?: CorporateRequestStatus[]; // Underlying statuses for filtering
+  subCategories?: {
+    key: string;
+    label: string;
+    filter: (request: Request) => boolean;
+  }[];
+}
+
+const corporateSummaryConfig: Record<CorporateSummaryCategory, CorporateSummaryConfig> = {
+  total: { label: 'Total', color: '#1a1a1a' },
+  new_requests: { label: 'Nouvelles', color: '#F97316', icon: Clock, statuses: ['submitted'] },
+  in_progress_group: {
+    label: 'En cours',
+    color: '#3B82F6',
+    icon: CircleDot,
+    statuses: ['in_progress', 'forwarded', 'quote_sent', 'quote_accepted', 'scheduled', 'completed']
   },
-  boat_manager: {
-    label: 'Boat Manager',
-    color: '#10B981',
+  ready_to_bill_group: {
+    label: 'Bon à facturer',
+    color: '#F59E0B', // Jaune du dashboard
+    icon: Upload,
+    statuses: ['ready_to_bill'],
+    subCategories: [
+      { key: 'ready_to_bill_bm', label: 'BM', filter: (r) => r.status === 'ready_to_bill' && !!r.boatManager && !r.company },
+      { key: 'ready_to_bill_company', label: 'Entreprise', filter: (r) => r.status === 'ready_to_bill' && !!r.company }
+    ]
   },
-  nautical_company: {
-    label: 'Entreprise du nautisme',
-    color: '#8B5CF6',
-  }
+  to_pay_group: {
+    label: 'À régler',
+    color: '#10B981', // Vert du dashboard
+    icon: FileText,
+    statuses: ['to_pay'],
+    subCategories: [
+      { key: 'to_pay_bm', label: 'BM', filter: (r) => r.status === 'to_pay' && !!r.boatManager && !r.company },
+      { key: 'to_pay_company', label: 'Entreprise', filter: (r) => r.status === 'to_pay' && !!r.company }
+    ]
+  },
+  paid_group: {
+    label: 'Réglées',
+    color: '#a6acaf',
+    icon: Euro,
+    statuses: ['paid'],
+    subCategories: [
+      { key: 'paid_bm', label: 'BM', filter: (r) => r.status === 'paid' && !!r.boatManager && !r.company },
+      { key: 'paid_company', label: 'Entreprise', filter: (r) => r.status === 'paid' && !!r.company }
+    ]
+  },
+  cancelled_group: { label: 'Annulées', color: '#DC2626', icon: XCircle, statuses: ['cancelled'] },
+  urgent: { label: 'Urgentes', color: '#DC2626', icon: AlertTriangle }
 };
+
 
 export default function RequestsScreen() {
+  const { user } = useAuth();
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortAsc, setSortAsc] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState<RequestStatus | null>(null);
-  const [selectedSource, setSelectedSource] = useState<RequestSource | null>(null);
+  const [selectedSummaryCategory, setSelectedSummaryCategory] = useState<CorporateSummaryCategory | null>(null); // New state for summary filter
   const [selectedUrgency, setSelectedUrgency] = useState<UrgencyLevel | null>(null);
-  const [requests, setRequests] = useState<Request[]>(mockRequests);
+  const [requests, setRequests] = useState<Request[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Marquer les demandes comme vues lorsque l'écran est ouvert
-  useEffect(() => {
-    const updatedRequests = requests.map(request => ({
-      ...request,
-      isNew: false,
-      hasStatusUpdate: false
-    }));
-    setRequests(updatedRequests);
-  }, []);
+  const [showStatusChangeModal, setShowStatusChangeModal] = useState(false);
+  const [requestToUpdate, setRequestToUpdate] = useState<Request | null>(null);
+
+  const fetchRequests = useCallback(async () => {
+    setLoading(true);
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('service_request')
+        .select(`
+            id,
+            description,
+            statut,
+            urgence,
+            date,
+            prix,
+            note_add,
+            id_client,
+            id_boat_manager,
+            id_companie,
+            categorie_service(description1),
+            users!id_client(id, first_name, last_name, avatar, e_mail, phone),
+            boat(name, type, place_de_port)
+          `);
+
+      if (error) {
+        console.error('Error fetching requests:', error);
+        Alert.alert('Erreur', 'Impossible de charger les demandes.');
+        return;
+      }
+
+      const formattedRequests: Request[] = await Promise.all(data.map(async (req: any) => {
+        let boatManagerDetails: Request['boatManager'] | undefined;
+        if (req.id_boat_manager) {
+          const { data: bmData, error: bmError } = await supabase
+            .from('users')
+            .select('id, first_name, last_name, user_ports(ports(name))')
+            .eq('id', req.id_boat_manager)
+            .single();
+          if (!bmError && bmData) {
+            boatManagerDetails = {
+              id: bmData.id.toString(),
+              name: `${bmData.first_name} ${bmData.last_name}`,
+              port: bmData.user_ports && bmData.user_ports.length > 0 ? bmData.user_ports[0].ports.name : 'N/A'
+            };
+          }
+        }
+
+        let companyDetails: Request['company'] | undefined;
+        if (req.id_companie) {
+          const { data: companyData, error: companyError } = await supabase
+            .from('users')
+            .select('id, company_name')
+            .eq('id', req.id_companie)
+            .single();
+          if (!companyError && companyData) {
+            companyDetails = {
+              id: companyData.id.toString(),
+              name: companyData.company_name || 'N/A'
+            };
+          }
+        }
+
+        let invoiceReference: string | undefined;
+        let invoiceDate: string | undefined;
+        if (req.note_add && (req.statut === 'to_pay' || req.statut === 'paid')) {
+          const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
+          if (invoiceMatch) {
+            invoiceReference = invoiceMatch[1];
+            invoiceDate = invoiceMatch[2];
+          }
+        }
+        
+        let scheduledDate: string | undefined;
+        if (req.statut === 'scheduled' && req.note_add) {
+          const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+          if (scheduledMatch) {
+            scheduledDate = scheduledMatch[1];
+          }
+        }
+
+        let currentHandler: Request['currentHandler'] = 'client';
+        if (req.id_boat_manager && ['submitted', 'in_progress'].includes(req.statut)) {
+            currentHandler = 'boat_manager';
+        } else if (req.id_companie && ['forwarded', 'quote_sent', 'quote_accepted', 'scheduled', 'completed', 'ready_to_bill', 'to_pay', 'paid'].includes(req.statut)) {
+            currentHandler = 'company';
+        }
+
+
+        return {
+          id: req.id.toString(),
+          title: req.description,
+          type: req.categorie_service?.description1 || 'N/A',
+          status: req.statut as CorporateRequestStatus,
+          urgency: req.urgence as UrgencyLevel,
+          date: req.date,
+          description: req.description,
+          category: 'Services',
+          client: {
+            id: req.users.id.toString(),
+            name: `${req.users.first_name} ${req.users.last_name}`,
+            avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+            email: req.users.e_mail,
+            phone: req.users.phone,
+            boat: {
+              name: req.boat.name,
+              type: req.boat.type
+            }
+          },
+          boatManager: boatManagerDetails,
+          company: companyDetails,
+          notes: req.note_add,
+          scheduledDate: scheduledDate,
+          invoiceReference: invoiceReference,
+          invoiceAmount: req.prix,
+          invoiceDate: invoiceDate,
+          isNew: false,
+          hasStatusUpdate: false,
+          currentHandler: currentHandler,
+        };
+      }));
+
+      setRequests(formattedRequests);
+    } catch (e) {
+      console.error('Unexpected error:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchRequests();
+    }, [fetchRequests])
+  );
 
   const requestsSummary = useMemo(() => {
-    return {
+    const summary = {
       total: requests.length,
-      new: requests.filter(r => r.status === 'new').length,
-      inProgress: requests.filter(r => r.status === 'in_progress').length,
-      readyToBill: requests.filter(r => r.status === 'ready_to_bill').length,
-      toPay: requests.filter(r => r.status === 'to_pay').length,
-      paid: requests.filter(r => r.status === 'paid').length,
+      new_requests: requests.filter(r => r.status === 'submitted').length,
+      in_progress_group: requests.filter(r => ['in_progress', 'forwarded', 'quote_sent', 'quote_accepted', 'scheduled', 'completed'].includes(r.status)).length,
+      ready_to_bill_group: requests.filter(r => r.status === 'ready_to_bill').length,
+      ready_to_bill_bm: requests.filter(r => r.status === 'ready_to_bill' && !!r.boatManager && !r.company).length,
+      ready_to_bill_company: requests.filter(r => r.status === 'ready_to_bill' && !!r.company).length,
+      to_pay_group: requests.filter(r => r.status === 'to_pay').length,
+      to_pay_bm: requests.filter(r => r.status === 'to_pay' && !!r.boatManager && !r.company).length,
+      to_pay_company: requests.filter(r => r.status === 'to_pay' && !!r.company).length,
+      paid_group: requests.filter(r => r.status === 'paid').length,
+      paid_bm: requests.filter(r => r.status === 'paid' && !!r.boatManager && !r.company).length,
+      paid_company: requests.filter(r => r.status === 'paid' && !!r.company).length,
+      cancelled_group: requests.filter(r => r.status === 'cancelled').length,
       urgent: requests.filter(r => r.urgency === 'urgent').length,
-      pleasureBoater: requests.filter(r => r.source === 'pleasure_boater').length,
-      boatManager: requests.filter(r => r.source === 'boat_manager').length,
-      nauticalCompany: requests.filter(r => r.source === 'nautical_company').length,
-      newRequests: requests.filter(r => r.isNew).length,
-      statusUpdates: requests.filter(r => r.hasStatusUpdate).length
+      newRequests: requests.filter(r => r.isNew).length, // Keep for notification badge
+      statusUpdates: requests.filter(r => r.hasStatusUpdate).length // Keep for notification badge
     };
+    return summary;
   }, [requests]);
 
   const filteredAndSortedRequests = useMemo(() => {
     let filteredRequests = [...requests];
     
-    // Appliquer le filtre de recherche
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filteredRequests = filteredRequests.filter(request => 
         request.client.name.toLowerCase().includes(query) ||
         request.company?.name?.toLowerCase().includes(query) ||
+        request.boatManager?.name?.toLowerCase().includes(query) ||
         request.title.toLowerCase().includes(query) ||
         request.type.toLowerCase().includes(query) ||
         request.client.boat.name.toLowerCase().includes(query)
       );
     }
 
-    // Appliquer le filtre de statut
-    if (selectedStatus) {
-      filteredRequests = filteredRequests.filter(r => r.status === selectedStatus);
+    if (selectedSummaryCategory) {
+      const config = corporateSummaryConfig[selectedSummaryCategory];
+      if (config.statuses) {
+        filteredRequests = filteredRequests.filter(r => config.statuses!.includes(r.status));
+      }
+      // Apply sub-category filter if a specific sub-category was selected (e.g., 'to_pay_bm')
+      // This part assumes `selectedSummaryCategory` can also hold sub-category keys for filtering
+      // If not, a separate state for sub-category filtering would be needed.
+      // For now, if a main category is selected, it shows all requests within that main category.
+      // If you need to filter by 'to_pay_bm' directly from the summary card, we'd need to adjust `handleFilterBySummaryCategory`
+      // and potentially add a new state for sub-category selection.
     }
 
-    // Appliquer le filtre de source
-    if (selectedSource) {
-      filteredRequests = filteredRequests.filter(r => r.source === selectedSource);
-    }
-
-    // Appliquer le filtre d'urgence
     if (selectedUrgency) {
       filteredRequests = filteredRequests.filter(r => r.urgency === selectedUrgency);
     }
 
-    // Appliquer le tri
     return filteredRequests.sort((a, b) => {
       if (sortKey === 'date') {
         return sortAsc 
@@ -371,6 +397,12 @@ export default function RequestsScreen() {
         return sortAsc
           ? a.client.name.localeCompare(b.client.name)
           : b.client.name.localeCompare(a.client.name);
+      } else if (sortKey === 'boatManager') {
+        const aName = a.boatManager?.name || '';
+        const bName = b.boatManager?.name || '';
+        return sortAsc
+          ? aName.localeCompare(bName)
+          : bName.localeCompare(aName);
       } else if (sortKey === 'company') {
         const aName = a.company?.name || '';
         const bName = b.company?.name || '';
@@ -378,12 +410,14 @@ export default function RequestsScreen() {
           ? aName.localeCompare(bName)
           : bName.localeCompare(aName);
       } else {
+        const aValue = a[sortKey as keyof Request] as string;
+        const bValue = b[sortKey as keyof Request] as string;
         return sortAsc
-          ? a[sortKey].localeCompare(b[sortKey])
-          : b[sortKey].localeCompare(a[sortKey]);
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
       }
     });
-  }, [sortKey, sortAsc, searchQuery, selectedStatus, selectedSource, selectedUrgency, requests]);
+  }, [sortKey, sortAsc, searchQuery, selectedSummaryCategory, selectedUrgency, requests]);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -395,7 +429,6 @@ export default function RequestsScreen() {
   };
 
   const handleRequestDetails = (requestId: string) => {
-    // Marquer la demande comme vue et supprimer le drapeau de mise à jour de statut
     setRequests(prev =>
       prev.map(request => 
         request.id === requestId 
@@ -403,46 +436,171 @@ export default function RequestsScreen() {
           : request
       )
     );
-    
-    // Naviguer vers les détails de la demande
     router.push(`/request/${requestId}`);
   };
 
   const formatDate = (dateString: string) => {
-    // Si la date est déjà au format JJ-MM-AAAA, la retourner telle quelle
-    if (/^\d{2}-\d{2}-\d{4}$/.test(dateString)) {
+    if (!dateString) return 'N/A';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
       return dateString;
     }
-    
-    // Sinon, convertir depuis le format ISO
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      return 'Invalid Date';
+    }
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
     return `${day}-${month}-${year}`;
   };
 
-  const handleFilterByStatus = (status: RequestStatus | null) => {
-    setSelectedStatus(status === selectedStatus ? null : status);
-    setSelectedSource(null);
-    setSelectedUrgency(null);
-  };
-
-  const handleFilterBySource = (source: RequestSource | null) => {
-    setSelectedSource(source === selectedSource ? null : source);
-    setSelectedStatus(null);
-    setSelectedUrgency(null);
+  const handleFilterBySummaryCategory = (category: CorporateSummaryCategory | null) => {
+    setSelectedSummaryCategory(category === selectedSummaryCategory ? null : category);
+    setSelectedUrgency(null); // Reset urgency filter when a summary category is selected
   };
 
   const handleFilterByUrgency = (urgency: UrgencyLevel | null) => {
     setSelectedUrgency(urgency === selectedUrgency ? null : urgency);
-    setSelectedStatus(null);
-    setSelectedSource(null);
+    setSelectedSummaryCategory(null); // Reset summary category filter when urgency is selected
   };
 
   const handleMessage = (clientId: string) => {
     router.push(`/(corporate)/messages?client=${clientId}`);
   };
+
+  const getHandlerInfo = (request: Request) => {
+    let handlerText = '';
+    let handlerIcon = null;
+    let handlerColor = '#666';
+
+    switch (request.currentHandler) {
+      case 'boat_manager':
+        handlerText = `Géré par BM: ${request.boatManager?.name || 'Inconnu'}`;
+        handlerIcon = User;
+        handlerColor = '#0066CC';
+        break;
+      case 'company':
+        handlerText = `Géré par Entreprise: ${request.company?.name || 'Inconnu'}`;
+        handlerIcon = Building;
+        handlerColor = '#8B5CF6';
+        break;
+      case 'client':
+        handlerText = `Géré par Client: ${request.client.name}`;
+        handlerIcon = User;
+        handlerColor = '#666';
+        break;
+      default:
+        handlerText = 'Statut inconnu';
+        handlerIcon = FileText;
+        handlerColor = '#666';
+    }
+
+    // Override for specific statuses that imply a different "handler" context
+    if (request.status === 'scheduled' && request.scheduledDate) {
+      handlerText = `Planifiée le ${formatDate(request.scheduledDate)}`;
+      handlerIcon = Calendar;
+      handlerColor = '#3B82F6';
+    } else if (request.status === 'to_pay' && request.invoiceReference) {
+      handlerText = 'Facture en attente de paiement';
+      handlerIcon = FileText;
+      handlerColor = '#EAB308';
+    } else if (request.status === 'paid' && request.invoiceReference) {
+      handlerText = 'Facture réglée';
+      handlerIcon = Euro;
+      handlerColor = '#a6acaf';
+    }
+
+    return { handlerText, handlerIcon, handlerColor };
+  };
+
+  const handleUpdateStatus = async (newStatus: CorporateRequestStatus) => {
+    if (requestToUpdate) {
+      try {
+        const { error } = await supabase
+          .from('service_request')
+          .update({ statut: newStatus })
+          .eq('id', parseInt(requestToUpdate.id));
+
+        if (error) {
+          console.error('Error updating status:', error);
+          Alert.alert('Erreur', `Impossible de mettre à jour le statut: ${error.message}`);
+        } else {
+          setRequests(prev =>
+            prev.map(req =>
+              req.id === requestToUpdate.id
+                ? { ...req, status: newStatus, isNew: false, hasStatusUpdate: false }
+                : req
+            )
+          );
+          setRequestToUpdate(null);
+          setShowStatusChangeModal(false);
+          Alert.alert('Succès', 'Statut mis à jour avec succès.');
+        }
+      } catch (e) {
+        console.error('Unexpected error during status update:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la mise à jour du statut.');
+      }
+    }
+  };
+
+  const StatusChangeModal = () => (
+    <Modal
+      visible={showStatusChangeModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowStatusChangeModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Changer le statut</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowStatusChangeModal(false)}
+            >
+              <XCircle size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalBody}>
+            {Object.entries(detailedStatusConfig).map(([statusKey, config]) => {
+              const StatusIcon = config.icon;
+              return (
+                <TouchableOpacity
+                  key={statusKey}
+                  style={styles.statusOption}
+                  onPress={() => handleUpdateStatus(statusKey as CorporateRequestStatus)}
+                >
+                  <View style={styles.statusOptionContent}>
+                    <StatusIcon size={20} color={config.color} />
+                    <View>
+                      <Text style={[styles.statusOptionLabel, { color: config.color }]}>
+                        {config.label}
+                      </Text>
+                      <Text style={styles.statusOptionDescription}>
+                        {config.description}
+                      </Text>
+                    </View>
+                  </View>
+                  {requestToUpdate?.status === statusKey && (
+                    <CheckCircle2 size={24} color="#0066CC" />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text>Chargement des demandes...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -450,19 +608,14 @@ export default function RequestsScreen() {
       <View style={styles.summaryContainer}>
         <Text style={styles.summaryTitle}>Récapitulatif des demandes</Text>
         
-        {/* Carte Total dans sa propre rangée */}
         <View style={styles.totalCardContainer}>
           <TouchableOpacity 
             style={[
               styles.summaryCard, 
               { backgroundColor: '#f8fafc' },
-              selectedStatus === null && selectedUrgency === null && selectedSource === null && styles.summaryCardSelected
+              selectedSummaryCategory === 'total' && styles.summaryCardSelected
             ]}
-            onPress={() => {
-              setSelectedStatus(null);
-              setSelectedUrgency(null);
-              setSelectedSource(null);
-            }}
+            onPress={() => handleFilterBySummaryCategory('total')}
           >
             <Text style={[styles.summaryNumber, { color: '#1a1a1a' }]}>{requestsSummary.total}</Text>
             <Text style={[styles.summaryLabel, { color: '#1a1a1a' }]}>Total</Text>
@@ -476,93 +629,54 @@ export default function RequestsScreen() {
           </TouchableOpacity>
         </View>
         
-        {/* Statuts */}
         <View style={styles.summaryGrid}>
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#FEF3C7' },
-              selectedStatus === 'new' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterByStatus('new')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#F59E0B' }]}>{requestsSummary.new}</Text>
-            <Text style={[styles.summaryLabel, { color: '#F59E0B' }]}>Nouvelles</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#DBEAFE' },
-              selectedStatus === 'in_progress' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterByStatus('in_progress')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{requestsSummary.inProgress}</Text>
-            <Text style={[styles.summaryLabel, { color: '#3B82F6' }]}>En cours</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#F5F3FF' },
-              selectedStatus === 'ready_to_bill' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterByStatus('ready_to_bill')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}>{requestsSummary.readyToBill}</Text>
-            <Text style={[styles.summaryLabel, { color: '#8B5CF6' }]}>Bon à facturer</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#DBEAFE' },
-              selectedStatus === 'to_pay' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterByStatus('to_pay')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{requestsSummary.toPay}</Text>
-            <Text style={[styles.summaryLabel, { color: '#3B82F6' }]}>À régler</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#D1FAE5' },
-              selectedStatus === 'paid' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterByStatus('paid')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#10B981' }]}>{requestsSummary.paid}</Text>
-            <Text style={[styles.summaryLabel, { color: '#10B981' }]}>Réglées</Text>
-          </TouchableOpacity>
+          {Object.entries(corporateSummaryConfig).map(([categoryKey, config]) => {
+            if (categoryKey === 'total' || categoryKey === 'urgent') return null; // Handled separately
+
+            const count = requestsSummary[categoryKey as keyof typeof requestsSummary];
+            const SummaryIcon = config.icon;
+
+            return (
+              <TouchableOpacity 
+                key={categoryKey}
+                style={[
+                  styles.summaryCard, 
+                  { backgroundColor: `${config.color}15` },
+                  selectedSummaryCategory === categoryKey && styles.summaryCardSelected
+                ]}
+                onPress={() => handleFilterBySummaryCategory(categoryKey as CorporateSummaryCategory)}
+              >
+                <Text style={[styles.summaryNumber, { color: config.color }]}>{count}</Text>
+                <Text style={[styles.summaryLabel, { color: config.color }]}>{config.label}</Text>
+                
+                {/* Display sub-categories for "Bon à facturer", "À régler" and "Réglées" */}
+                {(categoryKey === 'ready_to_bill_group' || categoryKey === 'to_pay_group' || categoryKey === 'paid_group') && config.subCategories && (
+                  <View style={styles.subCategoryContainer}>
+                    {config.subCategories.map(sub => (
+                      <Text key={sub.key} style={[styles.subCategoryText, { color: config.color }]}>
+                        {sub.label}: {requestsSummary[sub.key as keyof typeof requestsSummary]}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </View>
         
-        {/* Source des demandes */}
-        <View style={styles.summaryGrid}>
+        <View style={styles.urgentCardContainer}>
           <TouchableOpacity 
             style={[
               styles.summaryCard, 
-              { backgroundColor: '#ECFDF5' },
-              selectedSource === 'boat_manager' && styles.summaryCardSelected
+              { backgroundColor: '#FEE2F2' },
+              selectedUrgency === 'urgent' && styles.summaryCardSelected
             ]}
-            onPress={() => handleFilterBySource('boat_manager')}
+            onPress={() => handleFilterByUrgency('urgent')}
           >
-            <Text style={[styles.summaryNumber, { color: '#10B981' }]}>{requestsSummary.boatManager}</Text>
-            <Text style={[styles.summaryLabel, { color: '#10B981' }]}>Boat Managers</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.summaryCard, 
-              { backgroundColor: '#F5F3FF' },
-              selectedSource === 'nautical_company' && styles.summaryCardSelected
-            ]}
-            onPress={() => handleFilterBySource('nautical_company')}
-          >
-            <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}>{requestsSummary.nauticalCompany}</Text>
-            <Text style={[styles.summaryLabel, { color: '#8B5CF6' }]}>Entreprises</Text>
+            <View style={styles.urgentCardContent}>
+              <AlertTriangle size={20} color="#DC2626" />
+              <Text style={styles.urgentCardText}>Demandes urgentes ({requestsSummary.urgent})</Text>
+            </View>
           </TouchableOpacity>
         </View>
       </View>
@@ -578,20 +692,21 @@ export default function RequestsScreen() {
             onChangeText={setSearchQuery}
           />
         </View>
+        
         <TouchableOpacity 
           style={[styles.filterButton, showFilters && styles.filterButtonActive]}
           onPress={() => setShowFilters(!showFilters)}
         >
-          <Filter size={20} color={showFilters ? '#0066CC' : '#666'} />
+          <Filter size={20} color={showFilters ? "#0066CC" : "#666"} />
         </TouchableOpacity>
       </View>
 
       {showFilters && (
         <View style={styles.filtersContainer}>
-          <Text style={styles.filtersTitle}>Filtres</Text>
+          <Text style={styles.filtersTitle}>Filtres par statut détaillé</Text>
           <View style={styles.statusFilters}>
             
-            {Object.entries(statusConfig).map(([status,config]) => {
+            {Object.entries(detailedStatusConfig).map(([status,config]) => {
               const StatusIcon = config.icon;
               return (
                 <TouchableOpacity 
@@ -599,9 +714,9 @@ export default function RequestsScreen() {
                   style={[
                     styles.statusFilter,
                     { backgroundColor: `${config.color}15` },
-                    selectedStatus === status && { borderColor: config.color, borderWidth: 2 }
+                    selectedSummaryCategory === status && { borderColor: config.color, borderWidth: 2 } // Use selectedSummaryCategory for detailed filter too
                   ]}
-                  onPress={() => handleFilterByStatus(status as RequestStatus)}
+                  onPress={() => handleFilterBySummaryCategory(status as CorporateSummaryCategory)}
                 >
                   <StatusIcon size={16} color={config.color} />
                   <Text style={[styles.statusFilterText, { color: config.color }]}>
@@ -617,12 +732,10 @@ export default function RequestsScreen() {
       {/* Liste des demandes */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          {selectedStatus 
-            ? `Demandes ${statusConfig[selectedStatus].label.toLowerCase()}`
+          {selectedSummaryCategory 
+            ? `Demandes ${corporateSummaryConfig[selectedSummaryCategory]?.label?.toLowerCase() || 'inconnu'}`
             : selectedUrgency === 'urgent'
             ? 'Demandes urgentes'
-            : selectedSource
-            ? `Demandes des ${sourceConfig[selectedSource].label.toLowerCase()}s`
             : 'Toutes les demandes'}
         </Text>
         
@@ -648,6 +761,16 @@ export default function RequestsScreen() {
           </TouchableOpacity>
           
           <TouchableOpacity 
+            style={[styles.sortButton, sortKey === 'boatManager' && styles.sortButtonActive]}
+            onPress={() => toggleSort('boatManager')}
+          >
+            <User size={16} color={sortKey === 'boatManager' ? '#0066CC' : '#666'} />
+            <Text style={[styles.sortButtonText, sortKey === 'boatManager' && styles.sortButtonTextActive]}>
+              Boat Manager {sortKey === 'boatManager' && (sortAsc ? '↑' : '↓')}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
             style={[styles.sortButton, sortKey === 'company' && styles.sortButtonActive]}
             onPress={() => toggleSort('company')}
           >
@@ -661,9 +784,12 @@ export default function RequestsScreen() {
         <View style={styles.requestsList}>
           {filteredAndSortedRequests.length > 0 ? (
             filteredAndSortedRequests.map((request) => {
-              const status = statusConfig[request.status];
-              const StatusIcon = status.icon;
-              const source = sourceConfig[request.source];
+              const status = detailedStatusConfig[request.status];
+              const StatusIcon = status ? status.icon : FileText;
+              const statusLabel = status ? status.label : 'Inconnu';
+              const statusColor = status ? status.color : '#666666';
+
+              const { handlerText, handlerIcon: HandlerIcon, handlerColor } = getHandlerInfo(request);
 
               return (
                 <TouchableOpacity 
@@ -695,19 +821,18 @@ export default function RequestsScreen() {
                       </View>
                       <Text style={styles.requestType}>{request.type}</Text>
                     </View>
-                    <View style={styles.statusContainer}>
-                      <View style={[styles.sourceBadge, { backgroundColor: `${source.color}15` }]}>
-                        <Text style={[styles.sourceText, { color: source.color }]}>
-                          {source.label}
-                        </Text>
-                      </View>
-                      <View style={[styles.statusBadge, { backgroundColor: `${status.color}15` }]}>
-                        <StatusIcon size={16} color={status.color} />
-                        <Text style={[styles.statusText, { color: status.color }]}>
-                          {status.label}
-                        </Text>
-                      </View>
-                    </View>
+                    <TouchableOpacity
+                      style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}
+                      onPress={() => {
+                        setRequestToUpdate(request);
+                        setShowStatusChangeModal(true);
+                      }}
+                    >
+                      <StatusIcon size={16} color={statusColor} />
+                      <Text style={[styles.statusText, { color: statusColor }]}>
+                        {statusLabel}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                   
                   <View style={styles.requestDetails}>
@@ -719,7 +844,7 @@ export default function RequestsScreen() {
                     </View>
                     <View style={styles.requestDate}>
                       <Calendar size={16} color="#666" />
-                      <Text style={styles.dateText}>{request.date}</Text>
+                      <Text style={styles.dateText}>{formatDate(request.date)}</Text>
                     </View>
                     <View style={styles.clientInfo}>
                       <User size={16} color="#666" />
@@ -732,23 +857,19 @@ export default function RequestsScreen() {
                       </View>
                     </View>
                     
-                    {request.boatManager && (
-                      <View style={styles.boatManagerInfo}>
-                        <User size={16} color="#0066CC" />
-                        <Text style={styles.boatManagerName}>{request.boatManager.name}</Text>
-                      </View>
-                    )}
-                    
-                    {request.company && (
-                      <View style={styles.companyInfo}>
-                        <Building size={16} color="#8B5CF6" />
-                        <Text style={styles.companyName}>{request.company.name}</Text>
+                    {/* Display current handler and progress */}
+                    {handlerText && HandlerIcon && (
+                      <View style={[styles.handlerInfo, { backgroundColor: `${handlerColor}15` }]}>
+                        <HandlerIcon size={16} color={handlerColor} />
+                        <Text style={[styles.handlerText, { color: handlerColor }]}>
+                          {handlerText}
+                        </Text>
                       </View>
                     )}
                     
                     {request.status === 'to_pay' && request.invoiceReference && (
                       <View style={styles.invoiceInfo}>
-                        <FileText size={16} color="#3B82F6" />
+                        <FileText size={16} color="#EAB308" />
                         <Text style={styles.invoiceText}>
                           Facture {request.invoiceReference} • {request.invoiceAmount ? new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(request.invoiceAmount) : ''}
                         </Text>
@@ -757,7 +878,7 @@ export default function RequestsScreen() {
                     
                     {request.status === 'paid' && request.invoiceReference && (
                       <View style={styles.paidInfo}>
-                        <Euro size={16} color="#10B981" />
+                        <Euro size={16} color="#a6acaf" />
                         <Text style={styles.paidText}>
                           Facture {request.invoiceReference} réglée
                         </Text>
@@ -785,12 +906,13 @@ export default function RequestsScreen() {
           ) : (
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateText}>
-                Aucune demande {selectedStatus ? statusConfig[selectedStatus].label.toLowerCase() : ''} trouvée
+                Aucune demande {selectedSummaryCategory ? corporateSummaryConfig[selectedSummaryCategory]?.label?.toLowerCase() || 'inconnu' : ''} trouvée
               </Text>
             </View>
           )}
         </View>
       </View>
+      <StatusChangeModal />
     </ScrollView>
   );
 }
@@ -799,6 +921,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   summaryContainer: {
     backgroundColor: 'white',
@@ -813,6 +939,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   totalCardContainer: {
+    marginBottom: 12,
+  },
+  urgentCardContainer: {
+    width: '100%',
     marginBottom: 12,
   },
   summaryGrid: {
@@ -860,6 +990,14 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
+  subCategoryContainer: {
+    marginTop: 4,
+    alignItems: 'center',
+  },
+  subCategoryText: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
   summaryNotificationBadge: {
     position: 'absolute',
     top: -5,
@@ -877,6 +1015,16 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
     fontWeight: 'bold',
+  },
+  urgentCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  urgentCardText: {
+    fontSize: 14,
+    color: '#DC2626',
+    fontWeight: '500',
   },
   searchSection: {
     padding: 20,
@@ -1002,13 +1150,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sortButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
-    gap: 8,
   },
   sortButtonActive: {
     backgroundColor: '#e0f2fe',
@@ -1129,7 +1274,7 @@ const styles = StyleSheet.create({
   urgentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEE2E2',
+    backgroundColor: '#FEE2F2',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
@@ -1298,5 +1443,66 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
-  }
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '80%',
+    width: '90%',
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+      },
+    }),
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 16,
+  },
+  statusOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  statusOptionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  statusOptionLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  statusOptionDescription: {
+    fontSize: 12,
+    color: '#666',
+  },
 });
+

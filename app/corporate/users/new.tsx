@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Modal, Alert, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Image, Alert, Modal, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, User, Mail, Phone, MapPin, Check, X, Plus, ImageIcon, Building, Shield } from 'lucide-react-native';
+import { ArrowLeft, User, Mail, Phone, Building, Shield, ImageIcon, X, Check, Lock } from 'lucide-react-native'; // Import Lock icon
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import supabase
+import bcrypt from 'bcryptjs'; // Import bcryptjs
 
 interface CorporateUserForm {
   firstName: string;
@@ -11,13 +13,20 @@ interface CorporateUserForm {
   email: string;
   phone: string;
   department: string;
-  role: 'super-admin' | 'admin' | 'secretary' | 'operator';
+  role: 'super-admin' | 'admin' | 'secretary' | 'operator'; // This will be the display role
   avatar: string;
+  password?: string; // Add password to the interface
 }
 
 interface RoleOption {
   value: 'super-admin' | 'admin' | 'secretary' | 'operator';
   label: string;
+}
+
+interface CorporateRole {
+  id: string;
+  name: string;
+  description: string;
 }
 
 const roleOptions: RoleOption[] = [
@@ -46,6 +55,73 @@ const getRoleColor = (role: CorporateUserForm['role']): string => {
   }
 };
 
+// Modal pour la sélection du rôle Corporate
+const CorporateRoleSelectionModal = ({
+  visible,
+  onClose,
+  onSelectRole,
+  corporateRoles,
+  selectedRoleId,
+  isLoadingRoles,
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un rôle</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalBody}>
+            {isLoadingRoles ? (
+              <ActivityIndicator size="large" color="#0066CC" />
+            ) : corporateRoles.length > 0 ? (
+              corporateRoles.map((role) => (
+                <TouchableOpacity 
+                  key={role.id}
+                  style={[
+                    styles.modalItem,
+                    selectedRoleId === role.id && styles.modalItemSelected
+                  ]}
+                  onPress={() => onSelectRole(role)}
+                >
+                  <Shield size={20} color={selectedRoleId === role.id ? '#0066CC' : '#666'} />
+                  <View style={styles.modalItemTextContainer}>
+                    <Text style={[
+                      styles.modalItemText,
+                      selectedRoleId === role.id && styles.modalItemTextSelected
+                    ]}>
+                      {role.name}
+                    </Text>
+                    <Text style={styles.modalItemDescription}>{role.description}</Text>
+                  </View>
+                  {selectedRoleId === role.id && (
+                    <Check size={20} color="#0066CC" />
+                  )}
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.emptyModalText}>Aucun rôle disponible.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+
 export default function NewCorporateUserScreen() {
   const { user } = useAuth();
   const [formData, setFormData] = useState<CorporateUserForm>({
@@ -56,12 +132,44 @@ export default function NewCorporateUserScreen() {
     department: '',
     role: 'operator', // Default role
     avatar: 'https://images.unsplash.com/photo-1633332755192-727a05c4013d?q=80&w=2080&auto=format&fit=crop', // Default neutral avatar
+    password: '', // Initialize password
   });
   const [errors, setErrors] = useState<Partial<CorporateUserForm>>({});
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false); // Set to true initially for data loading
+
+  const [corporateRoles, setCorporateRoles] = useState<CorporateRole[]>([]);
+  const [selectedCorporateRoleId, setSelectedCorporateRoleId] = useState<string | null>(null);
+  const [isLoadingRoles, setIsLoadingRoles] = useState(true);
+
+
+  useEffect(() => {
+    const fetchCorporateRoles = async () => {
+      setIsLoadingRoles(true);
+      const { data, error } = await supabase
+        .from('corporate_roles')
+        .select('id, name, description')
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('Error fetching corporate roles:', error);
+        Alert.alert('Erreur', 'Impossible de charger les rôles Corporate.');
+      } else {
+        setCorporateRoles(data);
+        // Optionally pre-select a default role if needed
+        if (data.length > 0 && !selectedCorporateRoleId) {
+          setSelectedCorporateRoleId(data[0].id);
+          setFormData(prev => ({ ...prev, role: data[0].name.toLowerCase().replace(/\s/g, '_') as CorporateUserForm['role'] }));
+        }
+      }
+      setIsLoadingRoles(false);
+    };
+
+    fetchCorporateRoles();
+  }, []);
+
 
   const handleChoosePhoto = async () => {
     if (!mediaPermission?.granted) {
@@ -89,26 +197,69 @@ export default function NewCorporateUserScreen() {
   const validateForm = () => {
     const newErrors: Partial<CorporateUserForm> = {};
     
-    if (!formData.firstName.trim()) newErrors.firstName = 'Le prénom est requis';
-    if (!formData.lastName.trim()) newErrors.lastName = 'Le nom est requis';
-    if (!formData.email.trim()) {
+    if (!formData.firstName?.trim()) newErrors.firstName = 'Le prénom est requis';
+    if (!formData.lastName?.trim()) newErrors.lastName = 'Le nom est requis';
+    if (!formData.email?.trim()) {
       newErrors.email = 'L\'email est requis';
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = 'L\'email n\'est pas valide';
     }
-    if (!formData.phone.trim()) newErrors.phone = 'Le téléphone est requis';
-    if (!formData.department.trim()) newErrors.department = 'Le département est requis';
-    if (!formData.role) newErrors.role = 'Le rôle est requis';
+    if (!formData.phone?.trim()) newErrors.phone = 'Le téléphone est requis';
+    if (!formData.department?.trim()) newErrors.department = 'Le département est requis';
+    if (!selectedCorporateRoleId) newErrors.role = 'Le rôle est requis'; // Validate selected role ID
+    if (!formData.password?.trim()) newErrors.password = 'Le mot de passe est requis'; // Validate password
+    if (formData.password && formData.password.length < 6) newErrors.password = 'Le mot de passe doit contenir au moins 6 caractères';
+
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (validateForm()) {
       setIsLoading(true);
-      // Simulate API call to add new user
-      setTimeout(() => {
+      try {
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(formData.password!, 10); // Use ! to assert non-null
+
+        // 1. Check if user already exists
+        const { data: existingUsers, error: existingUserError } = await supabase
+          .from('users')
+          .select('id')
+          .eq('e_mail', formData.email);
+
+        if (existingUserError) {
+          throw new Error("Erreur lors de la vérification de l'utilisateur existant.");
+        }
+        if (existingUsers && existingUsers.length > 0) {
+          throw new Error('Un compte avec cet email existe déjà.');
+        }
+
+        // 2. Create the new corporate user
+        const { data: newUser, error: userInsertError } = await supabase
+          .from('users')
+          .insert({
+            first_name: formData.firstName,
+            last_name: formData.lastName,
+            e_mail: formData.email,
+            phone: formData.phone,
+            department: formData.department,
+            profile: 'corporate', // Set profile to 'corporate'
+            corporate_role_id: selectedCorporateRoleId, // Assign the selected corporate role ID
+            avatar: formData.avatar,
+            password: hashedPassword, // Include the hashed password
+            status: 'active', // New users are active by default
+            created_at: new Date().toISOString(),
+            last_login: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
+
+        if (userInsertError) {
+          console.error('Error inserting user profile:', userInsertError);
+          throw new Error('Échec de la création du profil utilisateur.');
+        }
+
         Alert.alert(
           'Succès',
           'L\'utilisateur Corporate a été ajouté avec succès.',
@@ -119,8 +270,12 @@ export default function NewCorporateUserScreen() {
             }
           ]
         );
+      } catch (error: any) {
+        console.error('Submission error:', error);
+        Alert.alert('Erreur', error.message || 'Une erreur est survenue lors de l\'ajout de l\'utilisateur Corporate.');
+      } finally {
         setIsLoading(false);
-      }, 1500);
+      }
     }
   };
 
@@ -164,53 +319,12 @@ export default function NewCorporateUserScreen() {
     </Modal>
   );
 
-  const RoleSelectionModal = () => (
-    <Modal
-      visible={showRoleModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowRoleModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Sélectionner un rôle</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowRoleModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            {roleOptions.map((roleOption) => (
-              <TouchableOpacity 
-                key={roleOption.value}
-                style={[
-                  styles.modalItem,
-                  formData.role === roleOption.value && styles.modalItemSelected
-                ]}
-                onPress={() => {
-                  setFormData(prev => ({ ...prev, role: roleOption.value }));
-                  setShowRoleModal(false);
-                  if (errors.role) setErrors(prev => ({ ...prev, role: undefined }));
-                }}
-              >
-                <Shield size={20} color={formData.role === roleOption.value ? '#0066CC' : '#666'} />
-                <Text style={[
-                  styles.modalItemText,
-                  formData.role === roleOption.value && styles.modalItemTextSelected
-                ]}>
-                  {roleOption.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
+  const handleSelectCorporateRole = (role: CorporateRole) => {
+    setSelectedCorporateRoleId(role.id);
+    setFormData(prev => ({ ...prev, role: role.name.toLowerCase().replace(/\s/g, '_') as CorporateUserForm['role'] }));
+    setShowRoleModal(false);
+    if (errors.role) setErrors(prev => ({ ...prev, role: undefined }));
+  };
 
   return (
     <ScrollView style={styles.container}>
@@ -327,11 +441,26 @@ export default function NewCorporateUserScreen() {
               onPress={() => setShowRoleModal(true)}
             >
               <Shield size={20} color={errors.role ? '#ff4444' : '#666'} />
-              <Text style={[styles.input, styles.roleInputText, !formData.role && styles.placeholderText]}>
-                {formData.role ? getRoleName(formData.role) : 'Sélectionner un rôle'}
+              <Text style={[styles.input, styles.roleInputText, !selectedCorporateRoleId && styles.placeholderText]}>
+                {selectedCorporateRoleId ? corporateRoles.find(r => r.id === selectedCorporateRoleId)?.name : 'Sélectionner un rôle'}
               </Text>
             </TouchableOpacity>
             {errors.role && <Text style={styles.errorText}>{errors.role}</Text>}
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Mot de passe</Text>
+            <View style={[styles.inputWrapper, errors.password && styles.inputWrapperError]}>
+              <Lock size={20} color={errors.password ? '#ff4444' : '#666'} />
+              <TextInput
+                style={styles.input}
+                value={formData.password}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, password: text }))}
+                placeholder="Mot de passe"
+                secureTextEntry
+              />
+            </View>
+            {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
           </View>
         </View>
 
@@ -352,7 +481,14 @@ export default function NewCorporateUserScreen() {
       </View>
 
       <PhotoModal />
-      <RoleSelectionModal />
+      <CorporateRoleSelectionModal
+        visible={showRoleModal}
+        onClose={() => setShowRoleModal(false)}
+        onSelectRole={handleSelectCorporateRole}
+        corporateRoles={corporateRoles}
+        selectedRoleId={selectedCorporateRoleId}
+        isLoadingRoles={isLoadingRoles}
+      />
     </ScrollView>
   );
 }
@@ -504,9 +640,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#94a3b8',
   },
   submitButtonText: {
+    color: 'white',
     fontSize: 16,
     fontWeight: '600',
-    color: 'white',
   },
   modalOverlay: {
     flex: 1,
@@ -551,38 +687,9 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 4,
   },
-  modalOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  modalOptionText: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
-  deleteOption: {
-    backgroundColor: '#fff5f5',
-  },
-  deleteOptionText: {
-    fontSize: 16,
-    color: '#ff4444',
-  },
-  modalCancelButton: {
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  modalCancelText: {
-    fontSize: 16,
-    color: '#ff4444',
-    fontWeight: '600',
-  },
   modalBody: {
     padding: 16,
+    maxHeight: 400,
   },
   modalItem: {
     flexDirection: 'row',
@@ -595,6 +702,9 @@ const styles = StyleSheet.create({
   modalItemSelected: {
     backgroundColor: '#f0f7ff',
   },
+  modalItemTextContainer: {
+    flex: 1,
+  },
   modalItemText: {
     fontSize: 16,
     color: '#1a1a1a',
@@ -602,5 +712,15 @@ const styles = StyleSheet.create({
   modalItemTextSelected: {
     color: '#0066CC',
     fontWeight: '500',
+  },
+  modalItemDescription: {
+    fontSize: 12,
+    color: '#666',
+  },
+  emptyModalText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    paddingVertical: 20,
   },
 });

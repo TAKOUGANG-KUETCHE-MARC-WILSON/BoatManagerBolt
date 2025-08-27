@@ -1,12 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Platform, Alert, ActivityIndicator, Switch } from 'react-native';
 import { router } from 'expo-router';
 import { ArrowLeft, Search, Shield, Plus, CreditCard as Edit, Trash, X, Check, Users, Mail, Phone, User, Filter, ChevronDown, ChevronUp, Clock, Settings, FileText, Building, Euro } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
-type CorporateRole = 'super-admin' | 'admin' | 'secretary' | 'operator';
-type SortKey = 'name' | 'permissions';
-
+// Interface pour les permissions
 interface Permission {
   id: string;
   name: string;
@@ -14,136 +13,466 @@ interface Permission {
   enabled: boolean;
 }
 
+// Interface pour les rôles
 interface Role {
   id: string;
   name: string;
   description: string;
-  permissions: Permission[];
+  permissions: Permission[]; // Permissions spécifiques à ce rôle
   userCount: number;
-  isSystem?: boolean;
+  isSystem: boolean; // Correspond à is_system_role dans la DB
 }
 
-// Mock data for roles
-const mockRoles: Role[] = [
-  {
-    id: 'r1',
-    name: 'Super Admin',
-    description: 'Accès complet à toutes les fonctionnalités',
-    permissions: [
-      { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: true },
-      { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer, modifier et supprimer des utilisateurs', enabled: true },
-      { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: true },
-      { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: true },
-    ],
-    userCount: 2,
-    isSystem: true
-  },
-  {
-    id: 'r2',
-    name: 'Admin',
-    description: 'Accès à la plupart des fonctionnalités administratives',
-    permissions: [
-      { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer et modifier des utilisateurs', enabled: true },
-      { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: true },
-      { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: true },
-      { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: false },
-    ],
-    userCount: 3,
-    isSystem: true
-  },
-  {
-    id: 'r3',
-    name: 'Secrétaire',
-    description: 'Gestion des demandes et accès limité aux utilisateurs',
-    permissions: [
-      { id: 'view_users', name: 'Consultation utilisateurs', description: 'Voir les informations des utilisateurs', enabled: true },
-      { id: 'manage_requests', name: 'Gestion des demandes', description: 'Gérer les demandes des clients', enabled: true },
-      { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer et modifier des utilisateurs', enabled: false },
-      { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: false },
-      { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: false },
-      { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: false },
-    ],
-    userCount: 5,
-    isSystem: true
-  },
-  {
-    id: 'r4',
-    name: 'Opérateur',
-    description: 'Traitement des demandes et accès limité aux utilisateurs',
-    permissions: [
-      { id: 'view_users', name: 'Consultation utilisateurs', description: 'Voir les informations des utilisateurs', enabled: true },
-      { id: 'process_requests', name: 'Traitement des demandes', description: 'Traiter les demandes des clients', enabled: true },
-      { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer et modifier des utilisateurs', enabled: false },
-      { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: false },
-      { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: false },
-      { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: false },
-    ],
-    userCount: 8,
-    isSystem: true
-  },
-  {
-    id: 'r5',
-    name: 'Responsable Financier',
-    description: 'Accès aux données financières uniquement',
-    permissions: [
-      { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: true },
-      { id: 'view_users', name: 'Consultation utilisateurs', description: 'Voir les informations des utilisateurs', enabled: true },
-      { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer et modifier des utilisateurs', enabled: false },
-      { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: false },
-      { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: false },
-    ],
-    userCount: 2
-  }
-];
-
-// All available permissions
-const allPermissions: Permission[] = [
-  { id: 'manage_roles', name: 'Gestion des rôles Corporate', description: 'Gérer les rôles et permissions', enabled: false },
-  { id: 'manage_users', name: 'Gestion des utilisateurs', description: 'Créer, modifier et supprimer des utilisateurs', enabled: false },
-  { id: 'manage_partners', name: 'Gestion des partenaires', description: 'Gérer les Boat Managers et entreprises', enabled: false },
-  { id: 'manage_finances', name: 'Gestion financière', description: 'Accès aux données financières', enabled: false },
-  { id: 'view_users', name: 'Consultation utilisateurs', description: 'Voir les informations des utilisateurs', enabled: false },
-  { id: 'manage_requests', name: 'Gestion des demandes', description: 'Gérer les demandes des clients', enabled: false },
-  { id: 'process_requests', name: 'Traitement des demandes', description: 'Traiter les demandes des clients', enabled: false },
-];
-
-// Icons for permissions
+// Icônes pour les permissions (à adapter si vos noms de permissions changent)
 const permissionIcons: Record<string, React.ComponentType<any>> = {
-  manage_users: Users,
-  manage_roles: Shield,
-  manage_partners: Building,
-  manage_finances: Euro,
-  view_users: User,
+  manage_corporate_users: Users,
+  view_corporate_users: User,
+  manage_corporate_roles: Shield,
+  manage_corporate_settings: Settings,
+  manage_pleasure_boaters: User,
+  view_pleasure_boaters: User,
+  manage_pleasure_boater_boats: Building, // Using Building for boats
+  manage_pleasure_boater_requests: FileText,
+  manage_boat_managers: Users,
+  view_boat_managers: User,
+  assign_boat_managers: Users,
+  manage_boat_manager_skills: Shield,
+  manage_boat_manager_areas: Map, // Assuming Map icon for areas
+  manage_nautical_companies: Building,
+  view_nautical_companies: Building,
+  manage_nautical_company_skills: Shield,
+  manage_nautical_company_areas: Map,
   manage_requests: FileText,
   process_requests: FileText,
+  access_financials: Euro,
 };
+
+// Helper pour obtenir l'icône d'un type d'utilisateur (pour les filtres)
+const getUserTypeIcon = (userType: string) => {
+  switch (userType) {
+    case 'corporate': return Shield;
+    case 'pleasure_boater': return User;
+    case 'boat_manager': return Users;
+    case 'nautical_company': return Building;
+    default: return Shield;
+  }
+};
+
+// Helper pour obtenir le nom d'un type d'utilisateur (pour les filtres)
+const getUserTypeLabel = (userType: string) => {
+  switch (userType) {
+    case 'corporate': return 'Corporate';
+    case 'pleasure_boater': return 'Plaisancier';
+    case 'boat_manager': return 'Boat Manager';
+    case 'nautical_company': return 'Entreprise';
+    default: return userType;
+  }
+};
+
+// Helper pour obtenir la couleur d'un type d'utilisateur (pour les filtres)
+const getUserTypeColor = (userType: string) => {
+  switch (userType) {
+    case 'corporate': return '#F59E0B';
+    case 'pleasure_boater': return '#0EA5E9';
+    case 'boat_manager': return '#10B981';
+    case 'nautical_company': return '#8B5CF6';
+    default: return '#666666';
+  }
+};
+
+// --- Modale pour ajouter un rôle ---
+const AddRoleModal = memo(({
+  visible,
+  onClose,
+  formData,
+  setFormData,
+  formErrors,
+  setFormErrors,
+  allAvailablePermissions,
+  permissionIcons,
+  togglePermission,
+  isLoading,
+  handleSubmitAdd,
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Ajouter un rôle</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Nom du rôle</Text>
+              <View style={[styles.formInput, formErrors.name && styles.formInputError]}>
+                <Shield size={20} color={formErrors.name ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.textInput}
+                  value={formData.name}
+                  onChangeText={(text) => {
+                    setFormData(prev => ({ ...prev, name: text }));
+                    setFormErrors(prev => ({ ...prev, name: undefined }));
+                  }}
+                  placeholder="Nom du rôle"
+                />
+              </View>
+              {formErrors.name && (
+                <Text style={styles.errorText}>{formErrors.name}</Text>
+              )}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Description</Text>
+              <View style={[styles.formInput, styles.textAreaWrapper, formErrors.description && styles.formInputError]}>
+                <FileText size={20} color={formErrors.description ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={formData.description}
+                  onChangeText={(text) => {
+                    setFormData(prev => ({ ...prev, description: text }));
+                    setFormErrors(prev => ({ ...prev, description: undefined }));
+                  }}
+                  placeholder="Description du rôle"
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </View>
+              {formErrors.description && (
+                <Text style={styles.errorText}>{formErrors.description}</Text>
+              )}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Permissions</Text>
+              <View style={styles.permissionsContainer}>
+                {formData.permissions?.map((permission) => {
+                  const PermissionIcon = permissionIcons[permission.id] || Shield;
+                  return (
+                    <View key={permission.id} style={styles.permissionItem}>
+                      <View style={styles.permissionInfo}>
+                        <PermissionIcon size={20} color="#0066CC" />
+                        <View style={styles.permissionText}>
+                          <Text style={styles.permissionName}>{permission.name}</Text>
+                          <Text style={styles.permissionDescription}>{permission.description}</Text>
+                        </View>
+                      </View>
+                      <Switch
+                        value={permission.enabled}
+                        onValueChange={() => togglePermission(permission.id)}
+                        trackColor={{ false: '#e0e0e0', true: '#bfdbfe' }}
+                        thumbColor={permission.enabled ? '#0066CC' : '#fff'}
+                        ios_backgroundColor="#e0e0e0"
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={onClose}
+              disabled={isLoading}
+            >
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleSubmitAdd}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <>
+                  <Check size={20} color="white" />
+                  <Text style={styles.submitButtonText}>Ajouter</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
+// --- Modale pour modifier un rôle ---
+const EditRoleModal = memo(({
+  visible,
+  onClose,
+  formData,
+  setFormData,
+  formErrors,
+  setFormErrors,
+  allAvailablePermissions,
+  permissionIcons,
+  togglePermission,
+  isLoading,
+  handleSubmitEdit,
+  selectedRole,
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Modifier le rôle</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Nom du rôle</Text>
+              <View style={[styles.formInput, formErrors.name && styles.formInputError]}>
+                <Shield size={20} color={formErrors.name ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.textInput}
+                  value={formData.name}
+                  onChangeText={(text) => {
+                    setFormData(prev => ({ ...prev, name: text }));
+                    setFormErrors(prev => ({ ...prev, name: undefined }));
+                  }}
+                  placeholder="Nom du rôle"
+                  editable={!selectedRole?.isSystem}
+                />
+              </View>
+              {formErrors.name && (
+                <Text style={styles.errorText}>{formErrors.name}</Text>
+              )}
+              {selectedRole?.isSystem && (
+                <Text style={styles.infoText}>Les noms des rôles système ne peuvent pas être modifiés.</Text>
+              )}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Description</Text>
+              <View style={[styles.formInput, styles.textAreaWrapper, formErrors.description && styles.formInputError]}>
+                <FileText size={20} color={formErrors.description ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  value={formData.description}
+                  onChangeText={(text) => {
+                    setFormData(prev => ({ ...prev, description: text }));
+                    setFormErrors(prev => ({ ...prev, description: undefined }));
+                  }}
+                  placeholder="Description du rôle"
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </View>
+              {formErrors.description && (
+                <Text style={styles.errorText}>{formErrors.description}</Text>
+              )}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Permissions</Text>
+              <View style={styles.permissionsContainer}>
+                {formData.permissions?.map((permission) => {
+                  const PermissionIcon = permissionIcons[permission.id] || Shield;
+
+                  // For system roles, some permissions might be locked
+                  const isLocked = selectedRole?.isSystem &&
+                                  (selectedRole.id === 'r1' && permission.id === 'manage_roles'); // Example: Super Admin's manage_roles is locked
+
+                  return (
+                    <View key={permission.id} style={styles.permissionItem}>
+                      <View style={styles.permissionInfo}>
+                        <PermissionIcon size={20} color="#0066CC" />
+                        <View style={styles.permissionText}>
+                          <Text style={styles.permissionName}>{permission.name}</Text>
+                          <Text style={styles.permissionDescription}>{permission.description}</Text>
+                          {isLocked && (
+                            <Text style={styles.permissionLocked}>Cette permission est verrouillée pour ce rôle.</Text>
+                          )}
+                        </View>
+                      </View>
+                      <Switch
+                        value={permission.enabled}
+                        onValueChange={() => !isLocked && togglePermission(permission.id)}
+                        trackColor={{ false: '#e0e0e0', true: '#bfdbfe' }}
+                        thumbColor={permission.enabled ? '#0066CC' : '#fff'}
+                        ios_backgroundColor="#e0e0e0"
+                        disabled={isLocked}
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={onClose}
+              disabled={isLoading}
+            >
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleSubmitEdit}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <>
+                  <Check size={20} color="white" />
+                  <Text style={styles.submitButtonText}>Enregistrer</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
+// --- Modale pour supprimer un rôle ---
+const DeleteRoleModal = memo(({
+  visible,
+  onClose,
+  selectedRole,
+  isLoading,
+  handleConfirmDelete,
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, styles.deleteModalContent]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Supprimer le rôle</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+            >
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.deleteModalBody}>
+            {selectedRole?.isSystem ? (
+              <Text style={styles.deleteModalText}>
+                Le rôle "{selectedRole?.name}" est un rôle système et ne peut pas être supprimé.
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.deleteModalText}>
+                  Êtes-vous sûr de vouloir supprimer le rôle "{selectedRole?.name}" ?
+                </Text>
+                {selectedRole?.userCount ? (
+                  <Text style={styles.deleteModalWarning}>
+                    Ce rôle est attribué à {selectedRole.userCount} utilisateur{selectedRole.userCount > 1 ? 's' : ''}.
+                  </Text>
+                ) : null}
+                <Text style={styles.deleteModalWarning}>
+                  Cette action est irréversible.
+                </Text>
+              </>
+            )}
+          </View>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={onClose}
+              disabled={isLoading}
+            >
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+
+            {!selectedRole?.isSystem && (
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={handleConfirmDelete}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <>
+                    <Trash size={20} color="white" />
+                    <Text style={styles.deleteButtonText}>Supprimer</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
 
 export default function RolesManagementScreen() {
   const { user } = useAuth();
-  const [roles, setRoles] = useState<Role[]>(mockRoles);
-  const [filteredRoles, setFilteredRoles] = useState<Role[]>(mockRoles);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [filteredRoles, setFilteredRoles] = useState<Role[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [selectedUserType, setSelectedUserType] = useState<string | null>(null); // Filter by user type associated with permissions
+  const [showFilters, setShowFilters] = useState(false);
+  const [showUserTypeFilter, setShowUserTypeFilter] = useState(false);
+  const [sortKey, setSortKey] = useState<'name' | 'permissions' | 'userCount'>('name');
   const [sortAsc, setSortAsc] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   
   // Form state for add/edit role
   const [formData, setFormData] = useState<Partial<Role>>({
     name: '',
     description: '',
-    permissions: [...allPermissions.map(p => ({ ...p, enabled: false }))]
+    permissions: [],
   });
   
   // Form errors
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // Check if user is super-admin
-  const isSuperAdmin = user?.role === 'corporate' && 
-                      user.permissions?.canManageRoles === true;
+  // State to store all available permissions (fetched once)
+  const [allAvailablePermissions, setAllAvailablePermissions] = useState<Permission[]>([]);
+
+  // Check if user is super-admin (or has permission to manage roles)
+  const isSuperAdmin = user?.role === 'corporate' && user?.permissions?.canManageRoles === true;
 
   // Redirect if not super-admin
   useEffect(() => {
@@ -161,6 +490,90 @@ export default function RolesManagementScreen() {
     }
   }, [isSuperAdmin]);
 
+  // Fetch all available permissions and roles data on component mount
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch all available permissions
+        const { data: permissionsData, error: permissionsError } = await supabase
+          .from('corporate_permissions')
+          .select('id, name, description, category'); // Fetch category to potentially filter by it
+
+        if (permissionsError) {
+          console.error('Error fetching all available permissions:', permissionsError);
+          Alert.alert('Erreur', 'Impossible de charger les permissions disponibles.');
+          return;
+        }
+        setAllAvailablePermissions(permissionsData.map(p => ({ ...p, enabled: false })));
+
+        // Fetch all roles and their associated data
+        const { data: rolesData, error: rolesError } = await supabase
+          .from('corporate_roles')
+          .select('id, name, description, is_system_role');
+
+        if (rolesError) {
+          console.error('Error fetching corporate roles:', rolesError);
+          Alert.alert('Erreur', 'Impossible de charger les rôles.');
+          return;
+        }
+
+        const fetchedRoles: Role[] = [];
+
+        for (const role of rolesData) {
+          // Fetch permissions for this role
+          const { data: rolePermissionsData, error: rolePermissionsError } = await supabase
+            .from('corporate_role_permissions')
+            .select('permission_id, enabled')
+            .eq('role_id', role.id);
+
+          if (rolePermissionsError) {
+            console.error(`Error fetching permissions for role ${role.name}:`, rolePermissionsError);
+          }
+
+          // Construct the permissions array for this role based on all available permissions
+          const currentRolePermissions: Permission[] = permissionsData.map(p => {
+            const foundPerm = (rolePermissionsData || []).find(rp => rp.permission_id === p.id);
+            return {
+              id: p.id,
+              name: p.name,
+              description: p.description,
+              enabled: foundPerm ? foundPerm.enabled : false,
+            };
+          });
+
+          // Count users for this role
+          const { count: userCount, error: userCountError } = await supabase
+            .from('users')
+            .select('id', { count: 'exact' })
+            .eq('corporate_role_id', role.id);
+
+          if (userCountError) {
+            console.error(`Error counting users for role ${role.name}:`, userCountError);
+          }
+
+          fetchedRoles.push({
+            id: role.id.toString(),
+            name: role.name,
+            description: role.description,
+            permissions: currentRolePermissions,
+            userCount: userCount || 0,
+            isSystem: role.is_system_role,
+          });
+        }
+
+        setRoles(fetchedRoles);
+      } catch (e) {
+        console.error('Unexpected error fetching initial data:', e);
+        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des données.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchInitialData();
+  }, []);
+
   // Apply filters and sorting
   useEffect(() => {
     let result = [...roles];
@@ -170,13 +583,23 @@ export default function RolesManagementScreen() {
       const query = searchQuery.toLowerCase();
       result = result.filter(role => 
         role.name.toLowerCase().includes(query) ||
-        role.description.toLowerCase().includes(query)
+        role.description.toLowerCase().includes(query) ||
+        role.permissions.some(p => p.name.toLowerCase().includes(query) || p.description.toLowerCase().includes(query))
+      );
+    }
+    
+    // Apply user type filter (based on permission categories)
+    if (selectedUserType) {
+      result = result.filter(role => 
+        role.permissions.some(p => 
+          allAvailablePermissions.find(ap => ap.id === p.id && ap.category === selectedUserType)
+        )
       );
     }
     
     // Apply sorting
     result.sort((a, b) => {
-      let valueA, valueB;
+      let valueA: any, valueB: any;
       
       switch (sortKey) {
         case 'name':
@@ -186,6 +609,10 @@ export default function RolesManagementScreen() {
         case 'permissions':
           valueA = a.permissions.filter(p => p.enabled).length;
           valueB = b.permissions.filter(p => p.enabled).length;
+          break;
+        case 'userCount':
+          valueA = a.userCount;
+          valueB = b.userCount;
           break;
         default:
           valueA = a.name.toLowerCase();
@@ -202,9 +629,9 @@ export default function RolesManagementScreen() {
     });
     
     setFilteredRoles(result);
-  }, [roles, searchQuery, sortKey, sortAsc]);
+  }, [roles, searchQuery, selectedUserType, sortKey, sortAsc, allAvailablePermissions]);
 
-  const handleSort = (key: SortKey) => {
+  const handleSort = (key: 'name' | 'permissions' | 'userCount') => {
     if (sortKey === key) {
       setSortAsc(!sortAsc);
     } else {
@@ -217,7 +644,7 @@ export default function RolesManagementScreen() {
     setFormData({
       name: '',
       description: '',
-      permissions: [...allPermissions.map(p => ({ ...p, enabled: false }))]
+      permissions: allAvailablePermissions.map(p => ({ ...p, enabled: false })) // All disabled by default
     });
     setFormErrors({});
     setShowAddModal(true);
@@ -226,16 +653,21 @@ export default function RolesManagementScreen() {
   const handleEditRole = (role: Role) => {
     setSelectedRole(role);
     
-    // Create a complete permissions list with enabled status from the role
-    const completePermissions = allPermissions.map(p => {
-      const existingPerm = role.permissions.find(rp => rp.id === p.id);
-      return existingPerm ? { ...existingPerm } : { ...p, enabled: false };
+    // Construct formData.permissions based on allAvailablePermissions and the role's current permissions
+    const currentRolePermissions: Permission[] = allAvailablePermissions.map(p => {
+      const foundPerm = role.permissions.find(rp => rp.id === p.id);
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        enabled: foundPerm ? foundPerm.enabled : false,
+      };
     });
-    
+
     setFormData({
       name: role.name,
       description: role.description,
-      permissions: completePermissions
+      permissions: currentRolePermissions
     });
     setFormErrors({});
     setShowEditModal(true);
@@ -272,65 +704,126 @@ export default function RolesManagementScreen() {
     return Object.keys(errors).length === 0;
   };
 
-  const handleSubmitAdd = () => {
+  const handleSubmitAdd = async () => {
     if (!validateForm()) return;
     
     setIsLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      const newRole: Role = {
-        id: `r${Date.now()}`,
-        name: formData.name!,
-        description: formData.description!,
-        permissions: formData.permissions!.filter(p => p.enabled),
-        userCount: 0
-      };
+    try {
+      // 1. Insert new role
+      const { data: newRoleData, error: roleInsertError } = await supabase
+        .from('corporate_roles')
+        .insert({
+          name: formData.name!,
+          description: formData.description!,
+          is_system_role: false, // New roles are not system roles by default
+        })
+        .select('id')
+        .single();
+
+      if (roleInsertError) {
+        console.error('Error inserting new role:', roleInsertError);
+        Alert.alert('Erreur', `Échec de la création du rôle: ${roleInsertError.message}`);
+        return;
+      }
+
+      // 2. Insert selected permissions for the new role
+      const permissionsToInsert = formData.permissions!
+        .filter(p => p.enabled)
+        .map(p => ({
+          role_id: newRoleData.id,
+          permission_id: p.id,
+          enabled: true,
+        }));
+
+      if (permissionsToInsert.length > 0) {
+        const { error: permissionsInsertError } = await supabase
+          .from('corporate_role_permissions')
+          .insert(permissionsToInsert);
+
+        if (permissionsInsertError) {
+          console.error('Error inserting role permissions:', permissionsInsertError);
+          Alert.alert('Erreur', `Échec de l'affectation des permissions: ${permissionsInsertError.message}`);
+          // Consider rolling back role creation here if permissions are critical
+        }
+      }
       
-      setRoles(prev => [...prev, newRole]);
+      Alert.alert('Succès', 'Le rôle a été créé avec succès', [{ text: 'OK' }]);
       setShowAddModal(false);
+      // Refetch all data to update the UI
+      // This is a simple way to refresh, for larger apps consider more granular state updates
+      window.location.reload(); // Simple reload for full refresh
+    } catch (e) {
+      console.error('Unexpected error during add role:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'ajout du rôle.');
+    } finally {
       setIsLoading(false);
-      
-      Alert.alert(
-        'Succès',
-        'Le rôle a été créé avec succès',
-        [{ text: 'OK' }]
-      );
-    }, 1000);
+    }
   };
 
-  const handleSubmitEdit = () => {
+  const handleSubmitEdit = async () => {
     if (!validateForm() || !selectedRole) return;
     
     setIsLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      setRoles(prev => 
-        prev.map(r => 
-          r.id === selectedRole.id
-            ? {
-                ...r,
-                name: formData.name!,
-                description: formData.description!,
-                permissions: formData.permissions!.filter(p => p.enabled)
-              }
-            : r
-        )
-      );
+    try {
+      // 1. Update role details
+      const { error: roleUpdateError } = await supabase
+        .from('corporate_roles')
+        .update({
+          name: formData.name!,
+          description: formData.description!,
+        })
+        .eq('id', selectedRole.id);
+
+      if (roleUpdateError) {
+        console.error('Error updating role:', roleUpdateError);
+        Alert.alert('Erreur', `Échec de la mise à jour du rôle: ${roleUpdateError.message}`);
+        return;
+      }
+
+      // 2. Delete existing permissions for this role
+      const { error: deletePermissionsError } = await supabase
+        .from('corporate_role_permissions')
+        .delete()
+        .eq('role_id', selectedRole.id);
+
+      if (deletePermissionsError) {
+        console.error('Error deleting old role permissions:', deletePermissionsError);
+        Alert.alert('Erreur', `Échec de la suppression des anciennes permissions: ${deletePermissionsError.message}`);
+        // Decide if you want to proceed or rollback
+      }
+
+      // 3. Insert new set of selected permissions
+      const permissionsToInsert = formData.permissions!
+        .filter(p => p.enabled)
+        .map(p => ({
+          role_id: selectedRole.id,
+          permission_id: p.id,
+          enabled: true,
+        }));
+
+      if (permissionsToInsert.length > 0) {
+        const { error: insertPermissionsError } = await supabase
+          .from('corporate_role_permissions')
+          .insert(permissionsToInsert);
+
+        if (insertPermissionsError) {
+          console.error('Error inserting new role permissions:', insertPermissionsError);
+          Alert.alert('Erreur', `Échec de l'affectation des nouvelles permissions: ${insertPermissionsError.message}`);
+        }
+      }
       
+      Alert.alert('Succès', 'Le rôle a été modifié avec succès', [{ text: 'OK' }]);
       setShowEditModal(false);
+      window.location.reload(); // Simple reload for full refresh
+    } catch (e) {
+      console.error('Unexpected error during edit role:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la modification du rôle.');
+    } finally {
       setIsLoading(false);
-      
-      Alert.alert(
-        'Succès',
-        'Le rôle a été modifié avec succès',
-        [{ text: 'OK' }]
-      );
-    }, 1000);
+    }
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!selectedRole) return;
     
     // Check if it's a system role
@@ -348,356 +841,53 @@ export default function RolesManagementScreen() {
     if (selectedRole.userCount > 0) {
       Alert.alert(
         'Attention',
-        `Ce rôle est attribué à ${selectedRole.userCount} utilisateur${selectedRole.userCount > 1 ? 's' : ''}. Voulez-vous vraiment le supprimer ?`,
+        `Ce rôle est attribué à ${selectedRole.userCount} utilisateur${selectedRole.userCount > 1 ? 's' : ''}. Pour le supprimer, vous devez d'abord réaffecter ces utilisateurs à un autre rôle.`,
         [
           {
-            text: 'Annuler',
-            style: 'cancel',
+            text: 'OK',
             onPress: () => setShowDeleteModal(false)
-          },
-          {
-            text: 'Supprimer',
-            style: 'destructive',
-            onPress: () => {
-              setIsLoading(true);
-              
-              // Simulate API call
-              setTimeout(() => {
-                setRoles(prev => prev.filter(r => r.id !== selectedRole.id));
-                setShowDeleteModal(false);
-                setIsLoading(false);
-                
-                Alert.alert(
-                  'Succès',
-                  'Le rôle a été supprimé avec succès',
-                  [{ text: 'OK' }]
-                );
-              }, 1000);
-            }
           }
         ]
       );
-    } else {
-      setIsLoading(true);
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      // 1. Delete permissions associated with the role
+      const { error: deletePermissionsError } = await supabase
+        .from('corporate_role_permissions')
+        .delete()
+        .eq('role_id', selectedRole.id);
+
+      if (deletePermissionsError) {
+        console.error('Error deleting role permissions:', deletePermissionsError);
+        Alert.alert('Erreur', `Échec de la suppression des permissions du rôle: ${deletePermissionsError.message}`);
+        return;
+      }
+
+      // 2. Delete the role itself
+      const { error: deleteRoleError } = await supabase
+        .from('corporate_roles')
+        .delete()
+        .eq('id', selectedRole.id);
+
+      if (deleteRoleError) {
+        console.error('Error deleting role:', deleteRoleError);
+        Alert.alert('Erreur', `Échec de la suppression du rôle: ${deleteRoleError.message}`);
+        return;
+      }
       
-      // Simulate API call
-      setTimeout(() => {
-        setRoles(prev => prev.filter(r => r.id !== selectedRole.id));
-        setShowDeleteModal(false);
-        setIsLoading(false);
-        
-        Alert.alert(
-          'Succès',
-          'Le rôle a été supprimé avec succès',
-          [{ text: 'OK' }]
-        );
-      }, 1000);
+      Alert.alert('Succès', 'Le rôle a été supprimé avec succès', [{ text: 'OK' }]);
+      setShowDeleteModal(false);
+      window.location.reload(); // Simple reload for full refresh
+    } catch (e) {
+      console.error('Unexpected error during delete role:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la suppression du rôle.');
+    } finally {
+      setIsLoading(false);
     }
   };
-
-  // Modal components
-  const AddRoleModal = () => (
-    <Modal
-      visible={showAddModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowAddModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Ajouter un rôle</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowAddModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Nom du rôle</Text>
-              <View style={[styles.formInput, formErrors.name && styles.formInputError]}>
-                <Shield size={20} color={formErrors.name ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.textInput}
-                  value={formData.name}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, name: text }))}
-                  placeholder="Nom du rôle"
-                />
-              </View>
-              {formErrors.name && (
-                <Text style={styles.errorText}>{formErrors.name}</Text>
-              )}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Description</Text>
-              <View style={[styles.formInput, formErrors.description && styles.formInputError]}>
-                <FileText size={20} color={formErrors.description ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.textInput}
-                  value={formData.description}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, description: text }))}
-                  placeholder="Description du rôle"
-                />
-              </View>
-              {formErrors.description && (
-                <Text style={styles.errorText}>{formErrors.description}</Text>
-              )}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Permissions</Text>
-              <View style={styles.permissionsContainer}>
-                {formData.permissions?.map((permission) => {
-                  const PermissionIcon = permissionIcons[permission.id] || Shield;
-                  return (
-                    <View key={permission.id} style={styles.permissionItem}>
-                      <View style={styles.permissionInfo}>
-                        <PermissionIcon size={20} color="#0066CC" />
-                        <View style={styles.permissionText}>
-                          <Text style={styles.permissionName}>{permission.name}</Text>
-                          <Text style={styles.permissionDescription}>{permission.description}</Text>
-                        </View>
-                      </View>
-                      <Switch
-                        value={permission.enabled}
-                        onValueChange={() => togglePermission(permission.id)}
-                        trackColor={{ false: '#e0e0e0', true: '#bfdbfe' }}
-                        thumbColor={permission.enabled ? '#0066CC' : '#fff'}
-                        ios_backgroundColor="#e0e0e0"
-                      />
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          </ScrollView>
-          
-          <View style={styles.modalFooter}>
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => setShowAddModal(false)}
-              disabled={isLoading}
-            >
-              <Text style={styles.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.submitButton}
-              onPress={handleSubmitAdd}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="white" size="small" />
-              ) : (
-                <>
-                  <Check size={20} color="white" />
-                  <Text style={styles.submitButtonText}>Ajouter</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const EditRoleModal = () => (
-    <Modal
-      visible={showEditModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowEditModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Modifier le rôle</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowEditModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalBody}>
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Nom du rôle</Text>
-              <View style={[styles.formInput, formErrors.name && styles.formInputError]}>
-                <Shield size={20} color={formErrors.name ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.textInput}
-                  value={formData.name}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, name: text }))}
-                  placeholder="Nom du rôle"
-                  editable={!selectedRole?.isSystem}
-                />
-              </View>
-              {formErrors.name && (
-                <Text style={styles.errorText}>{formErrors.name}</Text>
-              )}
-              {selectedRole?.isSystem && (
-                <Text style={styles.infoText}>Les noms des rôles système ne peuvent pas être modifiés.</Text>
-              )}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Description</Text>
-              <View style={[styles.formInput, formErrors.description && styles.formInputError]}>
-                <FileText size={20} color={formErrors.description ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.textInput}
-                  value={formData.description}
-                  onChangeText={(text) => setFormData(prev => ({ ...prev, description: text }))}
-                  placeholder="Description du rôle"
-                />
-              </View>
-              {formErrors.description && (
-                <Text style={styles.errorText}>{formErrors.description}</Text>
-              )}
-            </View>
-            
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Permissions</Text>
-              <View style={styles.permissionsContainer}>
-                {formData.permissions?.map((permission) => {
-                  const PermissionIcon = permissionIcons[permission.id] || Shield;
-                  
-                  // For system roles, some permissions might be locked
-                  const isLocked = selectedRole?.isSystem && 
-                                  (selectedRole.id === 'r1' && permission.id === 'manage_roles');
-                  
-                  return (
-                    <View key={permission.id} style={styles.permissionItem}>
-                      <View style={styles.permissionInfo}>
-                        <PermissionIcon size={20} color="#0066CC" />
-                        <View style={styles.permissionText}>
-                          <Text style={styles.permissionName}>{permission.name}</Text>
-                          <Text style={styles.permissionDescription}>{permission.description}</Text>
-                          {isLocked && (
-                            <Text style={styles.permissionLocked}>Cette permission est verrouillée pour ce rôle.</Text>
-                          )}
-                        </View>
-                      </View>
-                      <Switch
-                        value={permission.enabled}
-                        onValueChange={() => !isLocked && togglePermission(permission.id)}
-                        trackColor={{ false: '#e0e0e0', true: '#bfdbfe' }}
-                        thumbColor={permission.enabled ? '#0066CC' : '#fff'}
-                        ios_backgroundColor="#e0e0e0"
-                        disabled={isLocked}
-                      />
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          </ScrollView>
-          
-          <View style={styles.modalFooter}>
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => setShowEditModal(false)}
-              disabled={isLoading}
-            >
-              <Text style={styles.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.submitButton}
-              onPress={handleSubmitEdit}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="white" size="small" />
-              ) : (
-                <>
-                  <Check size={20} color="white" />
-                  <Text style={styles.submitButtonText}>Enregistrer</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const DeleteRoleModal = () => (
-    <Modal
-      visible={showDeleteModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowDeleteModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, styles.deleteModalContent]}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Supprimer le rôle</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={() => setShowDeleteModal(false)}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.deleteModalBody}>
-            {selectedRole?.isSystem ? (
-              <Text style={styles.deleteModalText}>
-                Le rôle "{selectedRole?.name}" est un rôle système et ne peut pas être supprimé.
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.deleteModalText}>
-                  Êtes-vous sûr de vouloir supprimer le rôle "{selectedRole?.name}" ?
-                </Text>
-                {selectedRole?.userCount ? (
-                  <Text style={styles.deleteModalWarning}>
-                    Ce rôle est attribué à {selectedRole.userCount} utilisateur{selectedRole.userCount > 1 ? 's' : ''}.
-                  </Text>
-                ) : null}
-                <Text style={styles.deleteModalWarning}>
-                  Cette action est irréversible.
-                </Text>
-              </>
-            )}
-          </View>
-          
-          <View style={styles.modalFooter}>
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => setShowDeleteModal(false)}
-              disabled={isLoading}
-            >
-              <Text style={styles.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            {!selectedRole?.isSystem && (
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={handleConfirmDelete}
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="white" size="small" />
-                ) : (
-                  <>
-                    <Trash size={20} color="white" />
-                    <Text style={styles.deleteButtonText}>Supprimer</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
 
   // If not super-admin, don't render the content
   if (!isSuperAdmin) {
@@ -771,73 +961,127 @@ export default function RolesManagementScreen() {
             Permissions {sortKey === 'permissions' && (sortAsc ? '↑' : '↓')}
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.sortButton, sortKey === 'userCount' && styles.sortButtonActive]}
+          onPress={() => handleSort('userCount')}
+        >
+          <Text style={[styles.sortButtonText, sortKey === 'userCount' && styles.sortButtonTextActive]}>
+            Utilisateurs {sortKey === 'userCount' && (sortAsc ? '↑' : '↓')}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.rolesList}>
         {filteredRoles.length > 0 ? (
-          filteredRoles.map((role) => (
-            <View key={role.id} style={styles.roleCard}>
-              <View style={styles.roleInfo}>
-                <View style={styles.roleHeader}>
-                  <Text style={styles.roleName}>{role.name}</Text>
-                  {role.isSystem && (
-                    <View style={styles.systemBadge}>
-                      <Text style={styles.systemBadgeText}>Système</Text>
-                    </View>
-                  )}
-                </View>
-                
-                <Text style={styles.roleDescription}>{role.description}</Text>
-                
-                <View style={styles.permissionsSummary}>
-                  <Text style={styles.permissionsSummaryText}>
-                    {role.permissions.length} permission{role.permissions.length > 1 ? 's' : ''}
-                  </Text>
-                  <View style={styles.permissionBadges}>
-                    {role.permissions.slice(0, 3).map((permission) => {
-                      const PermissionIcon = permissionIcons[permission.id] || Shield;
-                      return (
-                        <View key={permission.id} style={styles.permissionBadge}>
-                          <PermissionIcon size={14} color="#0066CC" />
-                          <Text style={styles.permissionBadgeText}>{permission.name}</Text>
-                        </View>
-                      );
-                    })}
-                    {role.permissions.length > 3 && (
-                      <View style={styles.permissionBadge}>
-                        <Text style={styles.permissionBadgeText}>+{role.permissions.length - 3}</Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-                
-                <View style={styles.userCountContainer}>
-                  <Users size={16} color="#666" />
-                  <Text style={styles.userCountText}>
-                    {role.userCount} utilisateur{role.userCount > 1 ? 's' : ''}
-                  </Text>
-                </View>
+          Object.entries(
+            filteredRoles.reduce((acc, role) => {
+              // Determine category based on permissions
+              const enabledPermissions = role.permissions.filter(p => p.enabled);
+              let category = 'Autres'; // Default category if no specific permission type is found
+
+              if (enabledPermissions.some(p => allAvailablePermissions.find(ap => ap.id === p.id && ap.category === 'Gestion des utilisateurs'))) {
+                category = 'Gestion des utilisateurs';
+              } else if (enabledPermissions.some(p => allAvailablePermissions.find(ap => ap.id === p.id && ap.category === 'Gestion des partenaires'))) {
+                category = 'Gestion des partenaires';
+              } else if (enabledPermissions.some(p => allAvailablePermissions.find(ap => ap.id === p.id && ap.category === 'Gestion des services'))) {
+                category = 'Gestion des services';
+              } else if (enabledPermissions.some(p => allAvailablePermissions.find(ap => ap.id === p.id && ap.category === 'Gestion financière'))) {
+                category = 'Gestion financière';
+              } else if (enabledPermissions.some(p => allAvailablePermissions.find(ap => ap.id === p.id && ap.category === 'Paramètres de la plateforme'))) {
+                category = 'Paramètres de la plateforme';
+              }
+              
+              if (!acc[category]) {
+                acc[category] = [];
+              }
+              acc[category].push(role);
+              return acc;
+            }, {} as Record<string, Role[]>)
+          ).map(([category, rolesInCategory]) => (
+            <View key={category} style={styles.userTypeSection}>
+              <View style={[
+                styles.userTypeSectionHeader,
+                { backgroundColor: `${getUserTypeColor(category)}15` }
+              ]}>
+                {/* Corrected usage: assign component to a variable first */}
+                {(() => {
+                  const IconComponent = getUserTypeIcon(category);
+                  return <IconComponent size={20} color={getUserTypeColor(category)} />;
+                })()}
+                <Text style={[
+                  styles.userTypeSectionTitle,
+                  { color: getUserTypeColor(category) }
+                ]}>
+                  {getUserTypeLabel(category)}
+                </Text>
               </View>
               
-              <View style={styles.roleActions}>
-                <TouchableOpacity 
-                  style={styles.editButton}
-                  onPress={() => handleEditRole(role)}
-                >
-                  <Edit size={20} color="#0066CC" />
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[
-                    styles.deleteButton,
-                    role.isSystem && styles.disabledButton
-                  ]}
-                  onPress={() => handleDeleteRole(role)}
-                  disabled={role.isSystem}
-                >
-                  <Trash size={20} color={role.isSystem ? "#ccc" : "#ff4444"} />
-                </TouchableOpacity>
-              </View>
+              {rolesInCategory.map((role) => (
+                <View key={role.id} style={styles.roleCard}>
+                  <View style={styles.roleInfo}>
+                    <View style={styles.roleHeader}>
+                      <Text style={styles.roleName}>{role.name}</Text>
+                      {role.isSystem && (
+                        <View style={styles.systemBadge}>
+                          <Text style={styles.systemBadgeText}>Système</Text>
+                        </View>
+                      )}
+                    </View>
+                    
+                    <Text style={styles.roleDescription}>{role.description}</Text>
+                    
+                    <View style={styles.permissionsSummary}>
+                      <Text style={styles.permissionsSummaryText}>
+                        {role.permissions.filter(p => p.enabled).length} permission{role.permissions.filter(p => p.enabled).length > 1 ? 's' : ''} activée{role.permissions.filter(p => p.enabled).length > 1 ? 's' : ''}
+                      </Text>
+                      <View style={styles.permissionBadges}>
+                        {role.permissions.filter(p => p.enabled).slice(0, 3).map((permission) => {
+                          const PermissionIcon = permissionIcons[permission.id] || Shield;
+                          return (
+                            <View key={permission.id} style={styles.permissionBadge}>
+                              <PermissionIcon size={14} color="#0066CC" />
+                              <Text style={styles.permissionBadgeText}>{permission.name}</Text>
+                            </View>
+                          );
+                        })}
+                        {role.permissions.filter(p => p.enabled).length > 3 && (
+                          <View style={styles.permissionBadge}>
+                            <Text style={styles.permissionBadgeText}>+{role.permissions.filter(p => p.enabled).length - 3}</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    
+                    <View style={styles.userCountContainer}>
+                      <Users size={16} color="#666" />
+                      <Text style={styles.userCountText}>
+                        {role.userCount} utilisateur{role.userCount > 1 ? 's' : ''}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.roleActions}>
+                    <TouchableOpacity 
+                      style={styles.editButton}
+                      onPress={() => handleEditRole(role)}
+                    >
+                      <Edit size={20} color="#0066CC" />
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={[
+                        styles.deleteButton,
+                        (role.isSystem || role.userCount > 0) && styles.disabledButton
+                      ]}
+                      onPress={() => handleDeleteRole(role)}
+                      disabled={role.isSystem || role.userCount > 0}
+                    >
+                      <Trash size={20} color={(role.isSystem || role.userCount > 0) ? "#ccc" : "#ff4444"} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
             </View>
           ))
         ) : (
@@ -851,9 +1095,40 @@ export default function RolesManagementScreen() {
         )}
       </ScrollView>
 
-      <AddRoleModal />
-      <EditRoleModal />
-      <DeleteRoleModal />
+      <AddRoleModal
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        formData={formData}
+        setFormData={setFormData}
+        formErrors={formErrors}
+        setFormErrors={setFormErrors}
+        allAvailablePermissions={allAvailablePermissions}
+        permissionIcons={permissionIcons}
+        togglePermission={togglePermission}
+        isLoading={isLoading}
+        handleSubmitAdd={handleSubmitAdd}
+      />
+      <EditRoleModal
+        visible={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        formData={formData}
+        setFormData={setFormData}
+        formErrors={formErrors}
+        setFormErrors={setFormErrors}
+        allAvailablePermissions={allAvailablePermissions}
+        permissionIcons={permissionIcons}
+        togglePermission={togglePermission}
+        isLoading={isLoading}
+        handleSubmitEdit={handleSubmitEdit}
+        selectedRole={selectedRole}
+      />
+      <DeleteRoleModal
+        visible={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        selectedRole={selectedRole}
+        isLoading={isLoading}
+        handleConfirmDelete={handleConfirmDelete}
+      />
     </View>
   );
 }
@@ -879,6 +1154,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flex: 1,
+    textAlign: 'center',
   },
   addButton: {
     padding: 8,
@@ -1167,7 +1444,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     paddingHorizontal: 12,
-    height: 48,
+    // Removed fixed height: height: 48,
+  },
+  textAreaWrapper: {
+    alignItems: 'flex-start', // Align items to the top for multiline
+    paddingVertical: 12, // Add vertical padding
+    minHeight: 80, // Ensure a minimum height for the wrapper
   },
   formInputError: {
     borderColor: '#ff4444',
@@ -1178,11 +1460,19 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontSize: 16,
     color: '#1a1a1a',
+    minHeight: 48, // Ensure a minimum height for single line inputs
+    paddingVertical: 0, // Remove default vertical padding from TextInput
     ...Platform.select({
       web: {
         outlineStyle: 'none',
       },
     }),
+  },
+  textArea: {
+    minHeight: 80, // Minimum height for multiline text areas
+    textAlignVertical: 'top', // Align text to top for multiline
+    paddingTop: 0, // Adjust padding for multiline
+    paddingBottom: 0, // Adjust padding for multiline
   },
   errorText: {
     color: '#ff4444',

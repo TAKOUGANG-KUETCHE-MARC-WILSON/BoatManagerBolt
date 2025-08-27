@@ -1,11 +1,28 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image } from 'react-native';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Modal, Image, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Search, Filter, Shield, Phone, Mail, ChevronRight, User, Users, Building, X, CreditCard as Edit, Trash } from 'lucide-react-native';
+import { ArrowLeft, Search, Filter, Shield, Phone, Mail, ChevronRight, User, Users, Building, X, CreditCard as Edit, Trash, Plus } from 'lucide-react-native'; // <-- Correction ici: Ajout de Plus
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
 
-type CorporateUserRole = 'super-admin' | 'admin' | 'secretary' | 'operator';
-type SortKey = 'name' | 'email' | 'role';
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 interface CorporateUser {
   id: string;
@@ -13,80 +30,20 @@ interface CorporateUser {
   lastName: string;
   email: string;
   phone: string;
-  role: CorporateUserRole;
+  corporate_role_name: string; // Name of the role from corporate_roles table
+  corporate_role_id: string; // ID of the role from corporate_roles table
   avatar: string;
   createdAt: string;
   lastLogin?: string;
   department?: string;
 }
 
-// Mock data for corporate users
-const mockCorporateUsers: CorporateUser[] = [
-  {
-    id: 'cu1',
-    firstName: 'Admin',
-    lastName: 'YBM',
-    email: 'admin@ybm.com',
-    phone: '+33 1 23 45 67 89',
-    role: 'super-admin',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=2070&auto=format&fit=crop',
-    createdAt: '2023-10-01',
-    lastLogin: '2024-02-20',
-    department: 'Direction'
-  },
-  {
-    id: 'cu2',
-    firstName: 'Émilie',
-    lastName: 'Laurent',
-    email: 'emilie.laurent@ybm.com',
-    phone: '+33 1 23 45 67 90',
-    role: 'admin',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    createdAt: '2023-11-15',
-    lastLogin: '2024-02-19',
-    department: 'Ressources Humaines'
-  },
-  {
-    id: 'cu3',
-    firstName: 'Nicolas',
-    lastName: 'Martin',
-    email: 'nicolas.martin@ybm.com',
-    phone: '+33 1 23 45 67 91',
-    role: 'secretary',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    createdAt: '2023-12-05',
-    lastLogin: '2024-02-18',
-    department: 'Support'
-  },
-  {
-    id: 'cu4',
-    firstName: 'Sophie',
-    lastName: 'Dubois',
-    email: 'sophie.dubois@ybm.com',
-    phone: '+33 1 23 45 67 92',
-    role: 'operator',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    createdAt: '2024-01-10',
-    lastLogin: '2024-02-17',
-    department: 'Support'
-  },
-  {
-    id: 'cu5',
-    firstName: 'Thomas',
-    lastName: 'Petit',
-    email: 'thomas.petit@ybm.com',
-    phone: '+33 1 23 45 67 93',
-    role: 'admin',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    createdAt: '2024-01-15',
-    lastLogin: '2024-02-16',
-    department: 'Finance'
-  }
-];
+type CorporateUserRoleFilter = 'super-admin' | 'admin' | 'secretary' | 'operator'; // For filter options
+type SortKey = 'name' | 'email' | 'role';
 
-const getRoleName = (role: CorporateUserRole): string => {
-  switch (role) {
-    case 'super-admin':
+const getRoleName = (roleName: string): string => {
+  switch (roleName) {
+    case 'super_admin':
       return 'Super Admin';
     case 'admin':
       return 'Admin';
@@ -95,13 +52,13 @@ const getRoleName = (role: CorporateUserRole): string => {
     case 'operator':
       return 'Opérateur';
     default:
-      return role;
+      return roleName;
   }
 };
 
-const getRoleColor = (role: CorporateUserRole): string => {
-  switch (role) {
-    case 'super-admin':
+const getRoleColor = (roleName: string): string => {
+  switch (roleName) {
+    case 'super_admin':
       return '#F59E0B';
     case 'admin':
       return '#0EA5E9';
@@ -116,16 +73,184 @@ const getRoleColor = (role: CorporateUserRole): string => {
 
 export default function CorporateUsersScreen() {
   const { user } = useAuth();
-  const [corporateUsers, setCorporateUsers] = useState<CorporateUser[]>(mockCorporateUsers);
-  const [filteredUsers, setFilteredUsers] = useState<CorporateUser[]>(mockCorporateUsers);
+  const [corporateUsers, setCorporateUsers] = useState<CorporateUser[]>([]);
+  const [filteredUsers, setFilteredUsers] = useState<CorporateUser[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedRole, setSelectedRole] = useState<CorporateUserRole | null>(null);
+  const [selectedRole, setSelectedRole] = useState<CorporateUserRoleFilter | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortAsc, setSortAsc] = useState(true);
   const [selectedUser, setSelectedUser] = useState<CorporateUser | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Check if user is super-admin (assuming this permission is needed to view this screen)
+  const isSuperAdmin = user?.role === 'corporate' && 
+                       user.permissions?.canManageUsers === true; // Assuming canManageUsers covers this
+
+  // Redirect if not super-admin
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      Alert.alert(
+        'Accès restreint',
+        'Vous n\'avez pas les permissions nécessaires pour accéder à cette page.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.back()
+          }
+        ]
+      );
+    }
+  }, [isSuperAdmin]);
+
+  const fetchCorporateUsers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          first_name,
+          last_name,
+          e_mail,
+          phone,
+          avatar,
+          created_at,
+          last_login,
+          department,
+          corporate_role_id,
+          corporate_roles(name, description)
+        `)
+        .eq('profile', 'corporate');
+
+      if (fetchError) {
+        console.error('Error fetching corporate users:', fetchError);
+        setError('Échec du chargement des utilisateurs Corporate.');
+        return;
+      }
+
+      const usersWithDetails: CorporateUser[] = await Promise.all(data.map(async (u: any) => {
+        const signedAvatarUrl = await getSignedAvatarUrl(u.avatar);
+        return {
+          id: u.id,
+          firstName: u.first_name,
+          lastName: u.last_name,
+          email: u.e_mail,
+          phone: u.phone,
+          corporate_role_name: u.corporate_roles?.name || 'N/A',
+          corporate_role_id: u.corporate_role_id || 'N/A',
+          avatar: signedAvatarUrl || DEFAULT_AVATAR,
+          createdAt: u.created_at,
+          lastLogin: u.last_login,
+          department: u.department,
+        };
+      }));
+
+      setCorporateUsers(usersWithDetails);
+    } catch (e: any) {
+      console.error('Unexpected error fetching corporate users:', e);
+      setError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isSuperAdmin) { // Only fetch if user has permission
+      fetchCorporateUsers();
+    }
+  }, [isSuperAdmin, fetchCorporateUsers]);
+
+  // Real-time subscription for users table
+  useEffect(() => {
+    const channel = supabase
+      .channel('corporate_users_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'users', filter: 'profile=eq.corporate' },
+        async (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newUser = payload.new as any;
+            const signedAvatarUrl = await getSignedAvatarUrl(newUser.avatar);
+            const { data: roleData, error: roleError } = await supabase
+              .from('corporate_roles')
+              .select('name')
+              .eq('id', newUser.corporate_role_id)
+              .single();
+
+            if (roleError) {
+              console.error('Error fetching role for new user:', roleError);
+              return;
+            }
+
+            setCorporateUsers(prevUsers => [
+              ...prevUsers,
+              {
+                id: newUser.id,
+                firstName: newUser.first_name,
+                lastName: newUser.last_name,
+                email: newUser.e_mail,
+                phone: newUser.phone,
+                corporate_role_name: roleData?.name || 'N/A',
+                corporate_role_id: newUser.corporate_role_id || 'N/A',
+                avatar: signedAvatarUrl || DEFAULT_AVATAR,
+                createdAt: newUser.created_at,
+                lastLogin: newUser.last_login,
+                department: newUser.department,
+              }
+            ]);
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedUser = payload.new as any;
+            const signedAvatarUrl = await getSignedAvatarUrl(updatedUser.avatar);
+            const { data: roleData, error: roleError } = await supabase
+              .from('corporate_roles')
+              .select('name')
+              .eq('id', updatedUser.corporate_role_id)
+              .single();
+
+            if (roleError) {
+              console.error('Error fetching role for updated user:', roleError);
+              return;
+            }
+
+            setCorporateUsers(prevUsers => prevUsers.map(user => 
+              user.id === updatedUser.id
+                ? {
+                    id: updatedUser.id,
+                    firstName: updatedUser.first_name,
+                    lastName: updatedUser.last_name,
+                    email: updatedUser.e_mail,
+                    phone: updatedUser.phone,
+                    corporate_role_name: roleData?.name || 'N/A',
+                    corporate_role_id: updatedUser.corporate_role_id || 'N/A',
+                    avatar: signedAvatarUrl || DEFAULT_AVATAR,
+                    createdAt: updatedUser.created_at,
+                    lastLogin: updatedUser.last_login,
+                    department: updatedUser.department,
+                  }
+                : user
+            ));
+          } else if (payload.eventType === 'DELETE') {
+            const deletedUser = payload.old as any;
+            setCorporateUsers(prevUsers => prevUsers.filter(user => user.id !== deletedUser.id));
+            // Close modal if the deleted user was currently selected
+            if (selectedUser?.id === deletedUser.id) {
+              setShowDetailsModal(false);
+              setSelectedUser(null);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedUser]); // Re-subscribe if selectedUser changes to handle modal closing correctly
 
   // Apply filters and sorting
   useEffect(() => {
@@ -144,7 +269,7 @@ export default function CorporateUsersScreen() {
     
     // Apply role filter
     if (selectedRole) {
-      result = result.filter(user => user.role === selectedRole);
+      result = result.filter(user => user.corporate_role_name === selectedRole);
     }
     
     // Apply sorting
@@ -161,8 +286,8 @@ export default function CorporateUsersScreen() {
           valueB = b.email.toLowerCase();
           break;
         case 'role':
-          valueA = a.role;
-          valueB = b.role;
+          valueA = a.corporate_role_name;
+          valueB = b.corporate_role_name;
           break;
         default:
           valueA = `${a.firstName} ${a.lastName}`.toLowerCase();
@@ -209,19 +334,7 @@ export default function CorporateUsersScreen() {
     }
   };
 
-  const handleDeleteUser = () => {
-    setShowDeleteConfirmModal(true);
-  };
-
-  const confirmDeleteUser = () => {
-    if (selectedUser) {
-      // Filter out the selected user
-      const updatedUsers = corporateUsers.filter(user => user.id !== selectedUser.id);
-      setCorporateUsers(updatedUsers);
-      setShowDeleteConfirmModal(false);
-      setShowDetailsModal(false);
-    }
-  };
+  // Removed handleDeleteUser and confirmDeleteUser functions as per request
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('fr-FR', {
@@ -261,13 +374,13 @@ export default function CorporateUsersScreen() {
                   </Text>
                   <View style={[
                     styles.userRoleBadge, 
-                    { backgroundColor: `${getRoleColor(selectedUser.role)}15` }
+                    { backgroundColor: `${getRoleColor(selectedUser.corporate_role_name)}15` }
                   ]}>
                     <Text style={[
                       styles.userRoleText,
-                      { color: getRoleColor(selectedUser.role) }
+                      { color: getRoleColor(selectedUser.corporate_role_name) }
                     ]}>
-                      {getRoleName(selectedUser.role)}
+                      {getRoleName(selectedUser.corporate_role_name)}
                     </Text>
                   </View>
                   <Text style={styles.userProfileDate}>
@@ -311,7 +424,7 @@ export default function CorporateUsersScreen() {
                   <Shield size={20} color="#0066CC" />
                   <View style={styles.detailContent}>
                     <Text style={styles.detailLabel}>Rôle</Text>
-                    <Text style={styles.detailValue}>{getRoleName(selectedUser.role)}</Text>
+                    <Text style={styles.detailValue}>{getRoleName(selectedUser.corporate_role_name)}</Text>
                   </View>
                 </View>
               </View>
@@ -331,13 +444,7 @@ export default function CorporateUsersScreen() {
           
           <View style={styles.modalFooter}>
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={handleDeleteUser}
-              >
-                <Trash size={20} color="white" />
-                <Text style={styles.deleteButtonText}>Supprimer</Text>
-              </TouchableOpacity>
+              {/* Removed Delete Button as per request */}
               
               <TouchableOpacity 
                 style={styles.editButton}
@@ -353,7 +460,7 @@ export default function CorporateUsersScreen() {
     </Modal>
   );
 
-  // Modal de confirmation de suppression
+  // Modal de confirmation de suppression (kept for potential future use or if needed elsewhere)
   const DeleteConfirmModal = () => (
     <Modal
       visible={showDeleteConfirmModal}
@@ -378,7 +485,7 @@ export default function CorporateUsersScreen() {
             
             <TouchableOpacity 
               style={styles.confirmDeleteButton}
-              onPress={confirmDeleteUser}
+              onPress={() => { /* confirmDeleteUser */ }} // Placeholder if function is removed
             >
               <Text style={styles.confirmDeleteButtonText}>Supprimer</Text>
             </TouchableOpacity>
@@ -387,6 +494,23 @@ export default function CorporateUsersScreen() {
       </View>
     </Modal>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des utilisateurs Corporate...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -402,7 +526,7 @@ export default function CorporateUsersScreen() {
           style={styles.addButton}
           onPress={handleAddUser}
         >
-          <Text style={styles.addButtonText}>+</Text>
+          <Plus size={24} color="white" />
         </TouchableOpacity>
       </View>
 
@@ -450,7 +574,7 @@ export default function CorporateUsersScreen() {
               <Text style={styles.filterOptionText}>Tous</Text>
             </TouchableOpacity>
             
-            {(['super-admin', 'admin', 'secretary', 'operator'] as CorporateUserRole[]).map((role) => (
+            {(['super_admin', 'admin', 'secretary', 'operator'] as CorporateUserRoleFilter[]).map((role) => (
               <TouchableOpacity 
                 key={role}
                 style={[
@@ -511,13 +635,13 @@ export default function CorporateUsersScreen() {
                   <Text style={styles.userName}>{corporateUser.firstName} {corporateUser.lastName}</Text>
                   <View style={[
                     styles.userRoleBadge, 
-                    { backgroundColor: `${getRoleColor(corporateUser.role)}15` }
+                    { backgroundColor: `${getRoleColor(corporateUser.corporate_role_name)}15` }
                   ]}>
                     <Text style={[
                       styles.userRoleText,
-                      { color: getRoleColor(corporateUser.role) }
+                      { color: getRoleColor(corporateUser.corporate_role_name) }
                     ]}>
-                      {getRoleName(corporateUser.role)}
+                      {getRoleName(corporateUser.corporate_role_name)}
                     </Text>
                   </View>
                 </View>
@@ -580,6 +704,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flex: 1,
+    textAlign: 'center',
   },
   addButton: {
     width: 36,
@@ -674,7 +800,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
       },
     }),
   },
@@ -849,15 +975,8 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  emptyStateTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginTop: 16,
-    marginBottom: 8,
-  },
   emptyStateText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666',
     textAlign: 'center',
   },
@@ -1078,7 +1197,7 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
       web: {
-        boxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
+        boxBoxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)',
       },
     }),
   },

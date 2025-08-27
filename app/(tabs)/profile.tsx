@@ -155,7 +155,7 @@ interface ServiceHistory {
   date: string;
   type: string;
   status: 'completed' | 'in_progress' | 'cancelled' | 'submitted' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'to_pay' | 'paid'; // Correspond à service_request.statut
-  boat: {
+  boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle
     id: string;
     name: string;
   };
@@ -298,7 +298,7 @@ const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCu
         {hasCustomPhoto && (
           <TouchableOpacity style={[styles.modalOption, styles.deleteOption]} onPress={onDeletePhoto}>
             <X size={24} color="#ff4444" />
-            <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
+            <Text style={styles.modalOptionText}>Supprimer la photo</Text>
           </TouchableOpacity>
         )}
 
@@ -597,10 +597,11 @@ if (userData) {
           type: req.categorie_service?.description1 || 'N/A',
           description: req.description,
           status: req.statut || 'completed', // Assurez-vous que 'statut' est un des types définis
-          boat: {
+          // MODIFICATION: Vérifier si req.boat est null avant d'assigner
+          boat: req.boat ? {
             id: req.boat.id.toString(),
             name: req.boat.name,
-          },
+          } : undefined, // Assign undefined if req.boat is null
         }));
         setServiceHistory(formattedServiceHistory);
 
@@ -644,12 +645,12 @@ const formattedReviews: Review[] = await Promise.all(
       const rawAvatar = isBM ? sr.id_boat_manager.avatar : sr.id_companie?.avatar;
 
       // 🔐 Obtenir une URL utilisable par <Image/>
-      const signedAvatar = await getSignedAvatarUrl(rawAvatar);
+      const signed = await getSignedAvatarUrl(rawAvatar);
 
       const reviewedEntity: Review['reviewedEntity'] = {
         id: (isBM ? sr.id_boat_manager.id : sr.id_companie?.id)?.toString?.() || 'unknown',
         name,
-        avatar: signedAvatar || DEFAULT_AVATAR,
+        avatar: signed || DEFAULT_AVATAR, // ← injecte une URL exploitable par <Image/>
         type: isBM ? 'boat_manager' : 'nautical_company',
         entityRating: isBM ? sr.id_boat_manager.rating : sr.id_companie?.rating,
         entityReviewCount: isBM ? sr.id_boat_manager.review_count : sr.id_companie?.review_count,
@@ -705,7 +706,7 @@ setMyReviews(formattedReviews);
         // 3. Filtrer pour ne garder que les Boat Managers et récupérer leurs détails
         const { data: allBms, error: bmError } = await supabase
           .from('users')
-          .select('id, first_name, last_name, avatar, phone, e_mail, rating, review_count')
+          .select('id, first_name, last_name, avatar, phone, e_mail, rating, review_count, user_ports(port_id, ports(name))')
           .in('id', allBmIds)
           .eq('profile', 'boat_manager');
 
@@ -837,7 +838,7 @@ const handleChoosePhoto = async () => {
     // Get signed URL for immediate display
     const { data: signedData, error: signedErr } = await supabase
       .storage
-      .from('avatars')
+    .from('avatars')
       .createSignedUrl(path, 60 * 60); // 1 hour validity
     if (signedErr || !signedData?.signedUrl) throw signedErr || new Error('Signed URL manquante');
 
@@ -1194,10 +1195,13 @@ const { error } = await supabase
                 </View>
 
                 <View style={styles.serviceDetails}>
-                  <View style={styles.serviceBoat}>
-                    <Ship size={16} color="#666" />
-                    <Text style={styles.serviceBoatName}>{service.boat.name}</Text>
-                  </View>
+                  {/* MODIFICATION: Afficher les informations du bateau uniquement si service.boat existe */}
+                  {service.boat && (
+                    <View style={styles.serviceBoat}>
+                      <Ship size={16} color="#666" />
+                      <Text style={styles.serviceBoatName}>{service.boat.name}</Text>
+                    </View>
+                  )}
                   <Text style={styles.serviceDescription}>{service.description}</Text>
                 </View>
 
@@ -1781,9 +1785,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 16,
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
   },
   modalTitle: {
     fontSize: 18,

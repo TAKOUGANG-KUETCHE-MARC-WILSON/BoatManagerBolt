@@ -1,138 +1,272 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image } from 'react-native';
-import { Users, FileText, Building, ChevronRight, Clock, CircleCheck as CheckCircle, MessageSquare, MapPin, Ship, Briefcase, Star, CircleAlert as AlertCircle, Euro } from 'lucide-react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image, ActivityIndicator } from 'react-native';
+import { Users, FileText, Building, ChevronRight, Clock, CircleCheck as CheckCircle, MessageSquare, MapPin, Ship, Briefcase, TriangleAlert as AlertTriangle, Star, Euro, Calendar } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
 import { router } from 'expo-router';
+import { supabase } from '@/src/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native';
+
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 export default function DashboardScreen() {
   const { user } = useAuth();
   const [currentDate] = useState(new Date());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const stats = {
-    totalUsers: 156,
-    activeRequests: 24,
-    boatManagers: 12,
-    nauticalCompanies: 8,
-    pendingInvoices: 3,
-    completedInvoices: 18,
-    billableRequests: 5,
-    averageRating: 4.7,
-    boatManagerRating: 4.8,
-    nauticalCompanyRating: 4.6
-  };
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    pleasureBoaters: 0, // New stat
+    activeRequests: 0,
+    boatManagers: 0,
+    nauticalCompanies: 0,
+    pendingInvoices: 0,
+    completedInvoices: 0,
+    billableRequests: 0,
+    performanceRating: 0,
+    performanceReviewCount: 0,
+    urgentRequests: 0,
+    newMessages: 0,
+    avgBmRating: 0, // New stat
+    avgNcRating: 0, // New stat
+  });
 
-  const recentActivities = [
-    {
-      id: 'a1',
-      type: 'quote_accepted',
-      title: 'Devis accepté par Jean Dupont',
-      description: 'Le devis DEV-2024-003 de Nautisme Pro a été accepté et nécessite une facturation',
-      time: '2h',
-      amount: '2 500€',
-      entity: 'Nautisme Pro',
-      entityType: 'nautical_company'
-    },
-    {
-      id: 'a2',
-      type: 'invoice_created',
-      title: 'Nouvelle facture déposée',
-      description: 'La facture FAC-2024-002 a été déposée et envoyée à Sophie Martin',
-      time: '1j',
-      amount: '1 800€',
-      entity: 'Marie Martin',
-      entityType: 'boat_manager'
-    },
-    {
-      id: 'a3',
-      type: 'payment_received',
-      title: 'Paiement reçu',
-      description: 'Le paiement pour la facture FAC-2024-001 a été reçu',
-      time: '2j',
-      amount: '950€',
-      entity: 'Pierre Dubois',
-      entityType: 'client'
-    },
-    {
-      id: 'a4',
-      type: 'new_rating',
-      title: 'Nouvelle évaluation',
-      description: 'Jean Dupont a donné 5 étoiles à Nautisme Pro',
-      time: '3j',
-      rating: 5,
-      entity: 'Nautisme Pro',
-      entityType: 'nautical_company'
+  const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [topRatedPartners, setTopRatedPartners] = useState<any[]>([]);
+
+  const fetchData = useCallback(async () => {
+    if (!user?.id) {
+      setLoading(false);
+      return;
     }
-  ];
 
-  const topRatedPartners = [
-    {
-      id: 'p1',
-      name: 'Nautisme Pro',
-      type: 'nautical_company',
-      rating: 4.9,
-      reviews: 42,
-      image: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop'
-    },
-    {
-      id: 'p2',
-      name: 'Marie Martin',
-      type: 'boat_manager',
-      rating: 4.8,
-      reviews: 36,
-      image: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop'
-    },
-    {
-      id: 'p3',
-      name: 'Marine Services',
-      type: 'nautical_company',
-      rating: 4.7,
-      reviews: 28,
-      image: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop'
+    setLoading(true);
+    setError(null);
+
+    try {
+      // --- Fetch Stats Grid Data ---
+      const [
+        { count: totalUsersCount, error: totalUsersError },
+        { count: pleasureBoatersCount, error: pleasureBoatersError }, // Fetch pleasure boaters count
+        { count: bmCount, error: bmError },
+        { count: ncCount, error: ncError },
+        { count: pendingRequestsCount, error: pendingRequestsError },
+        { count: urgentRequestsCount, error: urgentRequestsError },
+        { count: newMessagesCount, error: newMessagesError },
+        { data: corporateProfile, error: corporateProfileError },
+        { data: bmRatingsData, error: bmRatingsError }, // Fetch all BM ratings
+        { data: ncRatingsData, error: ncRatingsError }, // Fetch all NC ratings
+      ] = await Promise.all([
+        supabase.from('users').select('id', { count: 'exact' }),
+        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'pleasure_boater'), // Query for pleasure boaters
+        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'boat_manager'),
+        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'nautical_company'),
+        supabase.from('service_request').select('id', { count: 'exact' }).eq('statut', 'submitted'),
+        supabase.from('service_request').select('id', { count: 'exact' }).eq('urgence', 'urgent'),
+        supabase.from('messages').select('id', { count: 'exact' }).eq('receiver_id', user.id).eq('is_read', false),
+        supabase.from('users').select('rating, review_count').eq('id', user.id).single(),
+        supabase.from('users').select('rating, review_count').eq('profile', 'boat_manager'), // Fetch all BM ratings
+        supabase.from('users').select('rating, review_count').eq('profile', 'nautical_company'), // Fetch all NC ratings
+      ]);
+
+      if (totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || newMessagesError || corporateProfileError || bmRatingsError || ncRatingsError) {
+        console.error('Error fetching stats:', totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || newMessagesError || corporateProfileError || bmRatingsError || ncRatingsError);
+        setError('Échec du chargement des statistiques.');
+        return;
+      }
+
+      // Calculate average BM rating
+      let totalBmRating = 0;
+      let totalBmReviewCount = 0;
+      bmRatingsData?.forEach(bm => {
+        if (bm.rating !== null && bm.review_count !== null) {
+          totalBmRating += bm.rating * bm.review_count;
+          totalBmReviewCount += bm.review_count;
+        }
+      });
+      const avgBmRating = totalBmReviewCount > 0 ? (totalBmRating / totalBmReviewCount) : 0;
+
+      // Calculate average NC rating
+      let totalNcRating = 0;
+      let totalNcReviewCount = 0;
+      ncRatingsData?.forEach(nc => {
+        if (nc.rating !== null && nc.review_count !== null) {
+          totalNcRating += nc.rating * nc.review_count;
+          totalNcReviewCount += nc.review_count;
+        }
+      });
+      const avgNcRating = totalNcReviewCount > 0 ? (totalNcRating / totalNcReviewCount) : 0;
+
+      setStats(prevStats => ({
+        ...prevStats,
+        totalUsers: totalUsersCount || 0,
+        pleasureBoaters: pleasureBoatersCount || 0,
+        boatManagers: bmCount || 0,
+        nauticalCompanies: ncCount || 0,
+        activeRequests: pendingRequestsCount || 0,
+        urgentRequests: urgentRequestsCount || 0,
+        newMessages: newMessagesCount || 0,
+        performanceRating: corporateProfile?.rating || 0,
+        performanceReviewCount: corporateProfile?.review_count || 0,
+        avgBmRating: avgBmRating,
+        avgNcRating: avgNcRating,
+      }));
+
+      // --- Fetch Upcoming Appointments ---
+      const today = new Date().toISOString().split('T')[0];
+      const now = new Date().toTimeString().slice(0, 5);
+
+      const { data: appointmentsData, error: appointmentsError } = await supabase
+        .from('rendez_vous')
+        .select(`
+          id,
+          date_rdv,
+          heure,
+          description,
+          id_client(first_name, last_name),
+          id_boat(name, type, place_de_port)
+        `)
+        .or(`invite.eq.${user.id},cree_par.eq.${user.id}`)
+        .in('statut', ['en_attente', 'confirme'])
+        .or(`date_rdv.gt.${today},and(date_rdv.eq.${today},heure.gt.${now})`)
+        .order('date_rdv', { ascending: true })
+        .order('heure', { ascending: true })
+        .limit(3);
+
+      if (appointmentsError) {
+        console.error('Error fetching upcoming appointments:', appointmentsError);
+      } else {
+        setUpcomingAppointments(appointmentsData);
+      }
+
+      // --- Fetch Recent Activities (Service Requests) ---
+      const { data: activitiesData, error: activitiesError } = await supabase
+        .from('service_request')
+        .select(`
+          id,
+          description,
+          statut,
+          date,
+          prix,
+          id_client(first_name, last_name),
+          id_boat(name)
+        `)
+        .order('date', { ascending: false })
+        .limit(5);
+
+      if (activitiesError) {
+        console.error('Error fetching recent activities:', activitiesError);
+      } else {
+        setRecentActivities(activitiesData.map(activity => ({
+          id: activity.id,
+          type: activity.statut,
+          title: activity.description,
+          description: `Demande pour ${activity.id_client?.first_name || 'N/A'} ${activity.id_client?.last_name || 'N/A'} - ${activity.id_boat?.name || 'N/A'}`,
+          time: `${Math.floor((new Date().getTime() - new Date(activity.date).getTime()) / (1000 * 60 * 60 * 24))}j`,
+          amount: activity.prix ? `${activity.prix}€` : undefined,
+          entity: `${activity.id_client?.first_name || 'N/A'} ${activity.id_client?.last_name || 'N/A'}`,
+          entityType: 'client'
+        })));
+      }
+
+      // --- Fetch Top Rated Partners ---
+      const { data: partnersData, error: partnersError } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, company_name, profile, avatar, rating, review_count')
+        .in('profile', ['boat_manager', 'nautical_company'])
+        .order('rating', { ascending: false })
+        .limit(3);
+
+      if (partnersError) {
+        console.error('Error fetching top rated partners:', partnersError);
+      } else {
+        const processedTopPartners = await Promise.all(partnersData.map(async partner => {
+          const signedAvatar = await getSignedAvatarUrl(partner.avatar);
+          return {
+            id: partner.id,
+            name: partner.profile === 'boat_manager' ? `${partner.first_name} ${partner.last_name}` : partner.company_name,
+            type: partner.profile,
+            rating: partner.rating || 0,
+            reviews: partner.review_count || 0,
+            image: signedAvatar || DEFAULT_AVATAR,
+          };
+        }));
+        setTopRatedPartners(processedTopPartners);
+      }
+
+    } catch (e: any) {
+      console.error('Dashboard data fetch error:', e);
+      setError('Une erreur inattendue est survenue lors du chargement du tableau de bord.');
+    } finally {
+      setLoading(false);
     }
-  ];
+  }, [user]);
 
-  const handleViewPendingInvoices = () => {
-    router.push('/(corporate)/requests?status=to_pay');
-  };
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData])
+  );
 
-  const handleViewBillableRequests = () => {
-    router.push('/(corporate)/requests?status=ready_to_bill');
-  };
-
-  const handleViewAllPartners = () => {
-    router.push('/(corporate)/partners');
-  };
-
-  const handleViewActivity = (activity: any) => {
-    if (activity.type === 'quote_accepted' || activity.type === 'invoice_created') {
-      router.push(`/request/${activity.id}`);
-    } else if (activity.type === 'payment_received') {
-      router.push(`/invoice/${activity.id}`);
-    } else if (activity.type === 'new_rating') {
-      router.push(`/partner/${activity.entity}`);
-    }
+  const handleNavigate = (route: string) => {
+    router.push(route);
   };
 
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'quote_accepted':
         return <FileText size={24} color="#10B981" />;
-      case 'invoice_created':
+      case 'ready_to_bill':
         return <FileText size={24} color="#3B82F6" />;
-      case 'payment_received':
-        return <FileText size={24} color="#10B981" />;
-      case 'new_rating':
-        return <Star size={24} color="#F59E0B" />;
+      case 'paid':
+        return <Euro size={24} color="#10B981" />;
+      case 'submitted':
+        return <Clock size={24} color="#F59E0B" />;
       default:
         return <Clock size={24} color="#666" />;
     }
   };
 
-  const handleAccessFinances = () => {
-    if (user?.permissions?.canAccessFinancials) {
-      router.push('/corporate/finances');
-    }
-  };
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement du tableau de bord...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity 
+          style={styles.errorButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -144,9 +278,9 @@ export default function DashboardScreen() {
           <Text style={styles.dateText}>
             {currentDate.toLocaleDateString('fr-FR', {
               weekday: 'long',
-              year: 'numeric',
+              day: 'numeric',
               month: 'long',
-              day: 'numeric'
+              year: 'numeric'
             })}
           </Text>
         </View>
@@ -160,37 +294,47 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.statsGrid}>
-        {/* Première ligne - Utilisateurs */}
+        {/* Ligne 1: Nombre total d'utilisateurs */}
         <View style={[styles.statCard, styles.fullWidthStatCard]}>
           <Users size={24} color="#0066CC" />
           <Text style={styles.statNumber}>{stats.totalUsers}</Text>
-          <Text style={styles.statLabel}>Utilisateurs</Text>
+          <Text style={styles.statLabel}>Utilisateurs de l'application</Text>
         </View>
 
-        {/* Deuxième ligne - Boat Managers et Entreprises */}
-        <View style={styles.statCard}>
-          <Users size={24} color="#10B981" />
-          <Text style={styles.statNumber}>{stats.boatManagers}</Text>
-          <Text style={styles.statLabel}>Boat Managers</Text>
+        {/* Ligne 2: Plaisanciers, Boat Managers, Entreprises du nautisme */}
+        <View style={styles.threeColumnGrid}>
+          <View style={styles.statCard}>
+            <Users size={24} color="#0EA5E9" />
+            <Text style={styles.statNumber}>{stats.pleasureBoaters}</Text>
+            <Text style={styles.statLabel} adjustsFontSizeToFit numberOfLines={1}>Plaisanciers</Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <Users size={24} color="#10B981" />
+            <Text style={styles.statNumber}>{stats.boatManagers}</Text>
+            <Text style={styles.statLabel} adjustsFontSizeToFit numberOfLines={1}>Boat Managers</Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <Building size={24} color="#8B5CF6" />
+            <Text style={styles.statNumber}>{stats.nauticalCompanies}</Text>
+            <Text style={styles.statLabel} adjustsFontSizeToFit numberOfLines={2}>Entreprises du nautisme</Text>
+          </View>
         </View>
 
-        <View style={styles.statCard}>
-          <Building size={24} color="#8B5CF6" />
-          <Text style={styles.statNumber}>{stats.nauticalCompanies}</Text>
-          <Text style={styles.statLabel}>Entreprises</Text>
-        </View>
+        {/* Ligne 3: Notes moyennes */}
+        <View style={styles.twoColumnGrid}>
+          <View style={styles.statCard}>
+            <Star size={24} color="#10B981" />
+            <Text style={styles.statNumber}>{stats.avgBmRating.toFixed(1)}</Text>
+            <Text style={styles.statLabel} adjustsFontSizeToFit numberOfLines={2}>Note moyenne Boat Managers</Text>
+          </View>
 
-        {/* Troisième ligne - Notes */}
-        <View style={styles.statCard}>
-          <Star size={24} color="#10B981" />
-          <Text style={styles.statNumber}>{stats.boatManagerRating}</Text>
-          <Text style={styles.statLabel}>Note Boat Managers</Text>
-        </View>
-
-        <View style={styles.statCard}>
-          <Star size={24} color="#F59E0B" />
-          <Text style={styles.statNumber}>{stats.nauticalCompanyRating}</Text>
-          <Text style={styles.statLabel}>Note Entreprises</Text>
+          <View style={styles.statCard}>
+            <Star size={24} color="#F59E0B" />
+            <Text style={styles.statNumber}>{stats.avgNcRating.toFixed(1)}</Text>
+            <Text style={styles.statLabel} adjustsFontSizeToFit numberOfLines={2}>Note moyenne Entreprises du nautisme</Text>
+          </View>
         </View>
       </View>
 
@@ -203,7 +347,7 @@ export default function DashboardScreen() {
           </View>
           <TouchableOpacity 
             style={styles.viewAllButton}
-            onPress={handleViewPendingInvoices}
+            onPress={() => handleNavigate('/(corporate)/requests?status=to_pay')}
           >
             <Text style={styles.viewAllText}>Voir toutes</Text>
             <ChevronRight size={20} color="#0066CC" />
@@ -213,19 +357,19 @@ export default function DashboardScreen() {
         <View style={styles.invoiceStats}>
           <TouchableOpacity 
             style={[styles.invoiceStatCard, { backgroundColor: '#FEF3C7' }]}
-            onPress={handleViewBillableRequests}
+            onPress={() => handleNavigate('/(corporate)/requests?status=ready_to_bill')}
           >
-            <Clock size={24} color="#F59E0B" />
-            <Text style={[styles.invoiceStatNumber, { color: '#F59E0B' }]}>{stats.billableRequests}</Text>
+            <Clock size={20} color="#F59E0B" />
+            <Text style={[styles.invoiceStatNumber, { color: '#F59E0B' }]}>{stats.activeRequests}</Text>
             <Text style={[styles.invoiceStatLabel, { color: '#F59E0B' }]}>Bon à facturer</Text>
           </TouchableOpacity>
           
           <TouchableOpacity 
             style={[styles.invoiceStatCard, { backgroundColor: '#D1FAE5' }]}
-            onPress={handleViewPendingInvoices}
+            onPress={() => handleNavigate('/(corporate)/requests?status=paid')}
           >
-            <CheckCircle size={24} color="#10B981" />
-            <Text style={[styles.invoiceStatNumber, { color: '#10B981' }]}>{stats.completedInvoices}</Text>
+            <CheckCircle size={20} color="#10B981" />
+            <Text style={[styles.invoiceStatNumber, { color: '#10B981' }]}>{stats.pendingInvoices}</Text>
             <Text style={[styles.invoiceStatLabel, { color: '#10B981' }]}>Factures émises</Text>
           </TouchableOpacity>
         </View>
@@ -234,7 +378,7 @@ export default function DashboardScreen() {
       {/* Gestion financière */}
       <TouchableOpacity 
         style={styles.financeAccessCard}
-        onPress={handleAccessFinances}
+        onPress={() => handleNavigate('/corporate/finances')}
       >
         <View style={styles.financeAccessContent}>
           <View style={styles.financeAccessIcon}>
@@ -263,7 +407,7 @@ export default function DashboardScreen() {
           </View>
           <TouchableOpacity 
             style={styles.viewAllButton}
-            onPress={handleViewAllPartners}
+            onPress={() => handleNavigate('/corporate/partners')}
           >
             <Text style={styles.viewAllText}>Voir tous</Text>
             <ChevronRight size={20} color="#0066CC" />
@@ -275,27 +419,33 @@ export default function DashboardScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.partnersContainer}
         >
-          {topRatedPartners.map((partner) => (
-            <TouchableOpacity 
-              key={partner.id} 
-              style={styles.partnerCard}
-              onPress={() => router.push(`/partner/${partner.id}`)}
-            >
-              <Image source={{ uri: partner.image }} style={styles.partnerImage} />
-              <View style={styles.partnerInfo}>
-                <Text style={styles.partnerName}>{partner.name}</Text>
-                <Text style={styles.partnerType}>
-                  {partner.type === 'boat_manager' ? 'Boat Manager' : 'Entreprise du nautisme'}
-                </Text>
-                <View style={styles.partnerRating}>
-                  <Star size={16} color="#FFC107" fill="#FFC107" />
-                  <Text style={styles.partnerRatingText}>
-                    {partner.rating} ({partner.reviews} avis)
+          {topRatedPartners.length > 0 ? (
+            topRatedPartners.map((partner) => (
+              <TouchableOpacity 
+                key={partner.id} 
+                style={styles.partnerCard}
+                onPress={() => handleNavigate(`/partner/${partner.id}`)}
+              >
+                <Image source={{ uri: partner.image }} style={styles.partnerImage} />
+                <View style={styles.partnerInfo}>
+                  <Text style={styles.partnerName}>{partner.name}</Text>
+                  <Text style={styles.partnerType}>
+                    {partner.type === 'boat_manager' ? 'Boat Manager' : 'Entreprise du nautisme'}
                   </Text>
+                  <View style={styles.partnerRating}>
+                    <Star size={16} color="#FFC107" fill="#FFC107" />
+                    <Text style={styles.partnerRatingText}>
+                      {partner.rating.toFixed(1)} ({partner.reviews} avis)
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucun partenaire trouvé.</Text>
+            </View>
+          )}
         </ScrollView>
       </View>
 
@@ -309,34 +459,34 @@ export default function DashboardScreen() {
         </View>
 
         <View style={styles.activitiesList}>
-          {recentActivities.map((activity) => (
-            <TouchableOpacity 
-              key={activity.id} 
-              style={styles.activityCard}
-              onPress={() => handleViewActivity(activity)}
-            >
-              <View style={styles.activityIconContainer}>
-                {getActivityIcon(activity.type)}
-              </View>
-              <View style={styles.activityInfo}>
-                <Text style={styles.activityTitle}>{activity.title}</Text>
-                <Text style={styles.activityDescription}>{activity.description}</Text>
-                <View style={styles.activityMeta}>
-                  <Text style={styles.activityTime}>Il y a {activity.time}</Text>
-                  {activity.amount && (
-                    <Text style={styles.activityAmount}>{activity.amount}</Text>
-                  )}
-                  {activity.rating && (
-                    <View style={styles.activityRating}>
-                      <Star size={14} color="#FFC107" fill="#FFC107" />
-                      <Text style={styles.activityRatingText}>{activity.rating}</Text>
-                    </View>
-                  )}
+          {recentActivities.length > 0 ? (
+            recentActivities.map((activity) => (
+              <TouchableOpacity 
+                key={activity.id} 
+                style={styles.activityCard}
+                onPress={() => handleNavigate(`/request/${activity.id}`)}
+              >
+                <View style={styles.activityIconContainer}>
+                  {getActivityIcon(activity.type)}
                 </View>
-              </View>
-              <ChevronRight size={20} color="#666" />
-            </TouchableOpacity>
-          ))}
+                <View style={styles.activityInfo}>
+                  <Text style={styles.activityTitle}>{activity.title}</Text>
+                  <Text style={styles.activityDescription}>{activity.description}</Text>
+                  <View style={styles.activityMeta}>
+                    <Text style={styles.activityTime}>{activity.time}</Text>
+                    {activity.amount && (
+                      <Text style={styles.activityAmount}>{activity.amount}</Text>
+                    )}
+                  </View>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Aucune activité récente.</Text>
+            </View>
+          )}
         </View>
       </View>
     </ScrollView>
@@ -347,6 +497,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   header: {
     padding: 20,
@@ -395,19 +549,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statsGrid: {
+    flexDirection: 'column', // Changed to column for overall grid
+    padding: 20,
+    gap: 16, // Gap between rows of cards
+  },
+  threeColumnGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    padding: 20,
-    gap: 16,
+    gap: 16, // Gap between cards in a row
+  },
+  twoColumnGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16, // Gap between cards in a row
   },
   statCard: {
     flex: 1,
-    minWidth: '45%',
+    minWidth: '30%', // Adjusted for 3 columns, will be overridden by fullWidthStatCard
     backgroundColor: 'white',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
     gap: 8,
+    position: 'relative',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -423,8 +587,10 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  fullWidthStatCard: {
-    minWidth: '100%',
+  urgentCard: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
   },
   statNumber: {
     fontSize: 24,
@@ -436,45 +602,135 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
-  section: {
-    padding: 20,
+  notificationBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
   },
-  sectionHeader: {
+  notificationText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  performanceCard: {
+    backgroundColor: 'white',
+    margin: 20,
+    marginTop: 0,
+    borderRadius: 12,
+    padding: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  performanceHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  sectionTitleContainer: {
+  performanceTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  performanceTitleText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  ratingContainer: {
+    alignItems: 'flex-end',
+  },
+  ratingText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  starsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  reviewCount: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 4,
+  },
+  performanceStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  performanceStat: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  performanceStatValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0066CC',
+  },
+  performanceStatLabel: {
+    fontSize: 12,
+    color: '#666',
+  },
+  section: {
+    padding: 20,
+    position: 'relative',
+  },
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    marginBottom: 16,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
+    flex: 1,
   },
   viewAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'flex-end',
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    zIndex: 1,
   },
   viewAllText: {
     fontSize: 14,
     color: '#0066CC',
     fontWeight: '500',
   },
-  invoiceStats: {
-    flexDirection: 'row',
+  appointmentsContainer: {
+    paddingRight: 20,
     gap: 16,
-    marginBottom: 16,
+    paddingTop: 8,
   },
-  invoiceStatCard: {
-    flex: 1,
-    padding: 16,
+  appointmentCard: {
+    width: 200,
+    backgroundColor: 'white',
     borderRadius: 12,
-    alignItems: 'center',
+    padding: 16,
     gap: 8,
     ...Platform.select({
       ios: {
@@ -491,123 +747,36 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  invoiceStatNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  invoiceStatLabel: {
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  financeAccessCard: {
+  appointmentHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
+    gap: 8,
   },
-  financeAccessContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    flex: 1,
-  },
-  financeAccessIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#f0f7ff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  financeAccessInfo: {
-    flex: 1,
-  },
-  financeAccessTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 4,
-  },
-  financeAccessDescription: {
+  appointmentTime: {
     fontSize: 14,
     color: '#666',
   },
-  financeAccessAction: {
-    fontSize: 14,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  financeAccessDisabled: {
-    fontSize: 14,
-    color: '#94a3b8',
-  },
-  partnersContainer: {
-    paddingRight: 20,
-    gap: 16,
-  },
-  partnerCard: {
-    width: 200,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  partnerImage: {
-    width: '100%',
-    height: 120,
-  },
-  partnerInfo: {
-    padding: 12,
-  },
-  partnerName: {
+  appointmentTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1a1a1a',
-    marginBottom: 4,
   },
-  partnerType: {
+  appointmentClient: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 8,
   },
-  partnerRating: {
+  appointmentBoat: {
+    fontSize: 12,
+    color: '#666',
+  },
+  appointmentLocation: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    marginTop: 4,
   },
-  partnerRatingText: {
-    fontSize: 14,
+  locationText: {
+    fontSize: 12,
     color: '#666',
   },
   activitiesList: {
@@ -672,13 +841,193 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activityRating: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  activityRatingText: {
     fontSize: 12,
     color: '#F59E0B',
     fontWeight: '600',
-  }
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
+  fullWidthStatCard: {
+    minWidth: '100%',
+  },
+  // Styles for the new "card button" look in Facturation section
+  invoiceStats: {
+    flexDirection: 'row', // Changed to row
+    justifyContent: 'space-between', // Distribute space between items
+    gap: 12, // Gap between cards
+    marginBottom: 16,
+  },
+  invoiceStatCard: {
+    flex: 1, // Each card takes equal space
+    backgroundColor: 'white',
+    padding: 16, // Reduced padding
+    borderRadius: 12,
+    alignItems: 'center',
+    gap: 8, // Reduced gap between icon/number/label
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 }, // Reduced shadow
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  invoiceStatNumber: {
+    fontSize: 20, // Reduced number size
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  invoiceStatLabel: {
+    fontSize: 12, // Reduced label size
+    textAlign: 'center',
+    color: '#666',
+  },
+  // Styles for modern "Top Rated Partners" section
+  partnersContainer: {
+    paddingRight: 20,
+    gap: 16, // Reduced gap between cards
+    paddingTop: 8,
+  },
+  partnerCard: {
+    width: 180, // Reduced width
+    backgroundColor: 'white',
+    borderRadius: 12, // Slightly less rounded corners
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 }, // Reduced shadow
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
+  },
+  partnerImage: {
+    width: '100%',
+    height: 100, // Reduced height
+    borderTopLeftRadius: 12, // Match card border radius
+    borderTopRightRadius: 12,
+  },
+  partnerInfo: {
+    padding: 12, // Reduced padding
+  },
+  partnerName: {
+    fontSize: 16, // Slightly smaller name
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginBottom: 4, // Reduced space
+  },
+  partnerType: {
+    fontSize: 11, // Smaller type text
+    color: '#666',
+    marginBottom: 6, // Reduced space
+  },
+  partnerRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4, // Reduced space
+  },
+  partnerRatingText: {
+    fontSize: 11, // Smaller rating text
+    color: '#666',
+  },
+  financeAccessCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+      },
+    }),
+  },
+  financeAccessContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    flex: 1,
+  },
+  financeAccessIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f0f7ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  financeAccessInfo: {
+    flex: 1,
+  },
+  financeAccessTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 4,
+  },
+  financeAccessDescription: {
+    fontSize: 14,
+    color: '#666',
+  },
+  financeAccessAction: {
+    fontSize: 14,
+    color: '#0066CC',
+    fontWeight: '500',
+  },
+  financeAccessDisabled: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
 });
