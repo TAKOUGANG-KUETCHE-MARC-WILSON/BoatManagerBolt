@@ -1,7 +1,29 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, ActivityIndicator, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Phone, Mail, Bot as Boat, MessageSquare, FileText, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import { supabase } from '@/src/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
+import { useFocusEffect } from '@react-navigation/native';
+
+// Définition de l'avatar par défaut
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+// Fonctions utilitaires pour les URLs d'avatars
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
 
 interface Client {
   id: string;
@@ -15,127 +37,160 @@ interface Client {
     name: string;
     type: string;
     image: string;
-    lastService?: string;
-    nextService?: string;
-    status: 'active' | 'maintenance' | 'inactive';
+    lastService?: string; // Derived from service_request
+    nextService?: string; // Derived from service_request
+    status: 'active' | 'maintenance' | 'inactive'; // Derived client-side
   }>;
   lastContact?: string;
-  status: 'active' | 'pending' | 'inactive';
+  status: 'active' | 'pending' | 'inactive'; // This status is from DB
   port: string;
 }
 
 interface ServiceHistory {
   id: string;
   date: string;
-  type: string;
-  description: string;
-  status: 'completed' | 'in_progress' | 'cancelled';
+  type: string; // Categorie service description1
+  description: string; // Service request description
+  status: 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
   boat: {
     id: string;
     name: string;
   };
 }
 
-// Mock data
-const mockClients: Record<string, Client> = {
-  '1': {
-    id: '1',
-    name: 'Jean Dupont',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    email: 'jean.dupont@example.com',
-    phone: '+33 6 12 34 56 78',
-    memberSince: 'Janvier 2024',
-    status: 'active',
-    lastContact: '2024-02-15',
-    port: 'Port de Marseille',
-    boats: [
-      {
-        id: '1',
-        name: 'Le Grand Bleu',
-        type: 'Voilier',
-        image: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-        lastService: '2024-01-20',
-        nextService: '2024-04-20',
-        status: 'active',
-      },
-    ],
-  },
-  '2': {
-    id: '2',
-    name: 'Sophie Martin',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    email: 'sophie.martin@example.com',
-    phone: '+33 6 23 45 67 89',
-    memberSince: 'Décembre 2023',
-    status: 'active',
-    lastContact: '2024-02-18',
-    port: 'Port de Marseille',
-    boats: [
-      {
-        id: '2',
-        name: 'Le Petit Prince',
-        type: 'Yacht',
-        image: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop',
-        lastService: '2024-02-10',
-        nextService: '2024-05-10',
-        status: 'active',
-      },
-      {
-        id: '3',
-        name: 'L\'Aventurier',
-        type: 'Catamaran',
-        image: 'https://images.unsplash.com/photo-1544919982-b61976f0ba43?q=80&w=2066&auto=format&fit=crop',
-        lastService: '2024-01-15',
-        nextService: '2024-04-15',
-        status: 'maintenance',
-      },
-    ],
-  },
-};
-
-const mockServiceHistory: ServiceHistory[] = [
-  {
-    id: '1',
-    date: '2024-01-20',
-    type: 'Maintenance',
-    description: 'Révision complète du moteur et changement des filtres',
-    status: 'completed',
-    boat: {
-      id: '1',
-      name: 'Le Grand Bleu',
-    },
-  },
-  {
-    id: '2',
-    date: '2024-02-10',
-    type: 'Installation',
-    description: 'Installation d\'un nouveau système GPS',
-    status: 'in_progress',
-    boat: {
-      id: '2',
-      name: 'Le Petit Prince',
-    },
-  },
-  {
-    id: '3',
-    date: '2024-01-15',
-    type: 'Réparation',
-    description: 'Réparation du système électrique',
-    status: 'cancelled',
-    boat: {
-      id: '3',
-      name: 'L\'Aventurier',
-    },
-  },
-];
-
 export default function ClientDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
   const [selectedTab, setSelectedTab] = useState<'boats' | 'history'>('boats');
+  const [client, setClient] = useState<Client | null>(null);
+  const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const client = mockClients[id as string];
+  const fetchClientData = useCallback(async () => {
+    if (!id) {
+      setError("ID du client manquant.");
+      setLoading(false);
+      return;
+    }
 
-  if (!client) {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // 1. Fetch client details
+      const { data: clientData, error: clientError } = await supabase
+        .from('users')
+        .select(`
+          id,
+          first_name,
+          last_name,
+          avatar,
+          e_mail,
+          phone,
+          status,
+          created_at,
+          last_login,
+          user_ports(ports(name)),
+          boat(id, name, type, image)
+        `)
+        .eq('id', id)
+        .eq('profile', 'pleasure_boater')
+        .single();
+
+      if (clientError || !clientData) {
+        console.error('Error fetching client:', clientError);
+        setError('Client non trouvé.');
+        setLoading(false);
+        return;
+      }
+
+      const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
+      const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
+
+      const processedBoats = await Promise.all((clientData.boat || []).map(async (b: any) => {
+        // Assuming boat images are in 'boat.images' bucket
+        const boatImageUrl = await getSignedAvatarUrl(b.image); 
+        // You might need to fetch lastService and nextService from other tables (e.g., service_request, rendez_vous)
+        // For now, these are placeholders or derived from request history
+        return {
+          id: b.id.toString(),
+          name: b.name,
+          type: b.type,
+          image: boatImageUrl || 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1', // Default boat image
+          lastService: 'N/A', // Placeholder
+          nextService: 'N/A', // Placeholder
+          status: 'active' as 'active' | 'maintenance' | 'inactive', // Placeholder
+        };
+      }));
+
+      setClient({
+        id: clientData.id,
+        name: `${clientData.first_name} ${clientData.last_name}`,
+        avatar: avatarUrl || DEFAULT_AVATAR,
+        email: clientData.e_mail,
+        phone: clientData.phone,
+        memberSince: new Date(clientData.created_at).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' }),
+        status: clientData.status,
+        lastContact: clientData.last_login ? new Date(clientData.last_login).toISOString().split('T')[0] : 'N/A',
+        port: clientPort,
+        boats: processedBoats,
+      });
+
+      // 2. Fetch service history for the client
+      const { data: historyData, error: historyError } = await supabase
+        .from('service_request')
+        .select(`
+          id,
+          date,
+          description,
+          statut,
+          boat(id, name),
+          categorie_service(description1)
+        `)
+        .eq('id_client', id)
+        .order('date', { ascending: false });
+
+      if (historyError) {
+        console.error('Error fetching service history:', historyError);
+      } else {
+        setServiceHistory(historyData.map((req: any) => ({
+          id: req.id.toString(),
+          date: req.date,
+          type: req.categorie_service?.description1 || 'N/A',
+          description: req.description,
+          status: req.statut,
+          boat: {
+            id: req.boat?.id.toString() || 'N/A',
+            name: req.boat?.name || 'N/A',
+          },
+        })));
+      }
+
+    } catch (e: any) {
+      console.error('Unexpected error fetching client data:', e);
+      setError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchClientData();
+    }, [fetchClientData])
+  );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement des détails du client...</Text>
+      </View>
+    );
+  }
+
+  if (error || !client) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
@@ -148,7 +203,7 @@ export default function ClientDetailsScreen() {
           <Text style={styles.title}>Client non trouvé</Text>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Ce client n'existe pas.</Text>
+          <Text style={styles.errorText}>{error || 'Ce client n\'existe pas.'}</Text>
           <TouchableOpacity 
             style={styles.errorButton}
             onPress={() => router.back()}
@@ -169,6 +224,7 @@ export default function ClientDetailsScreen() {
   };
 
   const formatDate = (dateString: string) => {
+    if (!dateString || dateString === 'N/A') return 'N/A';
     return new Date(dateString).toLocaleDateString('fr-FR', {
       day: 'numeric',
       month: 'long',
@@ -202,7 +258,7 @@ export default function ClientDetailsScreen() {
     }
   };
 
-  const getBoatStatusColor = (status: Client['boats'][0]['status']) => {
+  const getBoatStatusColor = (status: 'active' | 'maintenance' | 'inactive') => {
     switch (status) {
       case 'active':
         return '#10B981';
@@ -215,7 +271,7 @@ export default function ClientDetailsScreen() {
     }
   };
 
-  const getBoatStatusLabel = (status: Client['boats'][0]['status']) => {
+  const getBoatStatusLabel = (status: 'active' | 'maintenance' | 'inactive') => {
     switch (status) {
       case 'active':
         return 'En service';
@@ -236,6 +292,22 @@ export default function ClientDetailsScreen() {
         return '#3B82F6';
       case 'cancelled':
         return '#EF4444';
+      case 'submitted':
+        return '#F97316';
+      case 'forwarded':
+        return '#A855F7';
+      case 'quote_sent':
+        return '#22C55E';
+      case 'quote_accepted':
+        return '#15803D';
+      case 'scheduled':
+        return '#2563EB';
+      case 'ready_to_bill':
+        return '#6366F1';
+      case 'to_pay':
+        return '#EAB308';
+      case 'paid':
+        return '#a6acaf';
       default:
         return '#666666';
     }
@@ -249,6 +321,22 @@ export default function ClientDetailsScreen() {
         return 'En cours';
       case 'cancelled':
         return 'Annulé';
+      case 'submitted':
+        return 'Soumise';
+      case 'forwarded':
+        return 'Transmise';
+      case 'quote_sent':
+        return 'Devis envoyé';
+      case 'quote_accepted':
+        return 'Devis accepté';
+      case 'scheduled':
+        return 'Planifiée';
+      case 'ready_to_bill':
+        return 'Bon à facturer';
+      case 'to_pay':
+        return 'À régler';
+      case 'paid':
+        return 'Réglée';
       default:
         return status;
     }
@@ -345,87 +433,101 @@ export default function ClientDetailsScreen() {
       {/* Tab Content */}
       {selectedTab === 'boats' ? (
         <View style={styles.boatsContainer}>
-          {client.boats.map((boat) => (
-            <View key={boat.id} style={styles.boatCard}>
-              <Image source={{ uri: boat.image }} style={styles.boatImage} />
-              <View style={styles.boatContent}>
-                <View style={styles.boatHeader}>
-                  <View style={styles.boatInfo}>
-                    <Text style={styles.boatName}>{boat.name}</Text>
-                    <Text style={styles.boatType}>{boat.type}</Text>
+          {client.boats.length > 0 ? (
+            client.boats.map((boat) => (
+              <View key={boat.id} style={styles.boatCard}>
+                <Image source={{ uri: boat.image }} style={styles.boatImage} />
+                <View style={styles.boatContent}>
+                  <View style={styles.boatHeader}>
+                    <View style={styles.boatInfo}>
+                      <Text style={styles.boatName}>{boat.name}</Text>
+                      <Text style={styles.boatType}>{boat.type}</Text>
+                    </View>
+                    <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
+                      <View style={[styles.statusDot, { backgroundColor: getBoatStatusColor(boat.status) }]} />
+                      <Text style={[styles.boatStatusText, { color: getBoatStatusColor(boat.status) }]}>
+                        {getBoatStatusLabel(boat.status)}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
-                    <View style={[styles.statusDot, { backgroundColor: getBoatStatusColor(boat.status) }]} />
-                    <Text style={[styles.boatStatusText, { color: getBoatStatusColor(boat.status) }]}>
-                      {getBoatStatusLabel(boat.status)}
+
+                  <View style={styles.boatDetails}>
+                    {boat.lastService && (
+                      <View style={styles.boatDetailRow}>
+                        <CheckCircle2 size={16} color="#666" />
+                        <Text style={styles.boatDetailText}>
+                          Dernier service : {formatDate(boat.lastService)}
+                        </Text>
+                      </View>
+                    )}
+                    {boat.nextService && (
+                      <View style={styles.boatDetailRow}>
+                        <Calendar size={16} color="#666" />
+                        <Text style={styles.boatDetailText}>
+                          Prochain service : {formatDate(boat.nextService)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <TouchableOpacity 
+                    style={styles.boatButton}
+                    onPress={() => router.push(`/boats/${boat.id}`)}
+                  >
+                    <Text style={styles.boatButtonText}>Voir les détails</Text>
+                    <ChevronRight size={20} color="#0066CC" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Boat size={48} color="#ccc" />
+              <Text style={styles.emptyStateText}>Aucun bateau enregistré pour ce client.</Text>
+            </View>
+          )}
+        </View>
+      ) : (
+        <View style={styles.historyContainer}>
+          {serviceHistory.length > 0 ? (
+            serviceHistory.map((service) => (
+              <TouchableOpacity 
+                key={service.id} 
+                style={styles.serviceCard}
+                onPress={() => router.push(`/request/${service.id}`)}
+              >
+                <View style={styles.serviceHeader}>
+                  <View style={styles.serviceInfo}>
+                    <Text style={styles.serviceType}>{service.type}</Text>
+                    <Text style={styles.serviceDate}>{formatDate(service.date)}</Text>
+                  </View>
+                  <View style={[styles.serviceStatusBadge, { backgroundColor: `${getServiceStatusColor(service.status)}15` }]}>
+                    <Text style={[styles.serviceStatusText, { color: getServiceStatusColor(service.status) }]}>
+                      {getServiceStatusLabel(service.status)}
                     </Text>
                   </View>
                 </View>
 
-                <View style={styles.boatDetails}>
-                  {boat.lastService && (
-                    <View style={styles.boatDetailRow}>
-                      <CheckCircle2 size={16} color="#666" />
-                      <Text style={styles.boatDetailText}>
-                        Dernier service : {formatDate(boat.lastService)}
-                      </Text>
-                    </View>
-                  )}
-                  {boat.nextService && (
-                    <View style={styles.boatDetailRow}>
-                      <Calendar size={16} color="#666" />
-                      <Text style={styles.boatDetailText}>
-                        Prochain service : {formatDate(boat.nextService)}
-                      </Text>
-                    </View>
-                  )}
+                <View style={styles.serviceDetails}>
+                  <View style={styles.serviceBoat}>
+                    <Boat size={16} color="#666" />
+                    <Text style={styles.serviceBoatName}>{service.boat.name}</Text>
+                  </View>
+                  <Text style={styles.serviceDescription}>{service.description}</Text>
                 </View>
 
-                <TouchableOpacity 
-                  style={styles.boatButton}
-                  onPress={() => router.push(`/boats/${boat.id}`)}
-                >
-                  <Text style={styles.boatButtonText}>Voir les détails</Text>
+                <View style={styles.serviceFooter}>
+                  <Text style={styles.viewDetails}>Voir les détails</Text>
                   <ChevronRight size={20} color="#0066CC" />
-                </TouchableOpacity>
-              </View>
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <FileText size={48} color="#ccc" />
+              <Text style={styles.emptyStateText}>Aucun historique de service pour ce client.</Text>
             </View>
-          ))}
-        </View>
-      ) : (
-        <View style={styles.historyContainer}>
-          {mockServiceHistory.map((service) => (
-            <TouchableOpacity 
-              key={service.id} 
-              style={styles.serviceCard}
-              onPress={() => router.push(`/request/${service.id}`)}
-            >
-              <View style={styles.serviceHeader}>
-                <View style={styles.serviceInfo}>
-                  <Text style={styles.serviceType}>{service.type}</Text>
-                  <Text style={styles.serviceDate}>{formatDate(service.date)}</Text>
-                </View>
-                <View style={[styles.serviceStatusBadge, { backgroundColor: `${getServiceStatusColor(service.status)}15` }]}>
-                  <Text style={[styles.serviceStatusText, { color: getServiceStatusColor(service.status) }]}>
-                    {getServiceStatusLabel(service.status)}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.serviceDetails}>
-                <View style={styles.serviceBoat}>
-                  <Boat size={16} color="#666" />
-                  <Text style={styles.serviceBoatName}>{service.boat.name}</Text>
-                </View>
-                <Text style={styles.serviceDescription}>{service.description}</Text>
-              </View>
-
-              <View style={styles.serviceFooter}>
-                <Text style={styles.viewDetails}>Voir les détails</Text>
-                <ChevronRight size={20} color="#0066CC" />
-              </View>
-            </TouchableOpacity>
-          ))}
+          )}
         </View>
       )}
     </ScrollView>
@@ -742,5 +844,10 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
   },
 });

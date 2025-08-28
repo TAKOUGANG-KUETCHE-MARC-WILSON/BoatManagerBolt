@@ -5,6 +5,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { generateQuotePDF } from '@/utils/pdf'; // Assurez-vous que cette fonction retourne le base64
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
 
 interface Service {
   id: string;
@@ -154,11 +156,14 @@ export default function NewQuoteScreen() {
           const reference = generateQuoteReference(depRequestId, depClientId);
           const title = `Devis - ${form.client.name || depClientName} / ${form.boat.name || depBoatName}`;
 
+          // MODIFICATION ICI : Assurer que valid_until est une date valide
+          const validUntilForInsert = form.validUntil.trim() === '' ? new Date().toISOString().split('T')[0] : form.validUntil;
+
           const { data: newQuoteRow, error: createQuoteError } = await supabase
             .from('quotes')
             .insert({
               reference,
-              valid_until: form.validUntil,
+              valid_until: validUntilForInsert, // Utiliser la date valide ici
               service_request_id: depRequestId ? parseInt(depRequestId) : null,
               id_client: parseInt(depClientId),
               id_boat: parseInt(depBoatId),
@@ -407,49 +412,62 @@ export default function NewQuoteScreen() {
 
     setIsSubmitting(true);
     try {
-      // 1. Générer le PDF du devis
-      const pdfBase64 = await generateQuotePDF({
-        reference: generateQuoteReference(form.requestId, form.client.id),
-        date: new Date().toISOString().split('T')[0],
-        validUntil: form.validUntil,
-        provider: getProviderFields(),
-        client: form.client,
-        boat: form.boat,
-        services: form.services,
-        totalAmount: totalAmount,
-      });
+      // 1. Générer le PDF → retourne un chemin local
+const localPdfPath = await generateQuotePDF({
+  reference: generateQuoteReference(form.requestId, form.client.id),
+  date: new Date().toISOString().split('T')[0],
+  validUntil: form.validUntil,
+  provider: getProviderFields(),
+  client: form.client,
+  boat: form.boat,
+  services: form.services,
+  totalAmount: totalAmount,
+});
 
-      if (!pdfBase64) {
-        Alert.alert('Erreur', 'Impossible de générer le PDF du devis.');
-        return;
-      }
+if (!localPdfPath) {
+  Alert.alert('Erreur', 'Impossible de générer le PDF du devis.');
+  return;
+}
 
-      // 2. Uploader le PDF dans le bucket 'quotes'
-      const pdfFileName = `quote_${form.quoteId}_${Date.now()}.pdf`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('quotes') // Utilisation du bucket 'quotes'
-        .upload(pdfFileName, decode(pdfBase64), {
-          contentType: 'application/pdf',
-          upsert: true,
-        });
+// 2. Lire le fichier en base64
+const base64Pdf = await FileSystem.readAsStringAsync(localPdfPath, {
+  encoding: FileSystem.EncodingType.Base64,
+});
 
-      if (uploadError) {
-        console.error('Error uploading PDF:', uploadError);
-        Alert.alert('Erreur', `Échec du téléchargement du PDF: ${uploadError.message}`);
-        return;
-      }
-      const pdfUrl = supabase.storage.from('quotes').getPublicUrl(uploadData.path).data.publicUrl;
+// 3. Uploader dans Supabase
+const pdfFileName = `quote_${form.quoteId}_${Date.now()}.pdf`;
+const { data: uploadData, error: uploadError } = await supabase.storage
+  .from('quotes')
+  .upload(pdfFileName, decode(base64Pdf), {
+    contentType: 'application/pdf',
+    upsert: true,
+  });
 
-      // 3. Mettre à jour l'entrée 'quotes' avec l'URL du PDF et le statut 'sent'
-      const { error: updateQuoteError } = await supabase
-        .from('quotes')
-        .update({
-          file_url: pdfUrl,
-          status: 'sent',
-          total_incl_tax: totalAmount,
-          subtotal_excl_tax: totalAmount, // Supposons que subtotal_excl_tax est égal à total_incl_tax pour cet exemple
-        })
-        .eq('id', form.quoteId);
+if (uploadError) {
+  console.error('Error uploading PDF:', uploadError);
+  Alert.alert('Erreur', `Échec du téléchargement du PDF: ${uploadError.message}`);
+  return;
+}
+
+const pdfUrl = supabase.storage.from('quotes').getPublicUrl(uploadData.path).data.publicUrl;
+
+// 4. Mettre à jour la table 'quotes' avec le lien
+const { error: updateQuoteError } = await supabase
+  .from('quotes')
+  .update({
+    file_url: pdfUrl,
+    status: 'sent',
+    total_incl_tax: totalAmount,
+    subtotal_excl_tax: totalAmount,
+  })
+  .eq('id', form.quoteId);
+
+if (updateQuoteError) {
+  console.error('Error updating quote status and file_url:', updateQuoteError);
+  Alert.alert('Erreur', `Impossible de finaliser le devis: ${updateQuoteError.message}`);
+  return;
+}
+
 
       if (updateQuoteError) {
         console.error('Error updating quote status and file_url:', updateQuoteError);
@@ -490,6 +508,7 @@ export default function NewQuoteScreen() {
 
   // Fonction utilitaire pour décoder le base64 (nécessaire pour l'upload de Blob)
   const decode = (base64: string) => {
+  try {
     const binaryString = atob(base64);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
@@ -497,7 +516,11 @@ export default function NewQuoteScreen() {
       bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes;
-  };
+  } catch (error) {
+    console.error("Base64 decode error:", error);
+    throw new Error("Erreur de décodage du PDF.");
+  }
+};
 
   if (isLoading) {
     return (

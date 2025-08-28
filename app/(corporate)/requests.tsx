@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native';
-import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
+import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro, X } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
@@ -26,10 +26,10 @@ interface Request {
     avatar: string;
     email: string;
     phone: string;
-    boat: {
+    boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle dans client
       name: string;
       type: string;
-    };
+    } | null; // Ajout de | null pour être explicite
   };
   boatManager?: {
     id: string;
@@ -52,7 +52,7 @@ interface Request {
   hasStatusUpdate?: boolean;
 }
 
-// Configuration des statuts détaillés (pour l'affichage des cartes individuelles et la modale)
+// Configuration des statuts pour le Boat Manager
 const detailedStatusConfig = {
   submitted: {
     icon: Clock,
@@ -152,8 +152,7 @@ const corporateSummaryConfig: Record<CorporateSummaryCategory, CorporateSummaryC
     icon: Upload,
     statuses: ['ready_to_bill'],
     subCategories: [
-      { key: 'ready_to_bill_bm', label: 'BM', filter: (r) => r.status === 'ready_to_bill' && !!r.boatManager && !r.company },
-      { key: 'ready_to_bill_company', label: 'Entreprise', filter: (r) => r.status === 'ready_to_bill' && !!r.company }
+      { key: 'ready_to_bill_bm', label: 'BM', filter: (r) => r.status === 'ready_to_bill' && !!r.boatManager && !r.company }
     ]
   },
   to_pay_group: {
@@ -162,8 +161,7 @@ const corporateSummaryConfig: Record<CorporateSummaryCategory, CorporateSummaryC
     icon: FileText,
     statuses: ['to_pay'],
     subCategories: [
-      { key: 'to_pay_bm', label: 'BM', filter: (r) => r.status === 'to_pay' && !!r.boatManager && !r.company },
-      { key: 'to_pay_company', label: 'Entreprise', filter: (r) => r.status === 'to_pay' && !!r.company }
+      { key: 'to_pay_bm', label: 'BM', filter: (r) => r.status === 'to_pay' && !!r.boatManager && !r.company }
     ]
   },
   paid_group: {
@@ -172,8 +170,7 @@ const corporateSummaryConfig: Record<CorporateSummaryCategory, CorporateSummaryC
     icon: Euro,
     statuses: ['paid'],
     subCategories: [
-      { key: 'paid_bm', label: 'BM', filter: (r) => r.status === 'paid' && !!r.boatManager && !r.company },
-      { key: 'paid_company', label: 'Entreprise', filter: (r) => r.status === 'paid' && !!r.company }
+      { key: 'paid_bm', label: 'BM', filter: (r) => r.status === 'paid' && !!r.boatManager && !r.company }
     ]
   },
   cancelled_group: { label: 'Annulées', color: '#DC2626', icon: XCircle, statuses: ['cancelled'] },
@@ -301,10 +298,10 @@ export default function RequestsScreen() {
             avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
             email: req.users.e_mail,
             phone: req.users.phone,
-            boat: {
+            boat: req.boat ? { // MODIFICATION: Vérifier si req.boat est null avant d'assigner
               name: req.boat.name,
               type: req.boat.type
-            }
+            } : null, // Assigner null si req.boat est null
           },
           boatManager: boatManagerDetails,
           company: companyDetails,
@@ -367,7 +364,7 @@ export default function RequestsScreen() {
         request.boatManager?.name?.toLowerCase().includes(query) ||
         request.title.toLowerCase().includes(query) ||
         request.type.toLowerCase().includes(query) ||
-        request.client.boat.name.toLowerCase().includes(query)
+        (request.client.boat && request.client.boat.name.toLowerCase().includes(query)) // MODIFICATION: Vérifier si request.client.boat existe
       );
     }
 
@@ -397,12 +394,6 @@ export default function RequestsScreen() {
         return sortAsc
           ? a.client.name.localeCompare(b.client.name)
           : b.client.name.localeCompare(a.client.name);
-      } else if (sortKey === 'boatManager') {
-        const aName = a.boatManager?.name || '';
-        const bName = b.boatManager?.name || '';
-        return sortAsc
-          ? aName.localeCompare(bName)
-          : bName.localeCompare(aName);
       } else if (sortKey === 'company') {
         const aName = a.company?.name || '';
         const bName = b.company?.name || '';
@@ -425,7 +416,7 @@ export default function RequestsScreen() {
     } else {
       setSortKey(key);
       setSortAsc(true);
-    }
+    };
   };
 
   const handleRequestDetails = (requestId: string) => {
@@ -446,7 +437,7 @@ export default function RequestsScreen() {
     }
     const date = new Date(dateString);
     if (isNaN(date.getTime())) {
-      return 'Invalid Date';
+      return 'Invalid Date'; // Handle invalid date strings
     }
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
@@ -468,7 +459,7 @@ export default function RequestsScreen() {
     router.push(`/(corporate)/messages?client=${clientId}`);
   };
 
-  const getHandlerInfo = (request: Request) => {
+  const getCurrentHandlerInfo = useCallback((request: Request) => { // MODIFICATION: Encapsuler dans useCallback
     let handlerText = '';
     let handlerIcon = null;
     let handlerColor = '#666';
@@ -511,7 +502,7 @@ export default function RequestsScreen() {
     }
 
     return { handlerText, handlerIcon, handlerColor };
-  };
+  }, [formatDate]); // Dépendance à formatDate
 
   const handleUpdateStatus = async (newStatus: CorporateRequestStatus) => {
     if (requestToUpdate) {
@@ -558,7 +549,7 @@ export default function RequestsScreen() {
               style={styles.closeButton}
               onPress={() => setShowStatusChangeModal(false)}
             >
-              <XCircle size={24} color="#666" />
+              <X size={24} color="#666" />
             </TouchableOpacity>
           </View>
           
@@ -654,7 +645,7 @@ export default function RequestsScreen() {
                   <View style={styles.subCategoryContainer}>
                     {config.subCategories.map(sub => (
                       <Text key={sub.key} style={[styles.subCategoryText, { color: config.color }]}>
-                        {sub.label}: {requestsSummary[sub.key as keyof typeof requestsSummary]}
+                        {requestsSummary[sub.key as keyof typeof requestsSummary]}
                       </Text>
                     ))}
                   </View>
@@ -703,7 +694,7 @@ export default function RequestsScreen() {
 
       {showFilters && (
         <View style={styles.filtersContainer}>
-          <Text style={styles.filtersTitle}>Filtres par statut détaillé</Text>
+          <Text style={styles.filtersTitle}>Filtres par statut</Text>
           <View style={styles.statusFilters}>
             
             {Object.entries(detailedStatusConfig).map(([status,config]) => {
@@ -787,9 +778,9 @@ export default function RequestsScreen() {
               const status = detailedStatusConfig[request.status];
               const StatusIcon = status ? status.icon : FileText;
               const statusLabel = status ? status.label : 'Inconnu';
-              const statusColor = status ? status.color : '#666666';
+              const statusColor = status ? status.color : '#666666'; // MODIFICATION: Valeur par défaut pour statusColor
 
-              const { handlerText, handlerIcon: HandlerIcon, handlerColor } = getHandlerInfo(request);
+              const { handlerText, handlerIcon: HandlerIcon, handlerColor } = getCurrentHandlerInfo(request); // MODIFICATION: Appel de la fonction
 
               return (
                 <TouchableOpacity 
@@ -849,20 +840,31 @@ export default function RequestsScreen() {
                     <View style={styles.clientInfo}>
                       <User size={16} color="#666" />
                       <Text style={styles.clientName}>{request.client.name}</Text>
-                      <View style={styles.boatInfo}>
-                        <Boat size={16} color="#666" />
-                        <Text style={styles.boatType}>
-                          {request.client.boat.name} • {request.client.boat.type}
-                        </Text>
-                      </View>
+                      {request.client.boat && ( // MODIFICATION: Afficher les informations du bateau uniquement si request.client.boat existe
+                        <View style={styles.boatInfo}>
+                          <Boat size={16} color="#666" />
+                          <Text style={styles.boatType}>
+                            {request.client.boat.name} • {request.client.boat.type}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                     
-                    {/* Display current handler and progress */}
-                    {handlerText && HandlerIcon && (
-                      <View style={[styles.handlerInfo, { backgroundColor: `${handlerColor}15` }]}>
-                        <HandlerIcon size={16} color={handlerColor} />
-                        <Text style={[styles.handlerText, { color: handlerColor }]}>
-                          {handlerText}
+                    {request.boatManager && (
+                      <View style={styles.boatManagerInfo}>
+                        <User size={16} color="#0066CC" />
+                        <Text style={styles.boatManagerName}>{request.boatManager.name}</Text>
+                      </View>
+                    )}
+                    
+                    {getCurrentHandlerInfo(request).handlerText && getCurrentHandlerInfo(request).handlerIcon && ( // MODIFICATION: Vérifier si les propriétés existent
+                      <View style={[styles.handlerInfo, { backgroundColor: `${getCurrentHandlerInfo(request).handlerColor}15` }]}>
+                        <HandlerIcon size={16} color={getCurrentHandlerInfo(request).handlerColor} />
+                        <Text style={[
+                          styles.handlerText, 
+                          { color: getCurrentHandlerInfo(request).handlerColor }
+                        ]}>
+                          {getCurrentHandlerInfo(request).handlerText}
                         </Text>
                       </View>
                     )}
@@ -1246,10 +1248,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  statusContainer: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1259,15 +1257,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  sourceBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 16,
-  },
-  sourceText: {
     fontSize: 12,
     fontWeight: '500',
   },
@@ -1452,13 +1441,22 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 16, // MODIFICATION ICI : borderRadius uniforme
+    width: '90%', // MODIFICATION ICI : Largeur de 90%
+    maxWidth: 500, // MODIFICATION ICI : Largeur maximale de 500px
     maxHeight: '80%',
-    width: '90%',
     ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
       web: {
-        maxWidth: 500,
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
       },
     }),
   },
@@ -1505,4 +1503,3 @@ const styles = StyleSheet.create({
     color: '#666',
   },
 });
-

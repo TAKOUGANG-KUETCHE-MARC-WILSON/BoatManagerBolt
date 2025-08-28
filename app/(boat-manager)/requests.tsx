@@ -30,12 +30,12 @@ interface Request {
     avatar: string;
     email: string;
     phone: string;
-    boat: {
+    boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle dans client
       name: string;
       type: string;
     };
   };
-  boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle
+  boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle (pour la propriété de niveau supérieur)
     id: string;
     name: string;
     type: string;
@@ -265,16 +265,15 @@ export default function RequestsScreen() {
             avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop', // Default avatar
             email: req.users.e_mail,
             phone: req.users.phone,
-            boat: {
+            boat: req.boat ? { // MODIFICATION: Vérifier si req.boat est null avant d'assigner
               name: req.boat.name,
               type: req.boat.type
-            }
+            } : undefined, // Assign undefined if req.boat is null
           },
-          // MODIFICATION: Vérifier si id_boat est null avant d'assigner
-          boat: req.id_boat ? {
-            id: req.id_boat.id.toString(),
-            name: req.id_boat.name,
-            type: req.id_boat.type,
+          boat: req.boat ? { // MODIFICATION: Vérifier si id_boat est null avant d'assigner
+            id: req.boat.id.toString(),
+            name: req.boat.name,
+            type: req.boat.type,
           } : undefined, // Assign undefined if id_boat is null
           boatManager: boatManagerDetails,
           company: companyDetails,
@@ -1370,22 +1369,6 @@ const styles = StyleSheet.create({
   companyName: {
     fontSize: 14,
     color: '#8B5CF6',
-    fontWeight: '500',
-  },
-  handlerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#f0f7ff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-    marginTop: 4,
-  },
-  handlerText: {
-    fontSize: 12,
-    color: '#0066CC',
     fontWeight: '500',
   },
   invoiceInfo: {

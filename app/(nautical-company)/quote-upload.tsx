@@ -213,6 +213,7 @@ export default function QuoteUploadScreen() {
       }
     } else if (uploadMethod === 'upload') {
       if (!form.file) newErrors.file = 'Le fichier du devis est requis';
+      // MODIFICATION: validUntil est optionnel pour l'upload, donc pas d'erreur si vide
     }
     
     setErrors(newErrors);
@@ -282,18 +283,85 @@ fileUrl = pub.publicUrl;
     }
 
     try {
-      const { error: updateError } = await supabase
+      // MODIFICATION: Utiliser null si validUntil est une chaîne vide
+      const validUntilValue = form.validUntil.trim() === '' ? null : form.validUntil;
+
+      // MODIFICATION CRITIQUE: La colonne 'date' dans service_request est pour la date de la demande,
+      // pas la date de validité du devis. La date de validité doit être stockée dans la table 'quotes'.
+      // Si la table 'quotes' n'a pas de colonne 'valid_until', il faudra l'ajouter.
+      // Pour l'instant, nous allons la passer à la table 'quotes' lors de l'insertion.
+
+      // 1. Créer ou mettre à jour l'entrée dans la table 'quotes'
+      let quoteIdToUse = requestDetails.quoteId; // Si un quoteId est déjà présent dans requestDetails
+
+      if (!quoteIdToUse) {
+        const { data: newQuote, error: insertQuoteError } = await supabase
+          .from('quotes')
+          .insert({
+            reference: `DEV-${form.requestId}-${Date.now()}`, // Générer une référence unique
+            status: 'sent', // Statut initial du devis
+            service_request_id: parseInt(form.requestId),
+            id_client: form.clientId,
+            id_boat: parseInt(form.boatId),
+            id_boat_manager: user.role === 'boat_manager' ? user.id : null,
+            id_companie: user.role === 'nautical_company' ? user.id : null,
+            provider_type: user.role === 'boat_manager' ? 'boat_manager' : 'nautical_company',
+            title: form.title,
+            description: form.notes || 'Devis fourni par document',
+            total_incl_tax: form.amount || 0,
+            subtotal_excl_tax: form.amount || 0, // Assumant total_incl_tax = subtotal_excl_tax pour simplicité
+            valid_until: validUntilValue, // Utiliser la valeur traitée ici
+            file_url: fileUrl, // Stocker l'URL du fichier directement dans la table quotes
+            created_at: new Date().toISOString(), // Date de création du devis
+          })
+          .select('id')
+          .single();
+
+        if (insertQuoteError || !newQuote) {
+          console.error('Error creating new quote entry:', insertQuoteError);
+          Alert.alert('Erreur', `Échec de la création du devis: ${insertQuoteError?.message}`);
+          setLoading(false);
+          return;
+        }
+        quoteIdToUse = newQuote.id;
+      } else {
+        // Si le devis existe déjà, le mettre à jour
+        const { error: updateQuoteError } = await supabase
+          .from('quotes')
+          .update({
+            status: 'sent',
+            total_incl_tax: form.amount || 0,
+            subtotal_excl_tax: form.amount || 0,
+            valid_until: validUntilValue, // Utiliser la valeur traitée ici
+            file_url: fileUrl,
+            description: form.notes || 'Devis fourni par document',
+          })
+          .eq('id', quoteIdToUse);
+
+        if (updateQuoteError) {
+          console.error('Error updating existing quote entry:', updateQuoteError);
+          Alert.alert('Erreur', `Échec de la mise à jour du devis existant: ${updateQuoteError.message}`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 2. Mettre à jour le statut de la service_request
+      const { error: updateRequestError } = await supabase
         .from('service_request')
         .update({
           statut: 'quote_sent',
-          prix: totalAmount,
-          note_add: fileUrl ? `Devis PDF: ${fileUrl}` : form.services[0]?.description || null, // Store file URL or first service description
+          prix: totalAmount, // Utiliser totalAmount du formulaire
+          note_add: fileUrl ? `Devis PDF: ${fileUrl}` : form.services[0]?.description || null,
+          // La colonne 'date' dans service_request est la date de la demande, pas la date de validité du devis.
+          // Ne pas la modifier ici, ou la modifier avec la date actuelle si c'est le comportement souhaité.
+          // Pour l'instant, nous laissons la colonne 'date' de service_request inchangée.
         })
         .eq('id', parseInt(form.requestId));
 
-      if (updateError) {
-        console.error('Error updating service request:', updateError);
-        Alert.alert('Erreur', `Échec de l'envoi du devis: ${updateError.message}`);
+      if (updateRequestError) {
+        console.error('Error updating service request:', updateRequestError);
+        Alert.alert('Erreur', `Échec de la mise à jour de la demande de service: ${updateRequestError.message}`);
       } else {
         const message = `Le devis a été envoyé avec succès au client.`;
         Alert.alert(
@@ -312,6 +380,8 @@ fileUrl = pub.publicUrl;
     } catch (e) {
       console.error('Unexpected error during quote submission:', e);
       Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la soumission du devis.');
+    } finally {
+      setLoading(false);
     }
   };
   
@@ -1125,8 +1195,8 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
   },
   serviceTextArea: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
+    backgroundColor: 'white',
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     padding: 12,
@@ -1155,4 +1225,3 @@ const styles = StyleSheet.create({
     color: '#0066CC',
   },
 });
-
