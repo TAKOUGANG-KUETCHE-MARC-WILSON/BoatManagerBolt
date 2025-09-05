@@ -83,6 +83,7 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
 
 export default function NewBoatScreen() {
   const { user, ports: availablePorts } = useAuth();
+
   const [form, setForm] = useState<BoatForm>({
     photo: '',
     name: '',
@@ -108,14 +109,13 @@ export default function NewBoatScreen() {
   // Fetch Boat Manager details when portId changes
   useEffect(() => {
     const fetchBoatManagerDetails = async () => {
-      if (form.portId) {
-        // Find the boat manager ID associated with the selected port
-        const { data: userPorts, error: userPortsError } = await supabase
-          .from('user_ports')
-          .select('user_id')
-          .eq('port_id', parseInt(form.portId))
-          .limit(1); // Assuming one boat manager per port for simplicity
+      const parsedPortId = Number(form.portId);
 
+   const { data: userPorts, error: userPortsError } = await supabase
+     .from('user_ports')
+     .select('user_id')
+     .eq('port_id', parsedPortId)
+     .limit(1);
         if (userPortsError) {
           console.error('Error fetching user_ports:', userPortsError);
           setSelectedBoatManagerDetails(null);
@@ -127,10 +127,10 @@ export default function NewBoatScreen() {
           // Fetch boat manager's profile details
           const { data: bmProfile, error: bmProfileError } = await supabase
             .from('users')
-            .select('first_name, last_name, e_mail, phone, avatar')
+            .select('id,first_name, last_name, e_mail, phone, avatar')
             .eq('id', boatManagerId)
             .eq('profile', 'boat_manager') // Ensure it's a boat manager
-            .single();
+            .maybeSingle();
 
           if (bmProfileError) {
             console.error('Error fetching boat manager profile:', bmProfileError);
@@ -153,9 +153,7 @@ export default function NewBoatScreen() {
         } else {
           setSelectedBoatManagerDetails(null);
         }
-      } else {
-        setSelectedBoatManagerDetails(null);
-      }
+     
     };
 
     fetchBoatManagerDetails();
@@ -347,7 +345,7 @@ export default function NewBoatScreen() {
           [
             {
               text: 'OK',
-              onPress: () => router.push(`/boats/${data.id}`) // Navigate to the new boat's profile
+              onPress: () => router.replace(`/boats/${data.id}?from=signup`) // Navigate to the new boat's profile
             }
           ]
         );

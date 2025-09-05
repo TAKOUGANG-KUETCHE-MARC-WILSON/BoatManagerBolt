@@ -4,7 +4,6 @@ import { Mail, User, ArrowLeft, Anchor, MapPin, Lock, Plus, X } from 'lucide-rea
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import PortSelectionModal from '@/components/PortSelectionModal';
-import { supabase } from '@/src/lib/supabase';
 
 interface SignupForm {
   firstName: string;
@@ -19,7 +18,7 @@ interface SignupForm {
 }
 
 export default function SignupScreen() {
-  const { clearPendingServiceRequest, ports } = useAuth();
+  const { clearPendingServiceRequest, ports, login } = useAuth();
   const [form, setForm] = useState<SignupForm>({
     firstName: '',
     lastName: '',
@@ -89,7 +88,11 @@ export default function SignupScreen() {
       const user = await res.json();
       console.log('✅ Utilisateur créé:', user);
 
-      // Show first welcome modal instead of direct navigation
+      // 🔐 Connexion auto (rien d'autre ne change)
+    const firstPortId = form.ports[0].portId; // déjà validé par le formulaire
+       await login(form.email.trim().toLowerCase(), form.password, firstPortId, false);
+
+      // On garde ta logique existante (modale 1 puis 2)
       setShowWelcomeModal1(true);
 
     } catch (error: any) {
@@ -327,7 +330,7 @@ export default function SignupScreen() {
         animationType="fade"
         onRequestClose={() => {
           setShowWelcomeModal2(false);
-          router.push('/login'); // Redirect to login if second modal is dismissed
+          router.push('/(tabs)');// Redirect to login if second modal is dismissed
         }}
       >
         <View style={styles.modalOverlay}>
@@ -339,9 +342,10 @@ export default function SignupScreen() {
             <TouchableOpacity
               style={styles.modalButton}
               onPress={() => {
-                setShowWelcomeModal2(false);
-                router.push('/boats/new'); // Navigate to boat creation form
-              }}
+  setShowWelcomeModal2(false);
+  router.replace('/(tabs)/profile');       // enlève /signup de l’historique
+  setTimeout(() => router.push('/boats/new'), 0);
+}}
             >
               <Text style={styles.modalButtonText}>Ajouter vos bateaux</Text>
             </TouchableOpacity>

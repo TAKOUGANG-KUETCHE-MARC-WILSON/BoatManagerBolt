@@ -1332,29 +1332,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  temporaryBoatManagerContactInfo: {
-    gap: 8,
-  },
-  temporaryContactRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  temporaryContactText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  contactBoatManagerButton: {
-    backgroundColor: '#0066CC',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  contactBoatManagerText: {
-    fontSize: 16,
-    color: 'white',
-    fontWeight: '500',
-  },
+ 
   noTemporaryBm: {
     padding: 16,
     backgroundColor: '#f8fafc',

@@ -169,7 +169,7 @@ bcrypt.setRandomFallback((len: number) => {
       .from('users')
       .select('*, e_mail, first_name, last_name, avatar, phone, job_title, experience, certification, bio, created_at, company_name, siret, address, profile, user_ports(port_id)') // Ensure 'phone' is selected
       .eq('id', authUserId)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Error fetching user profile:', error);
@@ -317,7 +317,7 @@ bcrypt.setRandomFallback((len: number) => {
     }
   };
 
-  const login = async (email: string, password: string, portId?: string) => {
+  const login = async (email: string, password: string, portId?: string, shouldRedirect: boolean = true) => {
     const { data: users, error: userError } = await supabase
       .from('users')
       .select('id, e_mail, password, profile, last_login') // Inclure last_login
@@ -387,7 +387,9 @@ bcrypt.setRandomFallback((len: number) => {
         }
       }
     }
+   if (shouldRedirect) {
     redirectUser(userProfile?.role || 'pleasure_boater');
+  }
   };
 
   const signup = async (
