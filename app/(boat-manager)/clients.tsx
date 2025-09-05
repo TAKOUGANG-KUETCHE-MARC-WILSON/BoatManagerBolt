@@ -157,25 +157,45 @@ export default function HomeScreen() {
       }
 
       // Fetch new messages (simplified: count all unread messages for this user)
-      const { count: newMessagesCount, error: messagesError } = await supabase
-        .from('messages')
-        .select('id', { count: 'exact' })
-        .eq('receiver_id', user.id)
-        .eq('is_read', false);
+      // Fetch unread messages (par conversations où l'utilisateur est membre)
+// Fetch new messages (par conversations où l'utilisateur est membre)
+const { data: convMembers, error: convError } = await supabase
+  .from('conversation_members')
+  .select('conversation_id')
+  .eq('user_id', user.id);
 
-      if (messagesError) {
-        console.error('Error fetching new messages:', messagesError);
-      }
+let newMessagesCount = 0; // ✅ variable locale
 
-      setStats(prevStats => ({
-        ...prevStats,
-        urgentRequests: urgentRequestsCount || 0,
-        upcomingAppointments: upcomingAppointmentsCount || 0,
-        pendingRequests: pendingRequestsCount || 0,
-        newMessages: newMessagesCount || 0,
-        clientSatisfaction: bmProfile?.rating || 0,
-        reviewCount: bmProfile?.review_count || 0,
-      }));
+if (convError || !convMembers) {
+  console.error('Erreur lors de la récupération des conversations:', convError);
+} else {
+  const convIds = convMembers.map(c => c.conversation_id);
+  if (convIds.length > 0) {
+    const { count: messagesCount, error: messagesError } = await supabase
+      .from('messages')
+      .select('id', { count: 'exact' })
+      .in('conversation_id', convIds)
+      .neq('sender_id', user.id)
+      .eq('is_read', false);
+
+    if (messagesError) {
+      console.error('Erreur lors de la récupération des messages non lus:', messagesError);
+    } else {
+      newMessagesCount = messagesCount || 0;
+    }
+  }
+}
+
+setStats(prevStats => ({
+  ...prevStats,
+  urgentRequests: urgentRequestsCount || 0,
+  upcomingAppointments: upcomingAppointmentsCount || 0,
+  pendingRequests: pendingRequestsCount || 0,
+  newMessages: newMessagesCount, // ✅ mise à jour correcte
+  clientSatisfaction: bmProfile?.rating || 0,
+  reviewCount: bmProfile?.review_count || 0,
+}));
+
 
     } catch (e) {
       console.error('Dashboard stats fetch error:', e);

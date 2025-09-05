@@ -29,9 +29,9 @@ const TemporaryPortModal = ({
   selectedTemporaryPortId,
 }: TemporaryPortModalProps) => {
 
-  const filteredPorts = allPorts.filter(port =>
-    port.name.toLowerCase().includes(temporaryPortSearch.toLowerCase())
-  );
+ const filteredPorts = allPorts.filter(port =>
+  (port.name ?? '').toLowerCase().includes((temporaryPortSearch ?? '').toLowerCase())
+);
 
   // Cette fonction interne appellera la fonction onSelectPort passée en prop
   const handleSelectPortInternal = async (port: Port) => {
@@ -82,7 +82,7 @@ const TemporaryPortModal = ({
                   styles.portItemText,
                   selectedTemporaryPortId === port.id && styles.selectedPortItemText
                 ]}>
-                  {port.name}
+                  {String(port.name ?? '')}
                 </Text>
               </TouchableOpacity>
             ))}

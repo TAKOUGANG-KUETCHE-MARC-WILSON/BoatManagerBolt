@@ -209,21 +209,35 @@ export default function RequestsScreen() {
 
 
       // Fetch unread messages
-      const { count: messagesCount, error: messagesError } = await supabase
-        .from('messages')
-        .select('id', { count: 'exact' })
-        .eq('receiver_id', user.id)
-        .eq('is_read', false);
+      // Fetch unread messages (par conversations où l'utilisateur est membre)
+const { data: convMembers, error: convError } = await supabase
+  .from('conversation_members')
+  .select('conversation_id')
+  .eq('user_id', user.id);
 
+if (convError || !convMembers) {
+  console.error('Erreur lors de la récupération des conversations:', convError);
+  setUnreadMessagesCount(0);
+} else {
+  const convIds = convMembers.map(c => c.conversation_id);
+  if (convIds.length === 0) {
+    setUnreadMessagesCount(0);
+  } else {
+    const { count: messagesCount, error: messagesError } = await supabase
+      .from('messages')
+      .select('id', { count: 'exact' })
+      .in('conversation_id', convIds) // ✅ uniquement les convs de l’utilisateur
+      .neq('sender_id', user.id)      // ✅ pas mes propres messages
+      .eq('is_read', false);          // ✅ uniquement non lus
 
-
-
-      if (messagesError) {
-        console.error('Error fetching unread messages count:', messagesError);
-        setUnreadMessagesCount(0);
-      } else {
-        setUnreadMessagesCount(messagesCount || 0);
-      }
+    if (messagesError) {
+      console.error('Erreur lors de la récupération des messages non lus:', messagesError);
+      setUnreadMessagesCount(0);
+    } else {
+      setUnreadMessagesCount(messagesCount || 0);
+    }
+  }
+}
     };
 
 
@@ -635,7 +649,7 @@ export default function RequestsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           {selectedStatus
-            ? `Demandes ${statusConfig[selectedStatus].label.toLowerCase()}`
+            ? `Demandes ${statusConfig[selectedStatus]?.label?.toLowerCase() || selectedStatus}`
             : selectedUrgency === 'urgent'
             ? 'Demandes urgentes'
             : 'Toutes mes demandes'}
@@ -670,7 +684,7 @@ export default function RequestsScreen() {
           {filteredAndSortedRequests.length > 0 ? (
             filteredAndSortedRequests.map((request) => {
               const status = statusConfig[request.status];
-              const StatusIcon = status.icon;
+              const StatusIcon = status?.icon || FileText; 
               return (
                 <TouchableOpacity
                   key={request.id}
@@ -701,12 +715,12 @@ export default function RequestsScreen() {
                       </View>
                       <Text style={styles.requestType}>{request.type}</Text>
                     </View>
-                    <View style={[styles.statusBadge, { backgroundColor: `${status.color}15` }]}>
-                      <StatusIcon size={16} color={status.color} />
-                      <Text style={[styles.statusText, { color: status.color }]}>
-                        {status.label}
-                      </Text>
-                    </View>
+                    <View style={[styles.statusBadge, { backgroundColor: `${status?.color || '#999'}15` }]}>
+  <StatusIcon size={16} color={status?.color || '#999'} />
+  <Text style={[styles.statusText, { color: status?.color || '#999' }]}>
+    {status?.label || 'Statut inconnu'}
+  </Text>
+</View>
                   </View>
                  
                   <View style={styles.requestDetails}>

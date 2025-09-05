@@ -1,3 +1,5 @@
+// app/(tabs)/index.tsx
+
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ImageBackground, ScrollView, TouchableOpacity, Platform, Animated, Image, Modal, TextInput, Alert } from 'react-native';
 import { router } from 'expo-router';
@@ -474,8 +476,8 @@ setUserBoats(formattedBoats);
 
   // Filter ports based on search query for the modal
   const filteredPorts = allPorts.filter(port =>
-    port.name.toLowerCase().includes(temporaryPortSearch.toLowerCase())
-  );
+  (port.name ?? '').toLowerCase().includes((temporaryPortSearch ?? '').toLowerCase())
+);
 
   const handleSelectTemporaryPort = async (port: Port) => {
     // Vérifie si le port sélectionné est le port d'attache principal de l'utilisateur
@@ -513,11 +515,94 @@ setUserBoats(formattedBoats);
     setTemporaryBoatManagers([]);
   };
 
-  const handleContactBoatManager = (bmId: string) => {
-    router.push(`/(tabs)/messages?client=${bmId}`);
-  };
+  const handleContactBoatManager = async (bmId: string) => {
+  if (!user?.id) return;
 
-  const TemporaryPortSection = () => (
+  try {
+    // 1. Vérifier si une conversation existe déjà (avec exactement ces 2 membres)
+    const { data: existingConversations, error: convError } = await supabase
+      .from('conversation_members')
+      .select('conversation_id')
+      .eq('user_id', user.id);
+
+    if (convError) {
+      console.error('Erreur recherche conversation existante:', convError);
+      return;
+    }
+
+    let conversationId: number | null = null;
+
+    if (existingConversations?.length) {
+      const convIds = existingConversations.map(c => c.conversation_id);
+
+      // Vérifie si le BM est aussi dans l'une de ces conversations
+      const { data: bmMemberships, error: bmError } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', bmId)
+        .in('conversation_id', convIds);
+
+      if (!bmError && bmMemberships?.length) {
+        conversationId = bmMemberships[0].conversation_id;
+      }
+    }
+
+    // 2. Si pas de conversation existante → en créer une
+    if (!conversationId) {
+      const { data: newConv, error: newConvError } = await supabase
+        .from('conversations')
+        .insert({ is_group: false, // ✅ on garde juste ça
+    title: null,  })
+        .select('id')
+        .single();
+
+      if (newConvError || !newConv) {
+        console.error('Erreur création conversation:', newConvError);
+        return;
+      }
+
+      conversationId = newConv.id;
+
+      // Ajouter les 2 membres
+      const { error: membersError } = await supabase
+        .from('conversation_members')
+        .insert([
+          { conversation_id: conversationId, user_id: user.id },
+          { conversation_id: conversationId, user_id: bmId }
+        ]);
+
+      if (membersError) {
+        console.error('Erreur ajout membres conversation:', membersError);
+        return;
+      }
+    }
+
+    // 3. Redirection vers la conversation
+    const targetPath = '/(tabs)/messages';
+    const targetParams = { conversationId: conversationId.toString() };
+    console.log('Attempting to navigate to:', targetPath, 'with params:', targetParams); // Ligne ajoutée
+    router.push({
+      pathname: targetPath,
+      params: targetParams
+    });
+
+  } catch (e) {
+    console.error('Erreur handleContactBoatManager:', e);
+  }
+}
+
+
+
+// Si TemporaryPortSection est une fonction imbriquée dans HomeScreen, 'user' est déjà accessible.
+// Si elle était extraite en dehors, il faudrait la passer en prop.
+const TemporaryPortSection = () => {
+  // MODIFICATION ICI : Ajouter la condition de rendu
+  // Si l'utilisateur n'est pas connecté, ne rien rendre
+  if (!user) { // 'user' est accessible depuis la portée de HomeScreen
+    return null;
+  }
+
+  return (
     <View style={styles.temporaryPortSection}>
       <View style={styles.temporaryPortHeader}>
         <MapPin size={24} color="#0066CC" />
@@ -548,16 +633,16 @@ setUserBoats(formattedBoats);
               <View key={bm.id} style={styles.temporaryBoatManagerCard}>
                 <View style={styles.temporaryBoatManagerHeader}>
                   <Image
-  source={{ uri: bm.avatar || DEFAULT_AVATAR }}
-  style={styles.temporaryBoatManagerAvatar}
-  onError={() => {
-    if (bm.avatar !== DEFAULT_AVATAR) {
-      setTemporaryBoatManagers(prev =>
-        prev.map(m => m.id === bm.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
-      );
-    }
-  }}
-/>
+                    source={{ uri: bm.avatar || DEFAULT_AVATAR }}
+                    style={styles.temporaryBoatManagerAvatar}
+                    onError={() => {
+                      if (bm.avatar !== DEFAULT_AVATAR) {
+                        setTemporaryBoatManagers(prev =>
+                          prev.map(m => m.id === bm.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
+                        );
+                      }
+                    }}
+                  />
 
                   <View style={styles.temporaryBoatManagerInfo}>
                     <Text style={styles.temporaryBoatManagerName}>{bm.name}</Text>
@@ -615,6 +700,7 @@ setUserBoats(formattedBoats);
       )}
     </View>
   );
+};
 
   // Handler for service category/service press
   const handleServiceRequestInitiation = (category: ServiceCategory, service: ServiceCategory['services'][0]) => {
@@ -817,7 +903,7 @@ setUserBoats(formattedBoats);
         )}
 
         {/* Temporary Port Section */}
-        <TemporaryPortSection />
+        {user && <TemporaryPortSection />}
       </View>
       
       <TemporaryPortModal

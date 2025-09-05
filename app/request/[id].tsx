@@ -189,7 +189,6 @@ export default function RequestDetailsScreen() {
   const [nauticalCompaniesForSelection, setNauticalCompaniesForSelection] = useState<NauticalCompany[]>([]);
   const [loadingNauticalCompanies, setLoadingNauticalCompanies] = useState(false);
   const [nauticalCompanySearchQuery, setNauticalCompanySearchQuery] = useState('');
-
   useEffect(() => {
     const fetchRequestDetails = async () => {
       if (!id) {
@@ -541,6 +540,42 @@ export default function RequestDetailsScreen() {
     }
   };
 
+
+  const handleSelectNauticalCompany = async (company: NauticalCompany) => {
+    if (!request || !id) return;
+
+
+    Alert.alert(
+      'Confirmer la transmission',
+      `Voulez-vous transmettre cette demande à ${company.name} ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Confirmer',
+          onPress: async () => {
+            const { error: updateError } = await supabase
+              .from('service_request')
+              .update({
+                statut: 'forwarded',
+                id_companie: company.id,
+              })
+              .eq('id', parseInt(id));
+
+
+            if (updateError) {
+              Alert.alert('Erreur', `Impossible de transmettre la demande: ${updateError.message}`);
+            } else {
+              setRequest(prev => prev ? { ...prev, status: 'forwarded', company: { id: company.id, name: company.name, profile: 'nautical_company' } } : prev);
+              Alert.alert('Succès', `Demande transmise à ${company.name}.`);
+              setShowCompanySelectionModal(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+
   const handleCreateQuote = () => {
     if (!request) return;
     router.push({
@@ -718,20 +753,45 @@ export default function RequestDetailsScreen() {
   };
 
   const handleScheduleIntervention = () => {
-    if (!request) return;
+    if (!request) {
+      Alert.alert('Erreur', 'Aucune demande sélectionnée pour la planification.');
+      return;
+    }
+
+    let pathname = '';
+    // Déterminez la route en fonction du rôle de l'utilisateur
+    if (user?.role === 'boat_manager') {
+      pathname = '/(boat-manager)/planning';
+    } else if (user?.role === 'nautical_company') {
+      pathname = '/(nautical-company)/planning';
+    } else {
+      Alert.alert('Accès refusé', 'Vous n\'avez pas les permissions pour planifier des interventions.');
+      return;
+    }
+
+    // Préparez les paramètres à passer à la page de planification
+    // Ces paramètres seront utilisés pour pré-remplir le formulaire de rendez-vous
+    const params = {
+      requestId: request.id,
+      clientId: request.client.id,
+      clientName: request.client.name,
+      clientEmail: request.client.email,
+      boatId: request.boat.id,
+      boatName: request.boat.name,
+      boatType: request.boat.type,
+      // Utilisez la description de la demande comme suggestion pour le titre/description du rendez-vous
+      appointmentDescription: request.description,
+      // Suggérez la date de la demande comme date de rendez-vous
+      appointmentDate: request.date,
+    };
+
+    // Naviguez vers la page de planification avec les paramètres
     router.push({
-      pathname: '/appointment/[id]', // Naviguer vers la page de création/édition de rendez-vous
-      params: {
-        clientId: request.client.id,
-        clientName: request.client.name,
-        boatId: request.boat.id,
-        boatName: request.boat.name,
-        boatType: request.boat.type,
-        requestId: request.id,
-        // Pré-remplir d'autres champs si nécessaire
-      }
+      pathname: pathname,
+      params: params,
     });
   };
+
 
   // --- Modals ---
 

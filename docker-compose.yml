@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  expo:
+    build: .
+    container_name: expo-app
+    network_mode: "host"   # permet au QR code de pointer vers l'IP locale de ton PC
+    environment:
+      - EXPO_NO_INTERACTIVE=1
+      - EXPO_USE_DEV_SERVER=1
+      - CI=1
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npx", "expo", "start", "--lan","--host", "0.0.0.0", "--port", "19006"]

@@ -819,7 +819,7 @@ export default function RequestsScreen() {
                         setShowStatusChangeModal(true);
                       }}
                     >
-                      <StatusIcon size={16} color={statusColor} />
+                      <StatusIcon size={16} color={status?.color || '#999'} />
                       <Text style={[styles.statusText, { color: statusColor }]}>
                         {statusLabel}
                       </Text>
@@ -857,14 +857,12 @@ export default function RequestsScreen() {
                       </View>
                     )}
                     
-                    {getCurrentHandlerInfo(request).handlerText && getCurrentHandlerInfo(request).handlerIcon && ( // MODIFICATION: Vérifier si les propriétés existent
-                      <View style={[styles.handlerInfo, { backgroundColor: `${getCurrentHandlerInfo(request).handlerColor}15` }]}>
-                        <HandlerIcon size={16} color={getCurrentHandlerInfo(request).handlerColor} />
-                        <Text style={[
-                          styles.handlerText, 
-                          { color: getCurrentHandlerInfo(request).handlerColor }
-                        ]}>
-                          {getCurrentHandlerInfo(request).handlerText}
+                    {/* Display current handler and progress */}
+                    {handlerText && HandlerIcon && (
+                      <View style={[styles.handlerInfo, { backgroundColor: `${handlerColor}15` }]}>
+                        <HandlerIcon size={16} color={handlerColor} />
+                        <Text style={[styles.handlerText, { color: handlerColor }]}>
+                          {handlerText}
                         </Text>
                       </View>
                     )}

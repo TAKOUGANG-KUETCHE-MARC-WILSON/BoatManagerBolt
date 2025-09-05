@@ -30,15 +30,11 @@ interface Request {
     avatar: string;
     email: string;
     phone: string;
-    boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle dans client
+    boat: {
       name: string;
       type: string;
-    };
-  };
-  boat?: { // MODIFICATION: Rendre la propriété 'boat' optionnelle (pour la propriété de niveau supérieur)
-    id: string;
-    name: string;
-    type: string;
+    } | null; // Permet à 'boat' d'être null
+
   };
   boatManager?: { // Optional, as not all requests have a BM directly involved in creation
     id: string;
@@ -182,7 +178,7 @@ export default function RequestsScreen() {
             id_companie,
             categorie_service(description1),
             users!id_client(id, first_name, last_name, avatar, e_mail, phone),
-            boat(id, name, type, place_de_port)
+            boat(name, type, place_de_port)
           `)
         .eq('id_boat_manager', user.id); // Filter by the connected Boat Manager's ID
 
@@ -265,16 +261,11 @@ export default function RequestsScreen() {
             avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop', // Default avatar
             email: req.users.e_mail,
             phone: req.users.phone,
-            boat: req.boat ? { // MODIFICATION: Vérifier si req.boat est null avant d'assigner
+            boat: req.boat ? { // <--- MODIFICATION ICI
               name: req.boat.name,
               type: req.boat.type
-            } : undefined, // Assign undefined if req.boat is null
+            } : null // <--- MODIFICATION ICI
           },
-          boat: req.boat ? { // MODIFICATION: Vérifier si id_boat est null avant d'assigner
-            id: req.boat.id.toString(),
-            name: req.boat.name,
-            type: req.boat.type,
-          } : undefined, // Assign undefined if id_boat is null
           boatManager: boatManagerDetails,
           company: companyDetails,
           notes: req.note_add,
@@ -335,8 +326,8 @@ export default function RequestsScreen() {
         request.company?.name?.toLowerCase().includes(query) ||
         request.title.toLowerCase().includes(query) ||
         request.type.toLowerCase().includes(query) ||
-        // MODIFICATION: Vérifier si request.boat existe avant d'accéder à request.boat.name
-        (request.boat && request.boat.name.toLowerCase().includes(query))
+        // MODIFICATION ICI : Vérification de nullité pour request.client.boat
+        (request.client.boat && request.client.boat.name.toLowerCase().includes(query))
       );
     }
 
@@ -704,7 +695,7 @@ export default function RequestsScreen() {
           <TouchableOpacity 
             style={[
               styles.summaryCard, 
-              { backgroundColor: '#FEE2F2' },
+              { backgroundColor: '#FEE2E2' },
               selectedUrgency === 'urgent' && styles.summaryCardSelected
             ]}
             onPress={() => handleFilterByUrgency('urgent')}
@@ -870,15 +861,12 @@ export default function RequestsScreen() {
                     <View style={styles.clientInfo}>
                       <User size={16} color="#666" />
                       <Text style={styles.clientName}>{request.client.name}</Text>
-                      {/* MODIFICATION: Afficher les informations du bateau uniquement si request.boat existe */}
-                      {request.boat && (
-                        <View style={styles.boatInfo}>
-                          <Boat size={16} color="#666" />
-                          <Text style={styles.boatType}>
-                            {request.boat.name} • {request.boat.type}
-                          </Text>
-                        </View>
-                      )}
+                      <View style={styles.boatInfo}>
+                        <Boat size={16} color="#666" />
+                        <Text style={styles.boatType}>
+                          {request.client.boat ? `${request.client.boat.name} • ${request.client.boat.type}` : 'N/A'}
+                        </Text>
+                      </View>
                     </View>
                     
                     {request.boatManager && (
@@ -925,13 +913,13 @@ export default function RequestsScreen() {
                   </View>
 
                   <View style={styles.requestActions}>
-                    <TouchableOpacity
+                    <TouchableOpacity 
                       style={styles.actionButton}
                       onPress={() => handleMessage(request.client.id)}
                     >
                       <MessageSquare size={20} color="#0066CC" />
                     </TouchableOpacity>
-                    <TouchableOpacity
+                    <TouchableOpacity 
                       style={styles.actionButton}
                       onPress={() => handleRequestDetails(request.id)}
                     >
@@ -1272,6 +1260,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  statusContainer: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1281,6 +1273,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statusText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  sourceBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+  },
+  sourceText: {
     fontSize: 12,
     fontWeight: '500',
   },
@@ -1369,6 +1370,22 @@ const styles = StyleSheet.create({
   companyName: {
     fontSize: 14,
     color: '#8B5CF6',
+    fontWeight: '500',
+  },
+  handlerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  handlerText: {
+    fontSize: 12,
+    color: '#0066CC',
     fontWeight: '500',
   },
   invoiceInfo: {

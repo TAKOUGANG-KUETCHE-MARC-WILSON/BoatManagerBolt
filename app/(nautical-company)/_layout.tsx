@@ -5,6 +5,7 @@ import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function NauticalCompanyTabLayout() {
   const { user, loading } = useAuth(); // ✅ récupère loading aussi
@@ -27,13 +28,14 @@ export default function NauticalCompanyTabLayout() {
   if (user?.role !== 'nautical_company') return null;
 
   return (
+    <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
     <Tabs
       screenOptions={{
         headerShown: true,
         tabBarActiveTintColor: '#0066CC',
         tabBarStyle: {
-          height: Platform.OS === 'ios' ? 80 : 60,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          height: Platform.OS === 'ios' ? 60 : 54,
+          paddingBottom: Platform.OS === 'ios' ? 12 : 6,
         },
       }}>
       <Tabs.Screen
@@ -92,5 +94,6 @@ export default function NauticalCompanyTabLayout() {
         }}
       />
     </Tabs>
+    </SafeAreaView>
   );
 }

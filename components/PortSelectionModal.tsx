@@ -74,7 +74,7 @@ export default function PortSelectionModal({
                   styles.portItemText,
                   selectedPortId === port.id && styles.selectedPortItemText
                 ]}>
-                  {port.name}
+                  {String(port.name ?? '')}
                 </Text>
                 {selectedPortId === port.id && (
                   <Check size={20} color="#0066CC" style={styles.checkIcon} />

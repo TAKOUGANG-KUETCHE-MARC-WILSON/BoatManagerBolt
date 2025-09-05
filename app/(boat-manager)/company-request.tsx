@@ -434,7 +434,9 @@ export default function CompanyRequestScreen() {
     const newErrors: Partial<Record<keyof RequestForm | 'services', string>> = {};
     
     if (!form.clientId) newErrors.clientId = 'Le client est requis';
-    if (!form.boatId) newErrors.boatId = 'Le bateau est requis';
+    if (!form.boatId && form.type !== 'Achat/Vente') {
+      newErrors.boatId = 'Le bateau est requis';
+    }
     if (!form.title.trim()) newErrors.title = 'Le titre est requis';
     if (!form.type.trim()) newErrors.type = 'Le type de service est requis';
     if (!form.description.trim()) newErrors.description = 'La description est requise';
@@ -479,7 +481,7 @@ export default function CompanyRequestScreen() {
         id_client: form.clientId,
         id_service: serviceId,
         description: form.description,
-        id_boat: form.boatId,
+        id_boat: form.boatId ? parseInt(form.boatId) : null,
         id_companie: form.companyId || null, // Can be null if not transmitted to a company
         id_boat_manager: user?.id, // Current Boat Manager's ID
         // duree_estimee, prix, statut, etat, avis_client are not in form, set defaults or null

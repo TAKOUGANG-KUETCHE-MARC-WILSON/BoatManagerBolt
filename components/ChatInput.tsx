@@ -123,20 +123,19 @@ const styles = StyleSheet.create({
     color: '#0066CC',
   },
   input: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-    borderRadius: 24,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    maxHeight: 120,
-    fontSize: 16,
-    color: '#1a1a1a',
-    ...Platform.select({
-      web: {
-        outlineStyle: 'none',
-      },
-    }),
-  },
+  flex: 1,
+  backgroundColor: '#f8fafc',
+  borderRadius: 24,
+  paddingVertical: 8,
+  paddingHorizontal: 16,
+  maxHeight: 120,
+  fontSize: 16,
+  color: '#1a1a1a',
+  textAlignVertical: 'top', // ← ajout
+  ...Platform.select({
+    web: { outlineStyle: 'none' },
+  }),
+},
   sendButton: {
     width: 48,
     height: 48,

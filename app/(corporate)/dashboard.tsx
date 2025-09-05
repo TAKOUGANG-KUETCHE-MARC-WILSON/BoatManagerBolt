@@ -64,34 +64,63 @@ export default function DashboardScreen() {
     try {
       // --- Fetch Stats Grid Data ---
       const [
-        { count: totalUsersCount, error: totalUsersError },
-        { count: pleasureBoatersCount, error: pleasureBoatersError }, // Fetch pleasure boaters count
-        { count: bmCount, error: bmError },
-        { count: ncCount, error: ncError },
-        { count: pendingRequestsCount, error: pendingRequestsError },
-        { count: urgentRequestsCount, error: urgentRequestsError },
-        { count: newMessagesCount, error: newMessagesError },
-        { data: corporateProfile, error: corporateProfileError },
-        { data: bmRatingsData, error: bmRatingsError }, // Fetch all BM ratings
-        { data: ncRatingsData, error: ncRatingsError }, // Fetch all NC ratings
-      ] = await Promise.all([
-        supabase.from('users').select('id', { count: 'exact' }),
-        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'pleasure_boater'), // Query for pleasure boaters
-        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'boat_manager'),
-        supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'nautical_company'),
-        supabase.from('service_request').select('id', { count: 'exact' }).eq('statut', 'submitted'),
-        supabase.from('service_request').select('id', { count: 'exact' }).eq('urgence', 'urgent'),
-        supabase.from('messages').select('id', { count: 'exact' }).eq('receiver_id', user.id).eq('is_read', false),
-        supabase.from('users').select('rating, review_count').eq('id', user.id).single(),
-        supabase.from('users').select('rating, review_count').eq('profile', 'boat_manager'), // Fetch all BM ratings
-        supabase.from('users').select('rating, review_count').eq('profile', 'nautical_company'), // Fetch all NC ratings
-      ]);
+  { count: totalUsersCount, error: totalUsersError },
+  { count: pleasureBoatersCount, error: pleasureBoatersError },
+  { count: bmCount, error: bmError },
+  { count: ncCount, error: ncError },
+  { count: pendingRequestsCount, error: pendingRequestsError },
+  { count: urgentRequestsCount, error: urgentRequestsError },
+  { data: corporateProfile, error: corporateProfileError },
+  { data: bmRatingsData, error: bmRatingsError },
+  { data: ncRatingsData, error: ncRatingsError },
+  { data: memberRows, error: memberErr },  // ✅ conversations de l’utilisateur
+] = await Promise.all([
+  supabase.from('users').select('id', { count: 'exact' }),
+  supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'pleasure_boater'),
+  supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'boat_manager'),
+  supabase.from('users').select('id', { count: 'exact' }).eq('profile', 'nautical_company'),
+  supabase.from('service_request').select('id', { count: 'exact' }).eq('statut', 'submitted'),
+  supabase.from('service_request').select('id', { count: 'exact' }).eq('urgence', 'urgent'),
+  supabase.from('users').select('rating, review_count').eq('id', user.id).single(),
+  supabase.from('users').select('rating, review_count').eq('profile', 'boat_manager'),
+  supabase.from('users').select('rating, review_count').eq('profile', 'nautical_company'),
+  supabase.from('conversation_members')
+    .select('conversation_id, last_read_at')
+    .eq('user_id', user.id),
+]);
 
-      if (totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || newMessagesError || corporateProfileError || bmRatingsError || ncRatingsError) {
-        console.error('Error fetching stats:', totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || newMessagesError || corporateProfileError || bmRatingsError || ncRatingsError);
-        setError('Échec du chargement des statistiques.');
-        return;
-      }
+if (memberErr) {
+  console.error('Error fetching user conversations:', memberErr);
+  setError('Échec du chargement des statistiques.');
+  setLoading(false);
+  return;
+}
+
+// ✅ calcule le nombre de nouveaux messages par conversation (après last_read_at)
+const unreadCounts = await Promise.all(
+  (memberRows ?? []).map(async (m) => {
+    const { count, error } = await supabase
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', m.conversation_id)
+      .gt('created_at', m.last_read_at ?? '1970-01-01')
+      .neq('sender_id', user.id); // on n’inclut pas ses propres messages
+    if (error) {
+      console.error('Error counting unread for conversation', m.conversation_id, error);
+      return 0;
+    }
+    return count ?? 0;
+  })
+);
+
+const newMessagesCount = unreadCounts.reduce((a, b) => a + b, 0);
+
+
+      if (totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || corporateProfileError || bmRatingsError || ncRatingsError || memberErr) {
+  console.error('Error fetching stats:', totalUsersError || pleasureBoatersError || bmError || ncError || pendingRequestsError || urgentRequestsError || corporateProfileError || bmRatingsError || ncRatingsError || memberErr);
+  setError('Échec du chargement des statistiques.');
+  return;
+}
 
       // Calculate average BM rating
       let totalBmRating = 0;
@@ -123,7 +152,7 @@ export default function DashboardScreen() {
         nauticalCompanies: ncCount || 0,
         activeRequests: pendingRequestsCount || 0,
         urgentRequests: urgentRequestsCount || 0,
-        newMessages: newMessagesCount || 0,
+         newMessages: newMessagesCount, 
         performanceRating: corporateProfile?.rating || 0,
         performanceReviewCount: corporateProfile?.review_count || 0,
         avgBmRating: avgBmRating,

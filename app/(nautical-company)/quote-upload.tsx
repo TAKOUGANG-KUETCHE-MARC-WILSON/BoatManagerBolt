@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Modal, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Upload, FileText, User, Bot as Boat, Calendar, Plus, X, Check, Download, Euro, Trash } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/src/lib/supabase'; // Import Supabase client
+import { supabase } from '@/src/lib/supabase'; // Assurez-vous que supabase est importé
+import { generateQuotePDF } from '@/utils/pdf'; // Assurez-vous que cette fonction retourne le base64
 import * as FileSystem from 'expo-file-system';
-import { Buffer } from 'buffer';
+import { Buffer } from 'buffer'; // Nécessaire pour la conversion base64 en Uint8Array
 
+// Polyfill pour Buffer si nécessaire (souvent pour React Native)
+global.Buffer = global.Buffer || Buffer;
 
 interface Service {
   id: string;
@@ -21,7 +24,8 @@ interface QuoteUploadForm {
   title: string;
   clientId: string;
   clientName: string;
-  boatId: string; // This should be the actual boat ID (string representation of integer)
+  clientEmail: string; // Ajouté pour le PDF
+  boatId: string;
   boatName: string;
   boatType: string;
   validUntil: string;
@@ -31,11 +35,20 @@ interface QuoteUploadForm {
     uri: string;
     type: string;
   };
+  quoteId?: number; // Ajout de quoteId pour stocker l'ID du devis principal
+  notes?: string; // Pour les notes additionnelles
+  amount?: number; // Pour le montant total du devis uploadé
 }
 
 export default function QuoteUploadScreen() {
-  const { requestId } = useLocalSearchParams<{
+  const { requestId, clientId, clientName, clientEmail, boatId, boatName, boatType } = useLocalSearchParams<{
     requestId?: string;
+    clientId?: string;
+    clientName?: string;
+    clientEmail?: string;
+    boatId?: string;
+    boatName?: string;
+    boatType?: string;
   }>();
   
   const { user } = useAuth();
@@ -52,11 +65,12 @@ export default function QuoteUploadScreen() {
   const [form, setForm] = useState<QuoteUploadForm>({
     requestId: requestId || '',
     title: requestId ? 'Devis pour demande #' + requestId : '',
-    clientId: '', // Will be fetched
-    clientName: '', // Will be fetched
-    boatId: '', // Will be fetched
-    boatName: '', // Will be fetched
-    boatType: '', // Will be fetched
+    clientId: clientId || '',
+    clientName: clientName || '',
+    clientEmail: clientEmail || '', // Initialisation de l'email client
+    boatId: boatId || '',
+    boatName: boatName || '',
+    boatType: boatType || '',
     validUntil: defaultValidUntilStr,
     services: [
       {
@@ -74,8 +88,8 @@ export default function QuoteUploadScreen() {
 
   useEffect(() => {
     const fetchInitialData = async () => {
-      if (!requestId) {
-        Alert.alert('Erreur', 'ID de la demande manquant.');
+      if (!requestId || !clientId || !boatId) {
+        Alert.alert('Erreur', 'Informations de demande, client ou bateau manquantes.');
         setLoading(false);
         return;
       }
@@ -86,10 +100,9 @@ export default function QuoteUploadScreen() {
         const { data: reqData, error: reqError } = await supabase
           .from('service_request')
           .select(`
-            id,
-            description,
-            id_client(id, first_name, last_name, e_mail),
-            id_boat(id, name, type, place_de_port)
+            *,
+            users!id_client(first_name, last_name, e_mail),
+            boat(name, type, place_de_port)
           `)
           .eq('id', parseInt(requestId))
           .single();
@@ -104,14 +117,38 @@ export default function QuoteUploadScreen() {
 
         setForm(prev => ({
           ...prev,
-          clientId: reqData.id_client.id.toString(),
-          clientName: `${reqData.id_client.first_name} ${reqData.id_client.last_name}`,
-          boatId: reqData.id_boat.id.toString(),
-          boatName: reqData.id_boat.name,
-          boatType: reqData.id_boat.type,
+          clientName: `${reqData.users.first_name} ${reqData.users.last_name}`,
+          clientEmail: reqData.users.e_mail, // Assurez-vous que l'email est bien récupéré
+          boatName: reqData.boat.name,
+          boatType: reqData.boat.type,
           // Pre-fill title if it's empty and request has a description
           title: prev.title || reqData.description || `Devis pour demande #${requestId}`,
         }));
+
+        // Check if a quote already exists for this request
+        const { data: existingQuote, error: quoteError } = await supabase
+          .from('quotes')
+          .select('id, file_url, total_incl_tax, valid_until, description')
+          .eq('service_request_id', parseInt(requestId))
+          .single();
+
+        if (quoteError && quoteError.code !== 'PGRST116') { // PGRST116 means no rows found
+          console.error('Error fetching existing quote:', quoteError);
+          Alert.alert('Erreur', 'Impossible de vérifier l\'existence d\'un devis.');
+          setLoading(false);
+          return;
+        }
+
+        if (existingQuote) {
+          setForm(prev => ({
+            ...prev,
+            quoteId: existingQuote.id,
+            file: existingQuote.file_url ? { name: existingQuote.file_url.split('/').pop() || 'document.pdf', uri: existingQuote.file_url, type: 'application/pdf' } : undefined,
+            amount: existingQuote.total_incl_tax || undefined,
+            validUntil: existingQuote.valid_until || prev.validUntil,
+            notes: existingQuote.description || prev.notes,
+          }));
+        }
 
       } catch (e) {
         console.error('Unexpected error fetching initial data:', e);
@@ -122,13 +159,13 @@ export default function QuoteUploadScreen() {
     };
 
     fetchInitialData();
-  }, [requestId]);
+  }, [requestId, clientId, boatId]);
 
 
   const handleSelectFile = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf'],
+        type: ['application/pdf'], // Only allow PDF files
         copyToCacheDirectory: true,
       });
 
@@ -160,7 +197,7 @@ export default function QuoteUploadScreen() {
       services: [
         ...prev.services,
         {
-          id: Date.now().toString(),
+          id: 'temp-1', // Utiliser un ID temporaire pour les nouveaux services non encore persistés
           name: '',
           description: '',
           amount: 0
@@ -189,7 +226,7 @@ export default function QuoteUploadScreen() {
     }));
   };
 
-  const totalAmount = form.services.reduce((sum, service) => sum + service.amount, 0);
+  const totalAmount = form.services.reduce((sum, service) => sum + (Number(service.amount) || 0), 0);
 
   const validateForm = () => {
     const newErrors: Partial<Record<keyof QuoteUploadForm | 'services', string>> = {};
@@ -213,7 +250,6 @@ export default function QuoteUploadScreen() {
       }
     } else if (uploadMethod === 'upload') {
       if (!form.file) newErrors.file = 'Le fichier du devis est requis';
-      // MODIFICATION: validUntil est optionnel pour l'upload, donc pas d'erreur si vide
     }
     
     setErrors(newErrors);
@@ -228,78 +264,46 @@ export default function QuoteUploadScreen() {
   
   const handleConfirmSubmit = async () => {
     setShowConfirmModal(false);
-    if (!requestDetails || !user?.id) {
-      Alert.alert('Erreur', 'Données de requête ou utilisateur non disponibles.');
+    setLoading(true);
+
+    if (!form.requestId || !form.clientId || !form.boatId || !user?.id) {
+      Alert.alert('Erreur', 'Informations essentielles manquantes pour la soumission.');
+      setLoading(false);
       return;
     }
 
+    let quoteIdToUse = form.quoteId;
     let fileUrl: string | null = null;
-    if (uploadMethod === 'upload' && form.file) {
-      try {
-        const ext = (form.file.name.split('.').pop() || 'pdf').toLowerCase();
-const filePath = `quotes/${form.requestId}/${Date.now()}.${ext}`;
-
-// 1) Résoudre content:// sur Android en copiant vers cache file://
-let fileUri = form.file.uri;
-if (fileUri.startsWith('content://')) {
-  const dest = `${FileSystem.cacheDirectory}${Date.now()}-${form.file.name}`;
-  await FileSystem.copyAsync({ from: fileUri, to: dest });
-  fileUri = dest;
-}
-
-// 2) Lire en base64 puis convertir en octets
-const base64 = await FileSystem.readAsStringAsync(fileUri, {
-  encoding: FileSystem.EncodingType.Base64,
-});
-const bytes = Buffer.from(base64, 'base64'); // Uint8Array
-if (bytes.byteLength === 0) {
-  throw new Error('Le fichier lu est vide (0 octet).');
-}
-// convertir proprement en ArrayBuffer
-const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-
-// 3) Uploader des octets (PAS un Blob)
-const { error: uploadError } = await supabase.storage
-  .from('quotes')
-  .upload(filePath, arrayBuffer as ArrayBuffer, {
-    contentType: form.file.type || 'application/pdf',
-    upsert: true, // ou false si tu veux strictement éviter l’écrasement
-  });
-if (uploadError) {
-  console.error('Error uploading file:', uploadError);
-  Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
-  return;
-}
-
-// 4) Récupérer l’URL publique
-const { data: pub } = supabase.storage.from('quotes').getPublicUrl(filePath);
-fileUrl = pub.publicUrl;
-
-      } catch (e) {
-        console.error('Error processing file upload:', e);
-        Alert.alert('Erreur', 'Une erreur est survenue lors du traitement du fichier.');
-        return;
-      }
-    }
 
     try {
-      // MODIFICATION: Utiliser null si validUntil est une chaîne vide
-      const validUntilValue = form.validUntil.trim() === '' ? null : form.validUntil;
+      // 1. Récupérer les détails du Boat Manager connecté
+      const { data: bmData, error: bmError } = await supabase
+        .from('users')
+        .select('first_name, last_name, e_mail, phone, profile')
+        .eq('id', user.id)
+        .single();
 
-      // MODIFICATION CRITIQUE: La colonne 'date' dans service_request est pour la date de la demande,
-      // pas la date de validité du devis. La date de validité doit être stockée dans la table 'quotes'.
-      // Si la table 'quotes' n'a pas de colonne 'valid_until', il faudra l'ajouter.
-      // Pour l'instant, nous allons la passer à la table 'quotes' lors de l'insertion.
+      if (bmError || !bmData) {
+        console.error('Error fetching Boat Manager details:', bmError);
+        Alert.alert('Erreur', 'Impossible de récupérer les détails du Boat Manager.');
+        setLoading(false);
+        return;
+      }
 
-      // 1. Créer ou mettre à jour l'entrée dans la table 'quotes'
-      let quoteIdToUse = requestDetails.quoteId; // Si un quoteId est déjà présent dans requestDetails
+      const providerInfo = {
+        name: `${bmData.first_name} ${bmData.last_name}`,
+        type: bmData.profile as 'boat_manager' | 'nautical_company',
+        email: bmData.e_mail,
+        phone: bmData.phone,
+      };
 
+      // 2. Ensure a 'quotes' entry exists or create one
       if (!quoteIdToUse) {
         const { data: newQuote, error: insertQuoteError } = await supabase
           .from('quotes')
           .insert({
-            reference: `DEV-${form.requestId}-${Date.now()}`, // Générer une référence unique
-            status: 'sent', // Statut initial du devis
+            reference: `DEV-${form.requestId}-${Date.now()}`, // Generate a unique reference
+            status: 'sent', // Set to sent immediately as a file is provided
             service_request_id: parseInt(form.requestId),
             id_client: form.clientId,
             id_boat: parseInt(form.boatId),
@@ -309,10 +313,8 @@ fileUrl = pub.publicUrl;
             title: form.title,
             description: form.notes || 'Devis fourni par document',
             total_incl_tax: form.amount || 0,
-            subtotal_excl_tax: form.amount || 0, // Assumant total_incl_tax = subtotal_excl_tax pour simplicité
-            valid_until: validUntilValue, // Utiliser la valeur traitée ici
-            file_url: fileUrl, // Stocker l'URL du fichier directement dans la table quotes
-            created_at: new Date().toISOString(), // Date de création du devis
+            subtotal_excl_tax: form.amount || 0, // Assuming total_incl_tax = subtotal_excl_tax for simplicity
+            valid_until: form.validUntil,
           })
           .select('id')
           .single();
@@ -324,191 +326,156 @@ fileUrl = pub.publicUrl;
           return;
         }
         quoteIdToUse = newQuote.id;
-      } else {
-        // Si le devis existe déjà, le mettre à jour
-        const { error: updateQuoteError } = await supabase
-          .from('quotes')
-          .update({
-            status: 'sent',
-            total_incl_tax: form.amount || 0,
-            subtotal_excl_tax: form.amount || 0,
-            valid_until: validUntilValue, // Utiliser la valeur traitée ici
-            file_url: fileUrl,
-            description: form.notes || 'Devis fourni par document',
-          })
-          .eq('id', quoteIdToUse);
+      }
 
-        if (updateQuoteError) {
-          console.error('Error updating existing quote entry:', updateQuoteError);
-          Alert.alert('Erreur', `Échec de la mise à jour du devis existant: ${updateQuoteError.message}`);
+      // 3. Generate and Upload the PDF file (if 'create' method)
+      if (uploadMethod === 'create') {
+        const localPdfPath = await generateQuotePDF({
+          reference: `DEV-${form.requestId}-${Date.now()}`,
+          date: new Date().toISOString().split('T')[0],
+          validUntil: form.validUntil,
+          provider: providerInfo, // Passer les infos du BM
+          client: form.client,
+          boat: {
+            id: form.boatId,
+            name: form.boatName,
+            type: form.boatType,
+          },
+          services: form.services,
+          totalAmount: totalAmount,
+          isInvoice: false,
+        });
+
+        if (!localPdfPath) {
+          Alert.alert('Erreur', 'Impossible de générer le PDF du devis.');
           setLoading(false);
           return;
         }
+
+        const pdfFileName = `quote_${quoteIdToUse}_${Date.now()}.pdf`;
+        const filePath = `quotes/${form.requestId}/${pdfFileName}`; // Chemin structuré
+
+        const base64Pdf = await FileSystem.readAsStringAsync(localPdfPath, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const bytes = Buffer.from(base64Pdf, 'base64');
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('quotes')
+          .upload(filePath, bytes, {
+            contentType: 'application/pdf',
+            upsert: true,
+          });
+
+        if (uploadError) {
+          console.error('Error uploading PDF:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement du PDF: ${uploadError.message}`);
+          setLoading(false);
+          return;
+        }
+        fileUrl = supabase.storage.from('quotes').getPublicUrl(uploadData.path).data.publicUrl;
+      } else if (uploadMethod === 'upload' && form.file) {
+        // Handle upload of existing PDF
+        const fileExtension = (form.file.name.split('.').pop() || 'pdf').toLowerCase();
+        const pdfFileName = `uploaded_quote_${quoteIdToUse}_${Date.now()}.${fileExtension}`;
+        const filePath = `quotes/${form.requestId}/${pdfFileName}`; // Chemin structuré
+
+        const response = await fetch(form.file.uri);
+        const blob = await response.blob();
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('quotes')
+          .upload(filePath, blob, {
+            contentType: form.file.type || 'application/pdf',
+            upsert: true,
+          });
+
+        if (uploadError) {
+          console.error('Error uploading existing PDF:', uploadError);
+          Alert.alert('Erreur', `Échec du téléchargement du fichier: ${uploadError.message}`);
+          setLoading(false);
+          return;
+        }
+        fileUrl = supabase.storage.from('quotes').getPublicUrl(uploadData.path).data.publicUrl;
       }
 
-      // 2. Mettre à jour le statut de la service_request
-      const { error: updateRequestError } = await supabase
-        .from('service_request')
+      // 4. Update the 'quotes' entry with the file_url and final details
+      const { error: updateQuoteError } = await supabase
+        .from('quotes')
         .update({
-          statut: 'quote_sent',
-          prix: totalAmount, // Utiliser totalAmount du formulaire
-          note_add: fileUrl ? `Devis PDF: ${fileUrl}` : form.services[0]?.description || null,
-          // La colonne 'date' dans service_request est la date de la demande, pas la date de validité du devis.
-          // Ne pas la modifier ici, ou la modifier avec la date actuelle si c'est le comportement souhaité.
-          // Pour l'instant, nous laissons la colonne 'date' de service_request inchangée.
+          file_url: fileUrl,
+          status: 'sent', // Ensure status is 'sent'
+          total_incl_tax: totalAmount,
+          subtotal_excl_tax: totalAmount,
+          valid_until: form.validUntil,
+          description: form.notes || 'Devis fourni par document',
         })
-        .eq('id', parseInt(form.requestId));
+        .eq('id', quoteIdToUse);
 
-      if (updateRequestError) {
-        console.error('Error updating service request:', updateRequestError);
-        Alert.alert('Erreur', `Échec de la mise à jour de la demande de service: ${updateRequestError.message}`);
-      } else {
-        const message = `Le devis a été envoyé avec succès au client.`;
-        Alert.alert(
-          'Devis envoyé',
-          message,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                router.back(); // Go back to requests list
-              }
-            }
-          ]
-        );
+      if (updateQuoteError) {
+        console.error('Error updating quote status and file_url:', updateQuoteError);
+        Alert.alert('Erreur', `Impossible de finaliser le devis: ${updateQuoteError.message}`);
+        setLoading(false);
+        return;
       }
-    } catch (e) {
+
+      // 5. Insert into 'quote_documents' table
+      if (fileUrl && form.file) {
+        const { error: insertDocError } = await supabase
+          .from('quote_documents')
+          .insert({
+            name: form.file.name,
+            type: form.file.type,
+            file_url: fileUrl,
+            quote_id: quoteIdToUse,
+          });
+
+        if (insertDocError) {
+          console.error('Error inserting into quote_documents:', insertDocError);
+          Alert.alert('Erreur', `Échec de l'enregistrement du document de devis: ${insertDocError.message}`);
+          // Continue, as the main quote is updated
+        }
+      }
+
+      // 6. Update 'service_request' status
+      if (form.requestId) {
+        const { error: updateRequestError } = await supabase
+          .from('service_request')
+          .update({
+            statut: 'quote_sent', // Statut 'quote_sent'
+            prix: totalAmount,
+            note_add: `Devis envoyé: ${fileUrl}`,
+          })
+          .eq('id', parseInt(form.requestId));
+
+        if (updateRequestError) {
+          console.error('Error updating service_request status:', updateRequestError);
+          Alert.alert('Avertissement', 'Devis créé, mais la mise à jour de la demande a échoué.');
+        }
+      }
+
+      Alert.alert(
+        'Succès',
+        'Le devis a été créé et envoyé avec succès.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+
+    } catch (e: any) {
       console.error('Unexpected error during quote submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la soumission du devis.');
+      Alert.alert('Erreur', `Une erreur inattendue est survenue: ${e instanceof Error ? e.message : String(e)}.`);
     } finally {
       setLoading(false);
     }
   };
-  
-  const MethodSelectionModal = () => (
-    <Modal
-      visible={showMethodModal && !loading} // Only show if not loading
-      transparent
-      animationType="slide"
-      onRequestClose={() => {
-        setShowMethodModal(false);
-        router.back();
-      }}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Choisir une méthode</Text>
-          <Text style={styles.modalSubtitle}>Comment souhaitez-vous créer votre devis ?</Text>
-          
-          <TouchableOpacity 
-            style={styles.methodOption}
-            onPress={() => {
-              setUploadMethod('create');
-              setShowMethodModal(false);
-            }}
-          >
-            <Plus size={24} color="#0066CC" />
-            <View style={styles.methodOptionContent}>
-              <Text style={styles.methodOptionTitle}>Créer un devis</Text>
-              <Text style={styles.methodOptionDescription}>
-                Créez un devis directement dans l'application
-              </Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.methodOption}
-            onPress={() => {
-              setUploadMethod('upload');
-              setShowMethodModal(false);
-            }}
-          >
-            <Upload size={24} color="#0066CC" />
-            <View style={styles.methodOptionContent}>
-              <Text style={styles.methodOptionTitle}>Déposer un devis</Text>
-              <Text style={styles.methodOptionDescription}>
-                Déposez un fichier PDF de devis existant
-              </Text>
-            </View>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.cancelButton}
-            onPress={() => {
-              setShowMethodModal(false);
-              router.back();
-            }}
-          >
-            <Text style={styles.cancelButtonText}>Annuler</Text>
-          </TouchableOpacity>
-        </View>
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Chargement du devis...</Text>
       </View>
-    </Modal>
-  );
-  
-  const ConfirmationModal = () => (
-    <Modal
-      visible={showConfirmModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowConfirmModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Confirmer l'envoi</Text>
-          <Text style={styles.modalSubtitle}>
-            Vous êtes sur le point d'envoyer un devis à {form.clientName}.
-          </Text>
-          
-          <View style={styles.confirmationDetails}>
-            <View style={styles.confirmationRow}>
-              <Text style={styles.confirmationLabel}>Client:</Text>
-              <Text style={styles.confirmationValue}>{form.clientName}</Text>
-            </View>
-            <View style={styles.confirmationRow}>
-              <Text style={styles.confirmationLabel}>Bateau:</Text>
-              <Text style={styles.confirmationValue}>{form.boatName} ({form.boatType})</Text>
-            </View>
-            {uploadMethod === 'create' ? (
-              <>
-                <View style={styles.confirmationRow}>
-                  <Text style={styles.confirmationLabel}>Montant:</Text>
-                  <Text style={styles.confirmationValue}>{totalAmount.toFixed(2)} €</Text>
-                </View>
-                <View style={styles.confirmationRow}>
-                  <Text style={styles.confirmationLabel}>Validité:</Text>
-                  <Text style={styles.confirmationValue}>
-                    {new Date(form.validUntil).toLocaleDateString('fr-FR')}
-                  </Text>
-                </View>
-              </>
-            ) : (
-              <View style={styles.confirmationRow}>
-                <Text style={styles.confirmationLabel}>Fichier:</Text>
-                <Text style={styles.confirmationValue}>{form.file?.name}</Text>
-              </View>
-            )}
-          </View>
-          
-          <View style={styles.modalActions}>
-            <TouchableOpacity 
-              style={styles.modalCancelButton}
-              onPress={() => setShowConfirmModal(false)}
-            >
-              <Text style={styles.modalCancelText}>Annuler</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.modalConfirmButton}
-              onPress={handleConfirmSubmit}
-            >
-              <Text style={styles.modalConfirmText}>Envoyer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
+    );
+  }
 
   const renderCreateForm = () => (
     <>
@@ -578,26 +545,28 @@ fileUrl = pub.publicUrl;
               </View>
               
               <View style={styles.serviceInputContainer}>
-                <Text style={styles.serviceLabel}>Nom du service</Text>
+                <Text style={styles.label}>Nom du service</Text>
                 <TextInput
-                  style={styles.serviceInput}
+                  style={[styles.serviceInput, errors[`service-${service.id}`]?.name && styles.inputError]}
                   value={service.name}
                   onChangeText={(text) => updateService(service.id, 'name', text)}
                   placeholder="ex: Entretien moteur"
                 />
+                {errors[`service-${service.id}`]?.name && <Text style={styles.errorText}>{errors[`service-${service.id}`].name}</Text>}
               </View>
               
               <View style={styles.serviceInputContainer}>
-                <Text style={styles.serviceLabel}>Description</Text>
+                <Text style={styles.label}>Description</Text>
                 <TextInput
-                  style={styles.serviceTextArea}
+                  style={[styles.serviceTextArea, errors[`service-${service.id}`]?.description && styles.inputError]}
                   value={service.description}
                   onChangeText={(text) => updateService(service.id, 'description', text)}
                   placeholder="Description détaillée du service"
                   multiline
-                  numberOfLines={4}
+                  numberOfLines={3}
                   textAlignVertical="top"
                 />
+                {errors[`service-${service.id}`]?.description && <Text style={styles.errorText}>{errors[`service-${service.id}`].description}</Text>}
               </View>
               
               <View style={styles.serviceInputContainer}>
@@ -605,7 +574,7 @@ fileUrl = pub.publicUrl;
                 <View style={styles.amountInputContainer}>
                   <Euro size={20} color="#666" />
                   <TextInput
-                    style={styles.amountInput}
+                    style={[styles.amountInput, errors[`service-${service.id}`]?.amount && styles.inputError]}
                     value={service.amount.toString()}
                     onChangeText={(text) => {
                       // Accepter uniquement les chiffres et le point décimal
@@ -616,6 +585,7 @@ fileUrl = pub.publicUrl;
                     keyboardType="numeric"
                   />
                 </View>
+                {errors[`service-${service.id}`]?.amount && <Text style={styles.errorText}>{errors[`service-${service.id}`].amount}</Text>}
               </View>
             </View>
           ))}
@@ -732,14 +702,6 @@ fileUrl = pub.publicUrl;
     </>
   );
 
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.centered]}>
-        <Text>Chargement des données...</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -804,6 +766,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     flex: 1,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
   },
   header: {
     flexDirection: 'row',
@@ -1195,8 +1162,8 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
   },
   serviceTextArea: {
-    backgroundColor: 'white',
-    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     padding: 12,

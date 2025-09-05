@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, Modal } from 'react-native';
 import { Mail, User, ArrowLeft, Anchor, MapPin, Lock, Plus, X } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import PortSelectionModal from '@/components/PortSelectionModal';
+import { supabase } from '@/src/lib/supabase';
 
 interface SignupForm {
   firstName: string;
@@ -18,7 +19,7 @@ interface SignupForm {
 }
 
 export default function SignupScreen() {
-  const { pendingServiceRequest, clearPendingServiceRequest, signup, ports } = useAuth();
+  const { clearPendingServiceRequest, ports } = useAuth();
   const [form, setForm] = useState<SignupForm>({
     firstName: '',
     lastName: '',
@@ -30,6 +31,10 @@ export default function SignupScreen() {
   const [showPortModal, setShowPortModal] = useState(false);
   const [errors, setErrors] = useState<Partial<SignupForm>>({});
   const [isLoading, setIsLoading] = useState(false);
+
+  // New states for welcome modals
+  const [showWelcomeModal1, setShowWelcomeModal1] = useState(false);
+  const [showWelcomeModal2, setShowWelcomeModal2] = useState(false);
 
   const validateForm = () => {
     const newErrors: Partial<SignupForm> = {};
@@ -49,40 +54,72 @@ export default function SignupScreen() {
   };
 
   const handleSubmit = async () => {
-    if (validateForm()) {
-      try {
-        setIsLoading(true);
-        setErrors({});
-        await signup(form.firstName, form.lastName, form.email, form.password, form.ports);
-      } catch (error: any) {
-        console.error('Failed to create account:', error);
-        setErrors(prev => ({ ...prev, general: error.message || 'Échec de la création du compte.' }));
-      } finally {
-        setIsLoading(false);
+    if (!validateForm()) return;
+
+    try {
+      setIsLoading(true);
+      setErrors({});
+
+      // 🔥 Appel de la Edge Function signup
+      const res = await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          first_name: form.firstName,
+          last_name: form.lastName,
+          e_mail: form.email,
+          password: form.password,
+          ports: form.ports.map((p) => p.portId),
+        }),
+      });
+
+      if (!res.ok) {
+        // essaie de lire l'erreur renvoyée par la fonction
+        let errorMsg = 'Erreur lors de la création du compte.';
+        try {
+          const payload = await res.json();
+          if (payload?.error) errorMsg = payload.error;
+        } catch {}
+        throw new Error(errorMsg);
       }
+
+      const user = await res.json();
+      console.log('✅ Utilisateur créé:', user);
+
+      // Show first welcome modal instead of direct navigation
+      setShowWelcomeModal1(true);
+
+    } catch (error: any) {
+      console.error('Failed to create account:', error);
+      setErrors(prev => ({ ...prev, general: error.message || 'Échec de la création du compte.' }));
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleAddPort = (port: { id: string; name: string }) => {
-    if (!form.ports.some(p => p.portId === port.id)) {
-      setForm(prev => ({
+    if (!form.ports.some((p) => p.portId === port.id)) {
+      setForm((prev) => ({
         ...prev,
-        ports: [...prev.ports, { portId: port.id, portName: port.name }]
+        ports: [...prev.ports, { portId: port.id, portName: port.name }],
       }));
-      
+
       if (errors.ports) {
-        setErrors(prev => ({ ...prev, ports: undefined }));
+        setErrors((prev) => ({ ...prev, ports: undefined }));
       }
     }
-    
+
     setPortSearch('');
     setShowPortModal(false);
   };
 
   const handleRemovePort = (portId: string) => {
-    setForm(prev => ({
+    setForm((prev) => ({
       ...prev,
-      ports: prev.ports.filter(p => p.portId !== portId)
+      ports: prev.ports.filter((p) => p.portId !== portId),
     }));
   };
 
@@ -159,7 +196,7 @@ export default function SignupScreen() {
                   style={styles.input}
                   placeholder="Prénom"
                   value={form.firstName}
-                  onChangeText={(text) => setForm(prev => ({ ...prev, firstName: text }))}
+                  onChangeText={(text) => setForm((prev) => ({ ...prev, firstName: text }))}
                   autoCapitalize="words"
                   autoComplete="given-name"
                 />
@@ -174,7 +211,7 @@ export default function SignupScreen() {
                   style={styles.input}
                   placeholder="Nom"
                   value={form.lastName}
-                  onChangeText={(text) => setForm(prev => ({ ...prev, lastName: text }))}
+                  onChangeText={(text) => setForm((prev) => ({ ...prev, lastName: text }))}
                   autoCapitalize="words"
                   autoComplete="family-name"
                 />
@@ -189,7 +226,7 @@ export default function SignupScreen() {
                   style={styles.input}
                   placeholder="Email"
                   value={form.email}
-                  onChangeText={(text) => setForm(prev => ({ ...prev, email: text }))}
+                  onChangeText={(text) => setForm((prev) => ({ ...prev, email: text }))}
                   autoCapitalize="none"
                   autoComplete="email"
                   keyboardType="email-address"
@@ -209,7 +246,7 @@ export default function SignupScreen() {
                   style={styles.input}
                   placeholder="Mot de passe"
                   value={form.password}
-                  onChangeText={(text) => setForm(prev => ({ ...prev, password: text }))}
+                  onChangeText={(text) => setForm((prev) => ({ ...prev, password: text }))}
                   secureTextEntry
                   autoCapitalize="none"
                   autoComplete="new-password"
@@ -252,6 +289,65 @@ export default function SignupScreen() {
         searchQuery={portSearch}
         onSearchQueryChange={setPortSearch}
       />
+
+      {/* Welcome Modal 1 */}
+      <Modal
+        visible={showWelcomeModal1}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowWelcomeModal1(false);
+          setShowWelcomeModal2(true); // Automatically show second modal if first is dismissed
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Bienvenue sur Your Boat Manager</Text>
+            <Text style={styles.modalText}>
+              Votre demande a bien été transmise et un Boat Manager vous a été affecté.
+              Retrouvez ses coordonnées sur votre page d'accueil.
+            </Text>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => {
+                setShowWelcomeModal1(false);
+                setShowWelcomeModal2(true);
+              }}
+            >
+              <Text style={styles.modalButtonText}>Continuer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Welcome Modal 2 */}
+      <Modal
+        visible={showWelcomeModal2}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowWelcomeModal2(false);
+          router.push('/login'); // Redirect to login if second modal is dismissed
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Personnalisez votre application</Text>
+            <Text style={styles.modalText}>
+              Profitez de l'ensemble de ses fonctionnalités.
+            </Text>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => {
+                setShowWelcomeModal2(false);
+                router.push('/boats/new'); // Navigate to boat creation form
+              }}
+            >
+              <Text style={styles.modalButtonText}>Ajouter vos bateaux</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -415,16 +511,6 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  googleIconContainer: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
   googleIcon: {
     color: '#4285F4',
     fontSize: 16,
@@ -549,7 +635,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     width: '90%',
     maxWidth: 500,
-    maxHeight: '80%',
+    padding: 24, // Added padding for content
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -565,57 +651,43 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: 'bold',
     color: '#1a1a1a',
+    marginBottom: 16, // Added margin-bottom
+    textAlign: 'center',
   },
-  closeButton: {
-    padding: 4,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    margin: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  searchInput: {
-    flex: 1,
+  modalText: {
     fontSize: 16,
-    color: '#1a1a1a',
+    color: '#666',
+    marginBottom: 24, // Added margin-bottom
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  modalButton: {
+    backgroundColor: '#0066CC',
+    padding: 14,
+    borderRadius: 12,
+    alignItems: 'center',
     ...Platform.select({
+      ios: {
+        shadowColor: '#0066CC',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
       web: {
-        outlineStyle: 'none',
+        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
       },
     }),
   },
-  portsList: {
-    flex: 1,
-  },
-  portItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  portItemText: {
+  modalButtonText: {
+    color: 'white',
     fontSize: 16,
-    color: '#1a1a1a',
+    fontWeight: '600',
   },
 });

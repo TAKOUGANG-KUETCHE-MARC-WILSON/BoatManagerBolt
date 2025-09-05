@@ -1,8 +1,10 @@
+// app/login.tsx
 import { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView, Modal } from 'react-native';
 import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, LogIn } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase'; // Importez supabase
 
 interface LoginForm {
   email: string;
@@ -29,6 +31,13 @@ export default function LoginScreen() {
   const [errors, setErrors] = useState<Partial<LoginForm>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [portId, setPortId] = useState('1'); // Changed from 'p1' to '1'
+
+  // --- États pour la fonction "Mot de passe oublié" ---
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [forgotPasswordEmailError, setForgotPasswordEmailError] = useState('');
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  // --- Fin des états pour la fonction "Mot de passe oublié" ---
 
   const validateForm = () => {
     const newErrors: Partial<LoginForm> = {};
@@ -72,6 +81,54 @@ export default function LoginScreen() {
     }
   };
 
+  // --- Nouvelle fonction pour le mot de passe oublié ---
+  const handleForgotPassword = async () => {
+    if (!forgotPasswordEmail.trim()) {
+      setForgotPasswordEmailError('L\'email est requis');
+      return;
+    }
+    if (!/\S+@\S+\.\S+/.test(forgotPasswordEmail)) {
+      setForgotPasswordEmailError('L\'email n\'est pas valide');
+      return;
+    }
+
+    setIsResettingPassword(true);
+    setForgotPasswordEmailError('');
+
+    try {
+      // --- REMPLACER 'YOUR_SUPABASE_PROJECT_REF' par la référence de votre projet Supabase ---
+      const FUNCTION_URL = `https://jxzwwwpxxrlukamxiurz.supabase.co/functions/v1/request_password_reset`;
+
+      const resp = await fetch(FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ p_email: forgotPasswordEmail.trim() }),
+      });
+
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        // La fonction Edge renvoie { error: "..." } en cas d'erreur 4xx/5xx
+        setForgotPasswordEmailError(result.error ?? "Erreur serveur");
+      } else {
+        Alert.alert(
+          "Email envoyé",
+          "Si votre adresse e-mail est enregistrée, vous recevrez un lien de réinitialisation de mot de passe."
+        );
+        setShowForgotPasswordModal(false);
+        setForgotPasswordEmail('');
+      }
+    } catch (e: any) {
+      console.error("Unexpected error:", e);
+      setForgotPasswordEmailError("Une erreur inattendue est survenue.");
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+  // --- Fin de la nouvelle fonction pour le mot de passe oublié ---
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -86,7 +143,13 @@ export default function LoginScreen() {
           <View style={styles.overlay} />
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => {
+              if (router.canGoBack && router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/(tabs)'); // ou '/(tabs)' selon ta structure
+              }
+            }}
           >
             <ArrowLeft size={24} color="white" />
           </TouchableOpacity>
@@ -188,6 +251,15 @@ export default function LoginScreen() {
               )}
             </TouchableOpacity>
 
+            {/* --- Nouveau bouton "Mot de passe oublié" --- */}
+            <TouchableOpacity
+              style={styles.forgotPasswordLink}
+              onPress={() => setShowForgotPasswordModal(true)}
+            >
+              <Text style={styles.forgotPasswordLinkText}>Mot de passe oublié ?</Text>
+            </TouchableOpacity>
+            {/* --- Fin du nouveau bouton --- */}
+
             {selectedRole === 'pleasure_boater' && (
               <TouchableOpacity
                 style={styles.signupLink}
@@ -202,6 +274,67 @@ export default function LoginScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* --- Modale "Mot de passe oublié" --- */}
+      <Modal
+        visible={showForgotPasswordModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowForgotPasswordModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.forgotPasswordModalContent}>
+            <Text style={styles.forgotPasswordModalTitle}>Mot de passe oublié</Text>
+            <Text style={styles.forgotPasswordModalText}>
+              Veuillez saisir votre adresse e-mail pour réinitialiser votre mot de passe.
+            </Text>
+
+            <View style={styles.inputContainer}>
+              <View style={[styles.inputWrapper, forgotPasswordEmailError && styles.inputWrapperError]}>
+                <Mail size={20} color={forgotPasswordEmailError ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Votre adresse e-mail"
+                  value={forgotPasswordEmail}
+                  onChangeText={(text) => {
+                    setForgotPasswordEmail(text);
+                    setForgotPasswordEmailError(''); // Clear error on change
+                  }}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  inputMode="email"
+                />
+              </View>
+              {forgotPasswordEmailError && <Text style={styles.errorText}>{forgotPasswordEmailError}</Text>}
+            </View>
+
+            <TouchableOpacity
+              style={[styles.submitButton, isResettingPassword && styles.submitButtonDisabled]}
+              onPress={handleForgotPassword}
+              disabled={isResettingPassword}
+            >
+              {isResettingPassword ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <Text style={styles.submitButtonText}>
+                  Réinitialiser mon mot de passe
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => setShowForgotPasswordModal(false)}
+            >
+              <Text style={styles.modalCloseButtonText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {/* --- Fin de la modale "Mot de passe oublié" --- */}
     </KeyboardAvoidingView>
   );
 }
@@ -482,5 +615,64 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontSize: 14,
   },
+  // --- Styles pour la modale "Mot de passe oublié" ---
+  forgotPasswordLink: {
+    alignSelf: 'center',
+    marginTop: 10,
+    paddingVertical: 5,
+  },
+  forgotPasswordLinkText: {
+    color: '#0066CC',
+    fontSize: 14,
+    textDecorationLine: 'underline',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  forgotPasswordModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '90%',
+    maxWidth: 400,
+    padding: 24,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
+  },
+  forgotPasswordModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  forgotPasswordModalText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  modalCloseButton: {
+    alignSelf: 'center',
+    marginTop: 15,
+    padding: 8,
+  },
+  modalCloseButtonText: {
+    color: '#0066CC',
+    fontSize: 14,
+  },
 });
-

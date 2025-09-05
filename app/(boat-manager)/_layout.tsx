@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase'; // Importation du client Supabase
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function BoatManagerTabLayout() {
   const { user } = useAuth();
@@ -18,50 +19,68 @@ export default function BoatManagerTabLayout() {
     }
 
     const fetchUnreadCounts = async () => {
-      if (!user?.id) {
-        return;
-      }
+  if (!user?.id) {
+    return;
+  }
 
-      // Simulation de la récupération des messages non lus depuis Supabase
-      // Dans une implémentation réelle, vous feriez une requête à votre table 'messages'
-      // pour compter les messages où 'receiver_id' est l'ID de l'utilisateur actuel et 'is_read' est faux.
-      try {
-        const { count: messagesCount, error: messagesError } = await supabase
-          .from('messages')
-          .select('id', { count: 'exact' })
-          .eq('receiver_id', user.id)
-          .eq('is_read', false);
+  // --- Messages non lus ---
+  try {
+    // 1. Récupérer les conversations de l'utilisateur
+    const { data: convMembers, error: convError } = await supabase
+      .from('conversation_members')
+      .select('conversation_id')
+      .eq('user_id', user.id);
 
-        if (messagesError) {
-          console.error('Erreur lors de la récupération des messages non lus:', messagesError);
-          setUnreadMessages(0);
-        } else {
-          setUnreadMessages(messagesCount || 0);
-        }
-      } catch (e) {
-        console.error('Erreur inattendue lors de la récupération des messages non lus:', e);
+    if (convError || !convMembers) {
+      console.error('Erreur lors de la récupération des conversations:', convError);
+      setUnreadMessages(0);
+      return;
+    }
+
+    const convIds = convMembers.map((c) => c.conversation_id);
+    if (convIds.length === 0) {
+      setUnreadMessages(0);
+    } else {
+      // 2. Compter les messages non lus dans ces conversations
+      const { count: messagesCount, error: messagesError } = await supabase
+        .from('messages')
+        .select('id', { count: 'exact' })
+        .in('conversation_id', convIds) // uniquement les conversations où il est membre
+        .neq('sender_id', user.id)      // pas mes propres messages
+        .eq('is_read', false);          // uniquement les non lus
+
+      if (messagesError) {
+        console.error('Erreur lors de la récupération des messages non lus:', messagesError);
         setUnreadMessages(0);
+      } else {
+        setUnreadMessages(messagesCount || 0);
       }
+    }
+  } catch (e) {
+    console.error('Erreur inattendue lors de la récupération des messages non lus:', e);
+    setUnreadMessages(0);
+  }
 
-      // Récupération des requêtes non lues (par exemple, les demandes soumises)
-      try {
-        const { count: requestsCount, error: requestsError } = await supabase
-          .from('service_request')
-          .select('id', { count: 'exact' })
-          .eq('id_boat_manager', user.id)
-          .eq('statut', 'submitted'); // Count requests with 'submitted' status as unread
+  // --- Requêtes non lues ---
+  try {
+    const { count: requestsCount, error: requestsError } = await supabase
+      .from('service_request')
+      .select('id', { count: 'exact' })
+      .eq('id_boat_manager', user.id)
+      .eq('statut', 'submitted'); // statut = 'submitted' = demande non traitée
 
-        if (requestsError) {
-          console.error('Erreur lors de la récupération des requêtes non lues:', requestsError);
-          setUnreadRequests(0);
-        } else {
-          setUnreadRequests(requestsCount || 0);
-        }
-      } catch (e) {
-        console.error('Erreur inattendue lors de la récupération des requêtes non lues:', e);
-        setUnreadRequests(0);
-      }
-    };
+    if (requestsError) {
+      console.error('Erreur lors de la récupération des requêtes non lues:', requestsError);
+      setUnreadRequests(0);
+    } else {
+      setUnreadRequests(requestsCount || 0);
+    }
+  } catch (e) {
+    console.error('Erreur inattendue lors de la récupération des requêtes non lues:', e);
+    setUnreadRequests(0);
+  }
+};
+
 
     fetchUnreadCounts();
   }, [user]);
@@ -71,13 +90,14 @@ export default function BoatManagerTabLayout() {
   }
 
   return (
+    <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
     <Tabs
       screenOptions={{
         headerShown: true,
         tabBarActiveTintColor: '#0066CC',
         tabBarStyle: {
-          height: Platform.OS === 'ios' ? 80 : 60,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          height: Platform.OS === 'ios' ? 60 : 54,
+          paddingBottom: Platform.OS === 'ios' ? 12 : 6,
         },
       }}>
       <Tabs.Screen
@@ -160,6 +180,7 @@ export default function BoatManagerTabLayout() {
         }}
       />
     </Tabs>
+    </SafeAreaView>
   );
 }
 

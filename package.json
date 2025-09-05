@@ -65,6 +65,7 @@
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
     "@types/react-native-bcrypt": "^2.4.6",
+    "supabase": "^2.39.2",
     "typescript": "~5.8.3"
   },
   "overrides": {
@@ -74,6 +75,9 @@
   },
   "expo": {
     "scheme": "yourboatmanager",
+    "android": {
+      "softwareKeyboardLayoutMode": "resize"
+    },
     "doctor": {
       "reactNativeDirectoryCheck": {
         "listUnknownPackages": false

@@ -1,19 +1,40 @@
 // app/(corporate)/messages.tsx
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal } from 'react-native';
-import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native'; // Import FileText icon
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Platform, KeyboardAvoidingView, Modal, ActivityIndicator, TouchableWithoutFeedback } from 'react-native';
+import { Send, Search, ChevronLeft, Phone, Mail, Bot as Boat, User, Building, Plus, X, Check, MessageSquare, Video, Paperclip, Camera, Image as ImageIcon, FileText } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context'; // Import useSafeAreaInsets
 import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker'; // Import DocumentPicker
+import * as DocumentPicker from 'expo-document-picker';
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
+import { supabase } from '@/src/lib/supabase';
+
+// --- Helper function for avatar URLs ---
+const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedAvatarUrl = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  const { data, error } = await supabase
+    .storage
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60); // 1h de validité
+
+  if (error || !data?.signedUrl) return '';
+  return data.signedUrl;
+};
+// --- End Helper function ---
 
 interface Message {
-  id: string;
-  senderId: string;
-  text?: string;
-  image?: string;
-  file?: { // New file property
+  id: number; // Changed to number
+  senderId: number; // Changed to number
+  content?: string; // Renamed from 'text' to 'content' to match DB
+  image?: string; // URL for image files
+  file?: { // For other file types (PDF, etc.)
     name: string;
     uri: string;
     type: string;
@@ -22,264 +43,602 @@ interface Message {
 }
 
 interface Contact {
-  id: string;
+  id: number; // Changed to number
   name: string;
-  role: 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'back_office';
   avatar: string;
-  online?: boolean;
+  type: 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate';
+  email: string;
+  phone: string;
+  details?: string; // For displaying extra info like boats or ports
+  online?: boolean; // If you implement online status
 }
 
 interface Chat {
-  id: string;
-  participants: Contact[];
-  messages: Message[];
+  id: number; // conversation_id - Changed to number
+  participants: Contact[]; // Members of the conversation
   isGroup: boolean;
-  name?: string;
-  unreadCount?: number;
+  name?: string; // conversation title
+  unreadCount?: number; // For UI, might be calculated
+  lastMessage?: Message; // For chat list display
 }
 
-// Mock data
-const mockContacts: Contact[] = [
-  {
-    id: '1',
-    name: 'Jean Dupont',
-    role: 'pleasure_boater',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: '2',
-    name: 'Marie Martin',
-    role: 'boat_manager',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: '3',
-    name: 'Nautique Pro',
-    role: 'nautical_company',
-    avatar: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    online: false,
-  },
-  {
-    id: '4',
-    name: 'Support YBM',
-    role: 'back_office',
-    avatar: 'https://images.unsplash.com/photo-1565884280295-98eb83e41c65?q=80&w=2148&auto=format&fit=crop',
-    online: true,
-  },
-];
+// --- NewConversationModal Component ---
+const NewConversationModal = ({
+  visible,
+  onClose,
+  allUsers,
+  user,
+  contactSearchQuery,
+  setContactSearchQuery,
+  selectedContacts,
+  setSelectedContacts,
+  selectedContactType,
+  setSelectedContactType,
+  handleCreateConversation,
+  isCreatingConversation,
+  getContactTypeIcon,
+  getContactTypeLabel,
+  getContactTypeColor,
+}) => {
+  // Filter contacts for new conversation
+  const filteredContacts = allUsers.filter(contact => {
+    // Exclude current user
+    if (contact.id === Number(user?.id)) return false;
 
-const mockChats: Chat[] = [
-  {
-    id: '1',
-    participants: [mockContacts[0], mockContacts[1]],
-    isGroup: false,
-    messages: [
-      {
-        id: '1',
-        senderId: '2',
-        text: 'Bonjour, comment puis-je vous aider avec votre bateau ?',
-        timestamp: new Date('2024-02-20T10:00:00'),
-      },
-      {
-        id: '2',
-        senderId: '1',
-        text: "J'aimerais planifier une maintenance pour la semaine prochaine.",
-        timestamp: new Date('2024-02-20T10:05:00'),
-      },
-    ],
-  },
-  {
-    id: '2',
-    participants: mockContacts,
-    isGroup: true,
-    name: 'Projet Maintenance',
-    messages: [
-      {
-        id: '3',
-        senderId: '1',
-        text: 'Voici les photos du dernier contrôle',
-        timestamp: new Date('2024-02-19T15:30:00'),
-      },
-      {
-        id: '4',
-        senderId: '3',
-        image: 'https://images.unsplash.com/photo-1540946485063-a40da27545f8?q=80&w=2070&auto=format&fit=crop',
-        timestamp: new Date('2024-02-19T15:31:00'),
-      },
-      {
-        id: '5',
-        senderId: '1',
-        file: { // Example file message
-          name: 'plan_bateau.pdf',
-          uri: 'https://www.africau.edu/images/default/sample.pdf', // Sample PDF
-          type: 'application/pdf',
-        },
-        timestamp: new Date('2024-02-19T15:35:00'),
-      },
-    ],
-  },
-];
+    // Exclude nautical companies as per user request
+    if (contact.type === 'nautical_company') return false;
 
-// All available contacts for new conversation
-const allContacts: Contact[] = [
-  // Plaisanciers
-  {
-    id: 'pb1',
-    name: 'Jean Dupont',
-    role: 'pleasure_boater',
-    avatar: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: 'pb2',
-    name: 'Sophie Martin',
-    role: 'pleasure_boater',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=988&auto=format&fit=crop',
-    online: false,
-  },
-  {
-    id: 'pb3',
-    name: 'Pierre Dubois',
-    role: 'pleasure_boater',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    online: true,
-  },
-  // Boat Managers
-  {
-    id: 'bm1',
-    name: 'Marie Martin',
-    role: 'boat_manager',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=987&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: 'bm2',
-    name: 'Pierre Dubois',
-    role: 'boat_manager',
-    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=987&auto=format&fit=crop',
-    online: false,
-  },
-  // Entreprises du nautisme
-  {
-    id: 'nc1',
-    name: 'Nautisme Pro',
-    role: 'nautical_company',
-    avatar: 'https://images.unsplash.com/photo-1563237023-b1e970526dcb?q=80&w=2069&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: 'nc2',
-    name: 'Marine Services',
-    role: 'nautical_company',
-    avatar: 'https://images.unsplash.com/photo-1516937941344-00b4e0337589?q=80&w=2070&auto=format&fit=crop',
-    online: false,
-  },
-  // Corporate
-  {
-    id: 'corp1',
-    name: 'Support YBM',
-    role: 'back_office',
-    avatar: 'https://images.unsplash.com/photo-1565884280295-98eb83e41c65?q=80&w=2148&auto=format&fit=crop',
-    online: true,
-  },
-  {
-    id: 'corp2',
-    name: 'Admin YBM',
-    role: 'back_office',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=2070&auto=format&fit=crop',
-    online: true,
-  },
-];
+    // Filter by search query
+    const searchLower = (contactSearchQuery || '').toLowerCase();
+    const matchesSearch =
+      contact.name.toLowerCase().includes(searchLower) ||
+      contact.email.toLowerCase().includes(searchLower) ||
+      (contact.details && contact.details.toLowerCase().includes(searchLower));
 
+    // Filter by contact type
+    const matchesType =
+      selectedContactType === 'all' || contact.type === selectedContactType;
+
+    return matchesSearch && matchesType;
+  });
+
+  const toggleContactSelection = (contact: Contact) => {
+    setSelectedContacts(prev => {
+      if (prev.some(c => c.id === contact.id)) {
+        return prev.filter(c => c.id !== contact.id);
+      } else {
+        return [...prev, contact];
+      }
+    });
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Nouvelle conversation</Text>
+                <TouchableOpacity
+                  style={styles.modalCloseButton}
+                  onPress={onClose}
+                >
+                  <X size={24} color="#666" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.contactTypeFilter}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <TouchableOpacity
+                    style={[
+                      styles.contactTypeButton,
+                      selectedContactType === 'all' && styles.contactTypeButtonActive
+                    ]}
+                    onPress={() => setSelectedContactType('all')}
+                  >
+                    <Text style={[
+                      styles.contactTypeButtonText,
+                      selectedContactType === 'all' && styles.contactTypeButtonTextActive
+                    ]}>
+                      Tous
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.contactTypeButton,
+                      selectedContactType === 'pleasure_boater' && styles.contactTypeButtonActive,
+                      { borderColor: '#0EA5E9' }
+                    ]}
+                    onPress={() => setSelectedContactType('pleasure_boater')}
+                  >
+                    <User size={16} color={selectedContactType === 'pleasure_boater' ? 'white' : '#0EA5E9'} />
+                    <Text style={[
+                      styles.contactTypeButtonText,
+                      selectedContactType === 'pleasure_boater' && styles.contactTypeButtonTextActive,
+                      { color: selectedContactType === 'pleasure_boater' ? 'white' : '#0EA5E9' }
+                    ]}>
+                      Plaisanciers
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.contactTypeButton,
+                      selectedContactType === 'boat_manager' && styles.contactTypeButtonActive,
+                      { borderColor: '#10B981' }
+                    ]}
+                    onPress={() => setSelectedContactType('boat_manager')}
+                  >
+                    <User size={16} color={selectedContactType === 'boat_manager' ? 'white' : '#10B981'} />
+                    <Text style={[
+                      styles.contactTypeButtonText,
+                      selectedContactType === 'boat_manager' && styles.contactTypeButtonTextActive,
+                      { color: selectedContactType === 'boat_manager' ? 'white' : '#10B921' }
+                    ]}>
+                      Boat Managers
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Nautical Company type is excluded from the list of options as per user request */}
+                  {/*
+                  <TouchableOpacity
+                    style={[
+                      styles.contactTypeButton,
+                      selectedContactType === 'nautical_company' && styles.contactTypeButtonActive,
+                      { borderColor: '#8B5CF6' }
+                    ]}
+                    onPress={() => setSelectedContactType('nautical_company')}
+                  >
+                    <Building size={16} color={selectedContactType === 'nautical_company' ? 'white' : '#8B5CF6'} />
+                    <Text style={[
+                      styles.contactTypeButtonText,
+                      selectedContactType === 'nautical_company' && styles.contactTypeButtonTextActive,
+                      { color: selectedContactType === 'nautical_company' ? 'white' : '#8B5CF6' }
+                    ]}>
+                      Entreprises
+                    </Text>
+                  </TouchableOpacity>
+                  */}
+
+                  <TouchableOpacity
+                    style={[
+                      styles.contactTypeButton,
+                      selectedContactType === 'corporate' && styles.contactTypeButtonActive,
+                      { borderColor: '#F59E0B' }
+                    ]}
+                    onPress={() => setSelectedContactType('corporate')}
+                  >
+                    <Building size={16} color={selectedContactType === 'corporate' ? 'white' : '#F59E0B'} />
+                    <Text style={[
+                      styles.contactTypeButtonText,
+                      selectedContactType === 'corporate' && styles.contactTypeButtonTextActive,
+                      { color: selectedContactType === 'corporate' ? 'white' : '#F59E0B' }
+                    ]}>
+                      Corporate
+                    </Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              </View>
+
+              <View style={styles.modalSearchContainer}>
+                <Search size={20} color="#666" />
+                <TextInput
+                  style={styles.modalSearchInput}
+                  placeholder="Rechercher un contact..."
+                  value={contactSearchQuery}
+                  onChangeText={setContactSearchQuery}
+                />
+              </View>
+
+              {selectedContacts.length > 0 && (
+                <View style={styles.selectedContactsContainer}>
+                  <Text style={styles.selectedContactsTitle}>
+                    Contacts sélectionnés ({selectedContacts.length})
+                  </Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.selectedContactsScroll}
+                  >
+                    {selectedContacts.map(contact => (
+                      <View key={contact.id} style={styles.selectedContactChip}>
+                        <Image source={{ uri: contact.avatar }} style={styles.selectedContactAvatar} />
+                        <Text style={styles.selectedContactName}>{contact.name}</Text>
+                        <TouchableOpacity
+                          style={styles.removeSelectedContactButton}
+                          onPress={() => toggleContactSelection(contact)}
+                        >
+                          <X size={16} color="#666" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              <ScrollView style={styles.contactsList} keyboardShouldPersistTaps="handled">
+                {filteredContacts.map(contact => (
+                  <TouchableOpacity
+                    key={contact.id}
+                    style={[
+                      styles.contactItem,
+                      selectedContacts.some(c => c.id === contact.id) && styles.contactItemSelected
+                    ]}
+                    onPress={() => toggleContactSelection(contact)}
+                  >
+                    <View style={styles.contactItemLeft}>
+                      <Image source={{ uri: contact.avatar }} style={styles.contactItemAvatar} />
+                      <View style={styles.contactItemInfo}>
+                        <Text style={styles.contactItemName}>{contact.name}</Text>
+                        <View style={styles.contactItemTypeContainer}>
+                          {getContactTypeIcon(contact.type)}
+                          <Text style={[
+                            styles.contactItemType,
+                            { color: getContactTypeColor(contact.type) }
+                          ]}>
+                            {getContactTypeLabel(contact.type)}
+                          </Text>
+                        </View>
+                        {contact.details && (
+                          <Text style={styles.contactItemDetails}>{contact.details}</Text>
+                        )}
+                      </View>
+                    </View>
+                    <View style={[
+                      styles.contactItemCheckbox,
+                      selectedContacts.some(c => c.id === contact.id) && styles.contactItemCheckboxSelected
+                    ]}>
+                      {selectedContacts.some(c => c.id === contact.id) && (
+                        <Check size={16} color="white" />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <View style={styles.modalFooter}>
+                <TouchableOpacity
+                  style={[
+                    styles.createConversationButton,
+                    selectedContacts.length === 0 && styles.createConversationButtonDisabled
+                  ]}
+                  onPress={handleCreateConversation}
+                  disabled={selectedContacts.length === 0 || isCreatingConversation}
+                >
+                  {isCreatingConversation ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <>
+                      <MessageSquare size={20} color="white" />
+                      <Text style={styles.createConversationButtonText}>
+                        Créer la conversation
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+};
+
+// --- Main MessagesScreen Component ---
 export default function MessagesScreen() {
-  const { contact: initialContactId } = useLocalSearchParams<{ contact?: string }>();
+  const { client: initialClientId } = useLocalSearchParams<{ client?: string }>();
   const { user } = useAuth();
+  const currentUserId = Number(user?.id); // Ensure current user ID is a number
+  const insets = useSafeAreaInsets(); // Hook for safe area insets
+  const [headerHeight, setHeaderHeight] = useState(0); // State to store header height
+
+  const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [chats, setChats] = useState(mockChats);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
-  
-  // New conversation modal state
+
   const [showNewConversationModal, setShowNewConversationModal] = useState(false);
   const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
-  const [selectedContactType, setSelectedContactType] = useState<'all' | 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'back_office'>('all');
-  
-  // Attachment options
-  const [showAttachmentOptions, setShowAttachmentOptions] = useState(false);
+  const [selectedContactType, setSelectedContactType] = useState<'all' | 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate'>('all');
+  const [allUsers, setAllUsers] = useState<Contact[]>([]); // All users for new conversation modal
 
-  // Set initial active chat if contact param is provided
+  const [showAttachmentOptions, setShowAttachmentOptions] = useState(false);
+  const [isLoadingChats, setIsLoadingChats] = useState(true);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+
+  // --- Fetch Initial Conversations and All Users ---
   useEffect(() => {
-    if (initialContactId) {
-      const chat = chats.find(c => 
-        c.participants.some(p => p.id === initialContactId)
-      );
-      if (chat) {
-        setActiveChat(chat);
+    const fetchInitialData = async () => {
+      setIsLoadingChats(true);
+      if (!user?.id) {
+        setIsLoadingChats(false);
+        return;
       }
+
+      try {
+        // Fetch all allowed contacts for the new conversation modal via RPC
+        const { data: usersData, error: usersError } = await supabase
+          .rpc('get_contacts_for_corporate', { corporate_id: Number(user.id) }); // Changed RPC function and ID type
+
+        if (usersError) {
+          console.error('Error fetching contacts via RPC:', usersError);
+          return;
+        }
+
+        const usersList: Contact[] = await Promise.all(
+          usersData.map(async (u: any) => {
+            const signedAvatar = await getSignedAvatarUrl(u.avatar);
+            return {
+              id: Number(u.id), // Ensure ID is number
+              name: `${u.first_name} ${u.last_name}`,
+              avatar: signedAvatar || DEFAULT_AVATAR,
+              type: u.profile,
+              email: u.e_mail,
+              phone: u.phone,
+              details: u.details, // Use the details from RPC
+            };
+          })
+        );
+        setAllUsers(usersList);
+
+        // Fetch conversations where the current user is a member
+        const { data: memberConversations, error: memberError } = await supabase
+          .from('conversation_members')
+          .select('conversation_id, conversations(*)')
+          .eq('user_id', Number(user.id)); // Ensure user.id is number
+
+        if (memberError) {
+          console.error('Error fetching member conversations:', memberError);
+          return;
+        }
+
+        const fetchedChats: Chat[] = [];
+        for (const memberConv of memberConversations) {
+          const conv = memberConv.conversations;
+          if (!conv) continue;
+
+          // Fetch participants for each conversation
+          const { data: participantsData, error: participantsError } = await supabase
+            .from('conversation_members')
+            .select('user_id, users(id, first_name, last_name, avatar, e_mail, phone, profile)')
+            .eq('conversation_id', conv.id);
+
+          if (participantsError) {
+            console.error('Error fetching participants:', participantsError);
+            continue;
+          }
+
+          const participants: Contact[] = await Promise.all(participantsData.map(async (p: any) => {
+            const signedAvatar = await getSignedAvatarUrl(p.users.avatar);
+            return {
+              id: Number(p.users.id), // Ensure ID is number
+              name: `${p.users.first_name} ${p.users.last_name}`,
+              avatar: signedAvatar || DEFAULT_AVATAR,
+              type: p.users.profile,
+              email: p.users.e_mail,
+              phone: p.users.phone,
+              details: '',
+            };
+          }));
+
+          // Fetch last message for chat list display
+          const { data: lastMessageData, error: lastMessageError } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', conv.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+          if (lastMessageError && lastMessageError.code !== 'PGRST116') { // PGRST116 means no rows found
+            console.error('Error fetching last message:', lastMessageError);
+          }
+
+          const lastMessage: Message | undefined = lastMessageData ? {
+            id: Number(lastMessageData.id), // Ensure ID is number
+            senderId: Number(lastMessageData.sender_id), // Ensure ID is number
+            content: lastMessageData.content,
+            image: lastMessageData.file_url && (lastMessageData.file_url.includes('.jpg') || lastMessageData.file_url.includes('.png') || lastMessageData.file_url.includes('.jpeg')) ? lastMessageData.file_url : undefined,
+            file: lastMessageData.file_url && !(lastMessageData.file_url.includes('.jpg') || lastMessageData.file_url.includes('.png') || lastMessageData.file_url.includes('.jpeg')) ? {
+              name: lastMessageData.file_url.split('/').pop() || 'file',
+              uri: lastMessageData.file_url,
+              type: 'application/octet-stream'
+            } : undefined,
+            timestamp: new Date(lastMessageData.created_at),
+          } : undefined;
+
+          fetchedChats.push({
+            id: conv.id,
+            name: conv.title,
+            isGroup: conv.is_group,
+            participants: participants,
+            messages: [],
+            lastMessage: lastMessage,
+            unreadCount: 0,
+          });
+        }
+        setChats(fetchedChats);
+
+        if (initialClientId) {
+          const chat = fetchedChats.find(c =>
+            c.participants.some(p => p.id === Number(initialClientId)) // Ensure ID is number
+          );
+          if (chat) {
+            setActiveChat(chat);
+          }
+        }
+
+      } catch (e) {
+        console.error("Error fetching initial data:", e);
+      } finally {
+        setIsLoadingChats(false);
+      }
+    };
+
+    fetchInitialData();
+  }, [user, initialClientId]);
+
+  // --- 2. Fetch Messages for Active Chat ---
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (!activeChat?.id) {
+        setMessages([]);
+        return;
+      }
+      setIsLoadingMessages(true);
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', activeChat.id)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error fetching messages for active chat:', error);
+        setMessages([]);
+        setIsLoadingMessages(false);
+        return;
+      }
+
+      setMessages(
+        data.map((msg) => ({
+          id: Number(msg.id), // Ensure ID is number
+          senderId: Number(msg.sender_id), // Ensure ID is number
+          content: msg.content,
+          image: msg.file_url && (msg.file_url.includes('.jpg') || msg.file_url.includes('.png') || msg.file_url.includes('.jpeg')) ? msg.file_url : undefined,
+          file: msg.file_url && !(msg.file_url.includes('.jpg') || msg.file_url.includes('.png') || msg.file_url.includes('.jpeg')) ? {
+            name: msg.file_url.split('/').pop() || 'file',
+            uri: msg.file_url,
+            type: 'application/octet-stream'
+          } : undefined,
+          timestamp: new Date(msg.created_at),
+        }))
+      );
+      setIsLoadingMessages(false);
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    };
+
+    fetchMessages();
+  }, [activeChat]);
+
+  // --- 3. Realtime Subscription for New Messages ---
+  useEffect(() => {
+    if (!activeChat?.id) {
+      supabase.removeAllChannels();
+      return;
     }
-  }, [initialContactId, chats]);
+
+    const channel = supabase
+      .channel(`conversation-${activeChat.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${activeChat.id}`
+        },
+        (payload) => {
+          const newMsg: Message = {
+            id: Number(payload.new.id), // Ensure ID is number
+            senderId: Number(payload.new.sender_id), // Ensure ID is number
+            content: payload.new.content,
+            image: payload.new.file_url && (payload.new.file_url.includes('.jpg') || payload.new.file_url.includes('.png') || payload.new.file_url.includes('.jpeg')) ? payload.new.file_url : undefined,
+            file: payload.new.file_url && !(payload.new.file_url.includes('.jpg') || payload.new.file_url.includes('.png') || payload.new.file_url.includes('.jpeg')) ? {
+                name: payload.new.file_url.split('/').pop() || 'file',
+                uri: payload.new.file_url,
+                type: 'application/octet-stream'
+              } : undefined,
+            timestamp: new Date(payload.new.created_at),
+          };
+          setMessages((prev) => [...prev, newMsg]);
+          setTimeout(() => {
+            scrollViewRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeChat]);
 
   const filteredChats = chats.filter(chat => {
     const searchLower = searchQuery.toLowerCase();
     if (chat.isGroup && chat.name) {
       return chat.name.toLowerCase().includes(searchLower);
     }
-    return chat.participants.some(p => 
+    return chat.participants.some(p =>
       p.name.toLowerCase().includes(searchLower)
     );
   });
 
-  // Filter contacts for new conversation
-  const filteredContacts = allContacts.filter(contact => {
-    // Filter by search query
-    const searchLower = contactSearchQuery.toLowerCase();
-    const matchesSearch = contact.name.toLowerCase().includes(searchLower);
-    
-    // Filter by contact type
-    const matchesType = selectedContactType === 'all' || contact.role === selectedContactType;
-    
-    return matchesSearch && matchesType;
-  });
+  const handleSend = useCallback(async (messageContent: string) => {
+    if (!activeChat || (!messageContent.trim() && !messageContent.includes('://'))) return;
 
-  const handleSend = useCallback((messageText: string) => {
-    if (!activeChat || (!messageText.trim() && !messageText.startsWith('image:'))) return;
+    const isFile = messageContent.includes('://');
+    const content = isFile ? null : messageContent;
+    const fileUrl = isFile ? messageContent : null;
 
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      senderId: user?.id || 'corp1',
-      text: messageText.startsWith('image:') ? undefined : messageText,
-      image: messageText.startsWith('image:') ? messageText.substring(6) : undefined,
-      timestamp: new Date(),
-    };
-
-    const updatedChats = chats.map(chat => {
-      if (chat.id === activeChat.id) {
-        return {
-          ...chat,
-          messages: [...chat.messages, newMessage],
-        };
-      }
-      return chat;
+    const { error } = await supabase.from('messages').insert({
+      conversation_id: Number(activeChat.id), // Ensure ID is number
+      sender_id: Number(user?.id), // Ensure ID is number
+      content: content,
+      file_url: fileUrl,
     });
 
-    setChats(updatedChats);
-    
-    // Scroll to bottom
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-    
-    setShowAttachmentOptions(false);
-  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
+    if (error) {
+      console.error('Erreur envoi message:', error);
+      alert('Échec de l\'envoi du message.');
+    }
+  }, [activeChat, user]);
+
+  const uploadFileToSupabase = async (fileUri: string, fileName: string, mimeType: string) => {
+    const fileExtension = fileName.split('.').pop();
+    const filePath = `chat_attachments/${user?.id}/${Date.now()}.${fileExtension}`;
+
+    try {
+      const response = await fetch(fileUri);
+      const blob = await response.blob();
+
+      const { data, error } = await supabase.storage
+        .from('chat_attachments') // Ensure this bucket exists in Supabase
+        .upload(filePath, blob, {
+          contentType: mimeType,
+          upsert: false,
+        });
+
+      if (error) throw error;
+
+      const publicUrl = supabase.storage.from('chat_attachments').getPublicUrl(data.path).data.publicUrl;
+      return publicUrl;
+    } catch (e) {
+      console.error('Error uploading file to Supabase Storage:', e);
+      throw new Error('Échec du téléchargement du fichier.');
+    }
+  };
 
   const handleChooseImage = useCallback(async () => {
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
-      if (!permission.granted) return;
+      if (!permission.granted) {
+        alert('Permission to access media library is required to choose photos.');
+        return;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -289,70 +648,33 @@ export default function MessagesScreen() {
       quality: 1,
     });
 
-    if (!result.canceled && activeChat) {
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        senderId: user?.id || 'corp1',
-        image: result.assets[0].uri,
-        timestamp: new Date(),
-      };
-
-      const updatedChats = chats.map(chat => {
-        if (chat.id === activeChat.id) {
-          return {
-            ...chat,
-            messages: [...chat.messages, newMessage],
-          };
-        }
-        return chat;
-      });
-
-      setChats(updatedChats);
-      
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+    if (!result.canceled && result.assets?.length) {
+      const asset = result.assets[0];
+      try {
+        const publicUrl = await uploadFileToSupabase(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
+        handleSend(publicUrl);
+      } catch (e: any) {
+        alert(e.message);
+      }
     }
-    
     setShowAttachmentOptions(false);
-  }, [mediaPermission, requestMediaPermission, activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
+  }, [mediaPermission, requestMediaPermission, handleSend]);
 
-  // New handleChooseDocument function
   const handleChooseDocument = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*', // Allow all document types
+        type: '*/*',
         copyToCacheDirectory: true,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0 && activeChat) {
+      if (!result.canceled && result.assets?.length) {
         const file = result.assets[0];
-        const newMessage: Message = {
-          id: Date.now().toString(),
-          senderId: user?.id || 'corp1',
-          file: {
-            name: file.name,
-            uri: file.uri,
-            type: file.mimeType || 'application/octet-stream', // Default to generic binary type
-          },
-          timestamp: new Date(),
-        };
-
-        const updatedChats = chats.map(chat => {
-          if (chat.id === activeChat.id) {
-            return {
-              ...chat,
-              messages: [...chat.messages, newMessage],
-            };
-          }
-          return chat;
-        });
-
-        setChats(updatedChats);
-
-        setTimeout(() => {
-          scrollViewRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        try {
+          const publicUrl = await uploadFileToSupabase(file.uri, file.name, file.mimeType || 'application/octet-stream');
+          handleSend(publicUrl);
+        } catch (e: any) {
+          alert(e.message);
+        }
       }
     } catch (error) {
       console.error('Error picking document:', error);
@@ -360,12 +682,12 @@ export default function MessagesScreen() {
     } finally {
       setShowAttachmentOptions(false);
     }
-  }, [activeChat, user, chats, setChats, scrollViewRef, setShowAttachmentOptions]);
+  }, [handleSend]);
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     });
   };
 
@@ -377,43 +699,84 @@ export default function MessagesScreen() {
     });
   };
 
-  // Handle toggling contact selection
   const toggleContactSelection = (contact: Contact) => {
-    if (selectedContacts.some(c => c.id === contact.id)) {
-      setSelectedContacts(selectedContacts.filter(c => c.id !== contact.id));
-    } else {
-      setSelectedContacts([...selectedContacts, contact]);
-    }
+    setSelectedContacts(prev => {
+      if (prev.some(c => c.id === contact.id)) {
+        return prev.filter(c => c.id !== contact.id);
+      } else {
+        return [...prev, contact];
+      }
+    });
   };
 
-  // Handle creating a new conversation
-  const handleCreateConversation = () => {
-    if (selectedContacts.length === 0) {
-      return;
+  const handleCreateConversation = useCallback(async () => {
+    if (selectedContacts.length === 0) return;
+
+    setIsCreatingConversation(true);
+
+    try {
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({
+          title: selectedContacts.length > 1 ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}` : null,
+          is_group: selectedContacts.length > 1,
+        })
+        .select('id, title, is_group')
+        .single();
+
+      if (convError) throw convError;
+
+      const membersToInsert = selectedContacts.map(contact => ({
+        conversation_id: newConv.id,
+        user_id: contact.id,
+      }));
+      if (user?.id) {
+        membersToInsert.push({
+          conversation_id: newConv.id,
+          user_id: Number(user.id), // Ensure user.id is number
+        });
+      }
+
+      const { error: membersError } = await supabase
+        .from('conversation_members')
+        .insert(membersToInsert);
+
+      if (membersError) throw membersError;
+
+      const newChat: Chat = {
+        id: newConv.id,
+        name: newConv.title || '',
+        isGroup: newConv.is_group,
+        participants: [...selectedContacts, { // Add current user to participants for local state
+          id: Number(user?.id), // Ensure ID is number
+          name: user?.firstName + ' ' + user?.lastName || 'Current User',
+          avatar: user?.avatar || DEFAULT_AVATAR,
+          type: user?.role || 'unknown',
+          email: user?.email || '',
+          phone: user?.phone || '',
+        }],
+        messages: [],
+        unreadCount: 0,
+      };
+
+      setChats(prev => [newChat, ...prev]);
+      setActiveChat(newChat); // Set the new chat as active
+
+      setShowNewConversationModal(false);
+      setContactSearchQuery('');
+      setSelectedContacts([]);
+      setSelectedContactType('all');
+      alert('Conversation créée avec succès !');
+
+    } catch (e: any) {
+      console.error('Error creating new conversation:', e);
+      alert('Échec de la création de la conversation: ' + e.message);
+    } finally {
+      setIsCreatingConversation(false);
     }
+  }, [selectedContacts, user]);
 
-    // Create a new chat
-    const newChat: Chat = {
-      id: `chat-${Date.now()}`,
-      participants: [...selectedContacts],
-      isGroup: selectedContacts.length > 1,
-      name: selectedContacts.length > 1 
-        ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}` 
-        : undefined,
-      messages: []
-    };
-    
-    setChats([newChat, ...chats]);
-    setActiveChat(newChat);
-    setShowNewConversationModal(false);
-    
-    // Reset state
-    setContactSearchQuery('');
-    setSelectedContacts([]);
-    setSelectedContactType('all');
-  };
-
-  const getContactTypeIcon = (type: Contact['role']) => {
+  const getContactTypeIcon = (type: Contact['type']) => {
     switch (type) {
       case 'pleasure_boater':
         return <User size={16} color="#0EA5E9" />;
@@ -421,14 +784,14 @@ export default function MessagesScreen() {
         return <User size={16} color="#10B981" />;
       case 'nautical_company':
         return <Building size={16} color="#8B5CF6" />;
-      case 'back_office':
+      case 'corporate':
         return <Building size={16} color="#F59E0B" />;
       default:
         return <User size={16} color="#666" />;
     }
   };
 
-  const getContactTypeLabel = (type: Contact['role']) => {
+  const getContactTypeLabel = (type: Contact['type']) => {
     switch (type) {
       case 'pleasure_boater':
         return 'Plaisancier';
@@ -436,14 +799,14 @@ export default function MessagesScreen() {
         return 'Boat Manager';
       case 'nautical_company':
         return 'Entreprise du nautisme';
-      case 'back_office':
+      case 'corporate':
         return 'Corporate';
       default:
         return type;
     }
   };
 
-  const getContactTypeColor = (type: Contact['role']) => {
+  const getContactTypeColor = (type: Contact['type']) => {
     switch (type) {
       case 'pleasure_boater':
         return '#0EA5E9';
@@ -451,7 +814,7 @@ export default function MessagesScreen() {
         return '#10B981';
       case 'nautical_company':
         return '#8B5CF6';
-      case 'back_office':
+      case 'corporate':
         return '#F59E0B';
       default:
         return '#666';
@@ -462,10 +825,10 @@ export default function MessagesScreen() {
     if (activeChat) {
       const otherParticipant = activeChat.isGroup
         ? null
-        : activeChat.participants[0];
-      
+        : activeChat.participants.find(p => p.id !== Number(user?.id)); // Ensure ID is number
+
       if (otherParticipant) {
-        alert(`Appel à ${otherParticipant.name}`);
+        alert(`Appel à ${otherParticipant.name} au ${otherParticipant.phone}`);
       } else if (activeChat.isGroup) {
         alert(`Appel de groupe à ${activeChat.name}`);
       }
@@ -476,8 +839,8 @@ export default function MessagesScreen() {
     if (activeChat) {
       const otherParticipant = activeChat.isGroup
         ? null
-        : activeChat.participants[0];
-      
+        : activeChat.participants.find(p => p.id !== Number(user?.id)); // Ensure ID is number
+
       if (otherParticipant) {
         alert(`Appel vidéo à ${otherParticipant.name}`);
       } else if (activeChat.isGroup) {
@@ -498,7 +861,7 @@ export default function MessagesScreen() {
             onChangeText={setSearchQuery}
           />
         </View>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.newConversationButton}
           onPress={() => setShowNewConversationModal(true)}
         >
@@ -506,80 +869,160 @@ export default function MessagesScreen() {
         </TouchableOpacity>
       </View>
 
-      {filteredChats.map(chat => {
-        const lastMessage = chat.messages[chat.messages.length - 1];
-        const otherParticipant = chat.isGroup 
-          ? { name: chat.name || 'Groupe' }
-          : chat.participants[0];
+      {isLoadingChats ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0066CC" />
+          <Text style={styles.loadingText}>Chargement des conversations...</Text>
+        </View>
+      ) : filteredChats.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateText}>Aucune conversation trouvée.</Text>
+        </View>
+      ) : (
+        filteredChats.map(chat => {
+          const lastMessage = chat.lastMessage;
+          // Determine the participant to display in the chat list item
+          // For group chats, use the group name and the avatar of the first participant (or a generic group avatar)
+          // For 1-on-1 chats, find the other participant (not the current user)
+         const displayParticipant = chat.isGroup
+  ? null // tu affiches une icône/nom de groupe générique
+  : chat.participants.find(p => p.id !== Number(user?.id)); // Ensure ID is number
 
-        return (
-          <TouchableOpacity
-            key={chat.id}
-            style={[
-              styles.chatItem,
-              activeChat?.id === chat.id && styles.activeChatItem
-            ]}
-            onPress={() => setActiveChat(chat)}
-          >
-            <Image
-              source={{ uri: chat.isGroup 
-                ? chat.participants[0].avatar 
-                : otherParticipant.avatar 
+const chatItemName = chat.isGroup ? chat.name || "Groupe" : displayParticipant?.name;
+const chatItemAvatar = chat.isGroup
+  ? DEFAULT_AVATAR // ou une icône spéciale pour les groupes
+  : displayParticipant?.avatar || DEFAULT_AVATAR;
+
+          return (
+            <TouchableOpacity
+              key={chat.id}
+              style={[
+                styles.chatItem,
+                activeChat?.id === chat.id && styles.activeChatItem
+              ]}
+              onPress={() => {
+                setActiveChat(chat);
+                // Mark messages as read when opening chat (logic to be implemented)
+                setChats(prevChats => prevChats.map(c =>
+                  c.id === chat.id ? { ...c, unreadCount: 0 } : c
+                ));
               }}
-              style={styles.avatar}
-            />
-            <View style={styles.chatItemContent}>
-              <View style={styles.chatItemHeader}>
-                <Text style={styles.chatItemName}>
-                  {chat.isGroup ? chat.name : otherParticipant.name}
-                </Text>
-                <Text style={styles.chatItemTime}>
-                  {lastMessage?.timestamp.toLocaleTimeString([], { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                  })}
-                </Text>
+            >
+              <View style={styles.avatarContainer}>
+                <Image
+                  source={{ uri: chatItemAvatar }}
+                  style={styles.avatar}
+                />
+                {displayParticipant?.online && <View style={styles.onlineIndicator} />}
               </View>
-              <Text style={styles.chatItemLastMessage} numberOfLines={1}>
-                {lastMessage?.text || (lastMessage?.image ? 'Image' : lastMessage?.file ? `Document: ${lastMessage.file.name}` : '')}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        );
-      })}
+              <View style={styles.chatItemContent}>
+                <View style={styles.chatItemHeader}>
+                  <Text style={styles.chatItemName}>
+                    {chatItemName}
+                  </Text>
+                  {lastMessage && (
+                    <Text style={styles.chatItemTime}>
+                      {formatTime(lastMessage.timestamp)}
+                    </Text>
+                  )}
+                </View>
+                {lastMessage && (
+                  <Text
+  style={[
+  styles.chatItemLastMessage,
+  (chat.unreadCount ?? 0) > 0 && styles.unreadMessage
+]}
+  numberOfLines={1}
+>
+  {lastMessage.senderId === currentUserId ? 'Vous : ' : ''}
+  {lastMessage.content ||
+    (lastMessage.image ? 'Image' :
+    lastMessage.file ? `Document: ${lastMessage.file.name}` : '')}
+</Text>
+                )}
+                {/* Display boat info only for pleasure boaters in 1-on-1 chats */}
+                {!chat.isGroup && displayParticipant?.type === 'pleasure_boater' && (
+                  <View style={styles.boatsList}>
+                    {/* You'll need to fetch boat data for pleasure boaters if not already in Contact interface */}
+                    {/* For now, it's a placeholder */}
+                    {/*
+                    {mockClients.find(c => c.id === displayParticipant.id)?.boats.map(boat => (
+                      <View key={boat.id} style={styles.boatBadge}>
+                        <Boat size={12} color="#0066CC" />
+                        <Text style={styles.boatName}>
+                          {boat.name}
+                        </Text>
+                      </View>
+                    ))}
+                    */}
+                  </View>
+                )}
+              </View>
+              {(chat.unreadCount ?? 0) > 0 && (
+  <View style={styles.unreadBadge}>
+    <Text style={styles.unreadCount}>{chat.unreadCount}</Text>
+  </View>
+)}
+            </TouchableOpacity>
+          );
+        })
+      )}
     </ScrollView>
   );
 
   const ChatView = () => {
     if (!activeChat) return null;
 
-    const otherParticipant = activeChat.isGroup
-      ? { name: activeChat.name || 'Groupe' }
-      : activeChat.participants[0];
+    // Déterminer le participant à afficher dans l'en-tête de la conversation
+    // Pour les conversations de groupe, utiliser le nom du groupe et l'avatar du premier participant (ou un autre si le premier est l'utilisateur connecté)
+    // Pour les conversations individuelles, trouver l'autre participant (pas l'utilisateur connecté)
+    let headerDisplayParticipant: Contact | undefined;
+
+if (!activeChat.isGroup) {
+  // conv 1-to-1 → toujours l’autre
+  headerDisplayParticipant = activeChat.participants.find(p => p.id !== Number(user?.id)); // Ensure ID is number
+} else {
+  // groupe → avatar générique
+  headerDisplayParticipant = activeChat.participants.find(p => p.id !== Number(user?.id)) || activeChat.participants[0]; // Ensure ID is number
+}
+
+const headerName = activeChat.isGroup
+  ? activeChat.name || "Groupe"
+  : headerDisplayParticipant?.name;
+
+const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
+
 
     return (
-      <KeyboardAvoidingView 
-        style={styles.chatView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={styles.chatHeader}>
-          <TouchableOpacity 
+      <KeyboardAvoidingView
+  style={styles.chatView}
+  behavior={Platform.select({ ios: 'padding', android: 'height' })}
+  keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
+>
+        <View style={styles.chatHeader} onLayout={e => setHeaderHeight(e.nativeEvent.layout.height)}>
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => setActiveChat(null)}
           >
             <ChevronLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
-          <Text style={styles.headerName}>
-            {activeChat.isGroup ? activeChat.name : otherParticipant.name}
-          </Text>
+          <Image
+            source={{ uri: headerAvatar }} // Utiliser l'avatar déterminé
+            style={styles.headerAvatar}
+          />
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerName}>
+              {headerName}
+            </Text>
+          </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.headerAction}
               onPress={handleCall}
             >
               <Phone size={24} color="#0066CC" />
             </TouchableOpacity>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.headerAction}
               onPress={handleVideoCall}
             >
@@ -588,292 +1031,118 @@ export default function MessagesScreen() {
           </View>
         </View>
 
-        <ScrollView 
-          ref={scrollViewRef}
-          style={styles.messagesList}
-          contentContainerStyle={styles.messagesContent}
-        >
-          {activeChat.messages.map((msg, index) => {
-            const isOwnMessage = msg.senderId === (user?.id || 'corp1');
-            const sender = activeChat.participants.find(p => p.id === msg.senderId);
+        {isLoadingMessages ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#0066CC" />
+            <Text style={styles.loadingText}>Chargement des messages...</Text>
+          </View>
+        ) : (
+          <ScrollView
+  ref={scrollViewRef}
+  style={styles.messagesList}
+  contentContainerStyle={styles.messagesContent}
+  keyboardShouldPersistTaps="handled"
+  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+  onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+>
+            {messages.map((msg, index) => {
+              const isOwnMessage = msg.senderId === currentUserId; // Ensure ID is number
+              const sender = activeChat.participants.find(p => p.id === msg.senderId);
+              const showDate = index === 0 ||
+                formatDate(messages[index - 1].timestamp) !== formatDate(msg.timestamp);
 
-            return (
-              <View
-                key={msg.id}
-                style={[
-                  styles.messageContainer,
-                  isOwnMessage ? styles.ownMessage : styles.otherMessage,
-                ]}
-              >
-                {activeChat.isGroup && !isOwnMessage && (
-                  <Text style={styles.messageSender}>{sender?.name}</Text>
-                )}
-                {msg.image ? (
-                  <Image
-                    source={{ uri: msg.image }}
-                    style={styles.messageImage}
-                  />
-                ) : msg.file ? ( // Render file message
-                  <View style={styles.messageFileContainer}>
-                    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+              return (
+                <View key={msg.id}>
+                  {showDate && (
+                    <View style={styles.dateHeader}>
+                      <Text style={styles.dateText}>
+                        {formatDate(msg.timestamp)}
+                      </Text>
+                    </View>
+                  )}
+                  <View
+                    style={[
+                      styles.messageContainer,
+                      isOwnMessage ? styles.ownMessage : styles.otherMessage,
+                    ]}
+                  >
+                    {activeChat.isGroup && !isOwnMessage && (
+                      <Text style={styles.messageSender}>{sender?.name}</Text>
+                    )}
+                    {msg.image ? (
+                      <Image
+                        source={{ uri: msg.image }}
+                        style={styles.messageImage}
+                      />
+                    ) : msg.file ? (
+                      <View style={styles.messageFileContainer}>
+                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                        <Text style={[
+                          styles.messageFileName,
+                          isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                        ]}>
+                          {msg.file.name}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={[
+                        styles.messageText,
+                        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                      ]}>
+                        {msg.content}
+                      </Text>
+                    )}
                     <Text style={[
-                      styles.messageFileName,
-                      isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                      styles.messageTime,
+                      isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime,
                     ]}>
-                      {msg.file.name}
+                      {formatTime(msg.timestamp)}
                     </Text>
                   </View>
-                ) : (
-                  <Text style={[
-                    styles.messageText,
-                    isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
-                  ]}>
-                    {msg.text}
-                  </Text>
-                )}
-                <Text style={[
-                  styles.messageTime,
-                  isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime,
-                ]}>
-                  {formatTime(msg.timestamp)}
-                </Text>
-              </View>
-            );
-          })}
-        </ScrollView>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )}
 
-        <ChatInput
-          handleSend={handleSend}
-          showAttachmentOptions={showAttachmentOptions}
-          setShowAttachmentOptions={setShowAttachmentOptions}
-          handleChooseImage={handleChooseImage}
-          handleChooseDocument={handleChooseDocument} // Pass the new function
-        />
+        <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
+  <ChatInput
+    handleSend={handleSend}
+    showAttachmentOptions={showAttachmentOptions}
+    setShowAttachmentOptions={setShowAttachmentOptions}
+    handleChooseImage={handleChooseImage}
+    handleChooseDocument={handleChooseDocument}
+  />
+</View>
       </KeyboardAvoidingView>
     );
   };
 
-  // New Conversation Modal
-  const NewConversationModal = () => (
-    <Modal
-      visible={showNewConversationModal}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setShowNewConversationModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Nouvelle conversation</Text>
-            <TouchableOpacity 
-              style={styles.modalCloseButton}
-              onPress={() => {
-                setShowNewConversationModal(false);
-                setContactSearchQuery('');
-                setSelectedContacts([]);
-                setSelectedContactType('all');
-              }}
-            >
-              <X size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          {/* Contact type filter */}
-          <View style={styles.contactTypeFilter}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <TouchableOpacity 
-                style={[
-                  styles.contactTypeButton,
-                  selectedContactType === 'all' && styles.contactTypeButtonActive
-                ]}
-                onPress={() => setSelectedContactType('all')}
-              >
-                <Text style={[
-                  styles.contactTypeButtonText,
-                  selectedContactType === 'all' && styles.contactTypeButtonTextActive
-                ]}>
-                  Tous
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[
-                  styles.contactTypeButton,
-                  selectedContactType === 'pleasure_boater' && styles.contactTypeButtonActive,
-                  { borderColor: '#0EA5E9' }
-                ]}
-                onPress={() => setSelectedContactType('pleasure_boater')}
-              >
-                <User size={16} color={selectedContactType === 'pleasure_boater' ? 'white' : '#0EA5E9'} />
-                <Text style={[
-                  styles.contactTypeButtonText,
-                  selectedContactType === 'pleasure_boater' && styles.contactTypeButtonTextActive,
-                  { color: selectedContactType === 'pleasure_boater' ? 'white' : '#0EA5E9' }
-                ]}>
-                  Plaisanciers
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[
-                  styles.contactTypeButton,
-                  selectedContactType === 'boat_manager' && styles.contactTypeButtonActive,
-                  { borderColor: '#10B981' }
-                ]}
-                onPress={() => setSelectedContactType('boat_manager')}
-              >
-                <User size={16} color={selectedContactType === 'boat_manager' ? 'white' : '#10B981'} />
-                <Text style={[
-                  styles.contactTypeButtonText,
-                  selectedContactType === 'boat_manager' && styles.contactTypeButtonTextActive,
-                  { color: selectedContactType === 'boat_manager' ? 'white' : '#10B981' }
-                ]}>
-                  Boat Managers
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[
-                  styles.contactTypeButton,
-                  selectedContactType === 'nautical_company' && styles.contactTypeButtonActive,
-                  { borderColor: '#8B5CF6' }
-                ]}
-                onPress={() => setSelectedContactType('nautical_company')}
-              >
-                <Building size={16} color={selectedContactType === 'nautical_company' ? 'white' : '#8B5CF6'} />
-                <Text style={[
-                  styles.contactTypeButtonText,
-                  selectedContactType === 'nautical_company' && styles.contactTypeButtonTextActive,
-                  { color: selectedContactType === 'nautical_company' ? 'white' : '#8B5CF6' }
-                ]}>
-                  Entreprises
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[
-                  styles.contactTypeButton,
-                  selectedContactType === 'back_office' && styles.contactTypeButtonActive,
-                  { borderColor: '#F59E0B' }
-                ]}
-                onPress={() => setSelectedContactType('back_office')}
-              >
-                <Building size={16} color={selectedContactType === 'back_office' ? 'white' : '#F59E0B'} />
-                <Text style={[
-                  styles.contactTypeButtonText,
-                  selectedContactType === 'back_office' && styles.contactTypeButtonTextActive,
-                  { color: selectedContactType === 'back_office' ? 'white' : '#F59E0B' }
-                ]}>
-                  Corporate
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-          
-          {/* Search bar */}
-          <View style={styles.modalSearchContainer}>
-            <Search size={20} color="#666" />
-            <TextInput
-              style={styles.modalSearchInput}
-              placeholder="Rechercher un contact..."
-              value={contactSearchQuery}
-              onChangeText={setContactSearchQuery}
-            />
-          </View>
-          
-          {/* Selected contacts */}
-          {selectedContacts.length > 0 && (
-            <View style={styles.selectedContactsContainer}>
-              <Text style={styles.selectedContactsTitle}>
-                Contacts sélectionnés ({selectedContacts.length})
-              </Text>
-              <ScrollView 
-                horizontal 
-                showsHorizontalScrollIndicator={false}
-                style={styles.selectedContactsScroll}
-              >
-                {selectedContacts.map(contact => (
-                  <View key={contact.id} style={styles.selectedContactChip}>
-                    <Image source={{ uri: contact.avatar }} style={styles.selectedContactAvatar} />
-                    <Text style={styles.selectedContactName}>{contact.name}</Text>
-                    <TouchableOpacity
-                      style={styles.removeSelectedContactButton}
-                      onPress={() => toggleContactSelection(contact)}
-                    >
-                      <X size={16} color="#666" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-          
-          {/* Contacts list */}
-          <ScrollView style={styles.contactsList}>
-            {filteredContacts.map(contact => (
-              <TouchableOpacity
-                key={contact.id}
-                style={[
-                  styles.contactItem,
-                  selectedContacts.some(c => c.id === contact.id) && styles.contactItemSelected
-                ]}
-                onPress={() => toggleContactSelection(contact)}
-              >
-                <View style={styles.contactItemLeft}>
-                  <Image source={{ uri: contact.avatar }} style={styles.contactItemAvatar} />
-                  <View style={styles.contactItemInfo}>
-                    <Text style={styles.contactItemName}>{contact.name}</Text>
-                    <View style={styles.contactItemTypeContainer}>
-                      {getContactTypeIcon(contact.type)}
-                      <Text style={[
-                        styles.contactItemType,
-                        { color: getContactTypeColor(contact.type) }
-                      ]}>
-                        {getContactTypeLabel(contact.type)}
-                      </Text>
-                    </View>
-                    {contact.details && (
-                      <Text style={styles.contactItemDetails}>{contact.details}</Text>
-                    )}
-                  </View>
-                </View>
-                <View style={[
-                  styles.contactItemCheckbox,
-                  selectedContacts.some(c => c.id === contact.id) && styles.contactItemCheckboxSelected
-                ]}>
-                  {selectedContacts.some(c => c.id === contact.id) && (
-                    <Check size={16} color="white" />
-                  )}
-                </View>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          
-          {/* Create conversation button */}
-          <View style={styles.modalFooter}>
-            <TouchableOpacity
-              style={[
-                styles.createConversationButton,
-                selectedContacts.length === 0 && styles.createConversationButtonDisabled
-              ]}
-              onPress={handleCreateConversation}
-              disabled={selectedContacts.length === 0}
-            >
-              <MessageSquare size={20} color="white" />
-              <Text style={styles.createConversationButtonText}>
-                Créer la conversation
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
   return (
     <View style={styles.container}>
-      {activeClient ? <ChatView /> : <ChatList />}
-      <NewConversationModal />
+      {activeChat ? <ChatView /> : <ChatList />}
+      <NewConversationModal
+        visible={showNewConversationModal}
+        onClose={() => {
+          setShowNewConversationModal(false);
+          setContactSearchQuery('');
+          setSelectedContacts([]);
+          setSelectedContactType('all');
+        }}
+        allUsers={allUsers}
+        user={user}
+        contactSearchQuery={contactSearchQuery}
+        setContactSearchQuery={setContactSearchQuery}
+        selectedContacts={selectedContacts}
+        setSelectedContacts={setSelectedContacts}
+        selectedContactType={selectedContactType}
+        setSelectedContactType={setSelectedContactType}
+        handleCreateConversation={handleCreateConversation}
+        isCreatingConversation={isCreatingConversation}
+        getContactTypeIcon={getContactTypeIcon}
+        getContactTypeLabel={getContactTypeLabel}
+        getContactTypeColor={getContactTypeColor}
+      />
     </View>
   );
 }
@@ -965,24 +1234,27 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-  },
+  width: 56,
+  height: 56,
+  borderRadius: 28,
+},
   onlineIndicator: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: 'white',
-  },
+  position: 'absolute',
+  right: -1,                // petit décalage vers l’extérieur
+  bottom: -1,
+  width: 14,
+  height: 14,
+  borderRadius: 7,
+  backgroundColor: '#10B981',
+  borderWidth: 3,           // anneau blanc net autour du point
+  borderColor: '#fff',
+},
   chatItemContent: {
-    flex: 1,
-  },
+  flex: 1,
+  minWidth: 0,              // indispensable pour l’ellipsis
+  marginLeft: 12,
+  justifyContent: 'center',
+},
   chatItemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -990,53 +1262,72 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   chatItemName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
+  flexShrink: 1,
+  marginRight: 8,
+  fontSize: 16,
+  fontWeight: '700',
+  color: '#0F172A',         // slate-900
+},
   chatItemTime: {
-    fontSize: 12,
-    color: '#666',
-  },
+  fontSize: 12,
+  color: '#94A3B8',         // slate-400
+  flexShrink: 0,
+},
   chatItemLastMessage: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
-  },
+  fontSize: 14,
+  color: '#64748B',         // slate-500
+  marginTop: 2,
+  marginBottom: 4,
+},
   unreadMessage: {
     color: '#1a1a1a',
     fontWeight: '500',
   },
   boatsList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 6,
+  marginTop: 2,
+},
   boatBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f7ff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-  },
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  paddingHorizontal: 10,
+  paddingVertical: 4,
+  backgroundColor: '#EFF6FF', // bleu très clair
+  borderRadius: 14,
+  borderWidth: 1,
+  borderColor: '#E2E8F0',     // gris clair
+},
   boatName: {
     fontSize: 12,
     color: '#0066CC',
   },
   unreadBadge: {
-    backgroundColor: '#0066CC',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  minWidth: 24,
+  height: 24,
+  paddingHorizontal: 8,
+  borderRadius: 12,
+  backgroundColor: '#0066CC',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginLeft: 8,
+  alignSelf: 'center',
+  ...Platform.select({
+    ios: {
+      shadowColor: '#0066CC',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.18,
+      shadowRadius: 4,
+    },
+    android: { elevation: 1 },
+  }),
+},
   unreadCount: {
     color: 'white',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   chatView: {
     flex: 1,
@@ -1114,6 +1405,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomLeftRadius: 4,
   },
+  messageSender: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#0066CC',
+    marginBottom: 2,
+  },
   messageText: {
     fontSize: 16,
     lineHeight: 22,
@@ -1129,7 +1426,7 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 8,
   },
-  messageFileContainer: { // New style for file messages
+  messageFileContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -1137,7 +1434,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f7ff',
     borderRadius: 8,
   },
-  messageFileName: { // New style for file name
+  messageFileName: {
     fontSize: 14,
     fontWeight: '500',
   },
@@ -1151,7 +1448,6 @@ const styles = StyleSheet.create({
   otherMessageTime: {
     color: '#666',
   },
-  // New conversation modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1178,6 +1474,8 @@ const styles = StyleSheet.create({
         boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
       },
     }),
+    flex: 1, // Added flex: 1
+    minHeight: '50%', // Added minHeight
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1380,5 +1678,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'white',
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
+  },
+  emptyState: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
 });
-

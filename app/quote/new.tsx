@@ -154,10 +154,26 @@ export default function NewQuoteScreen() {
         if (!currentQuoteId) {
           const { provider_type, id_boat_manager, id_companie } = getProviderFields();
           const reference = generateQuoteReference(depRequestId, depClientId);
-          const title = `Devis - ${form.client.name || depClientName} / ${form.boat.name || depBoatName}`;
+          const clientLabel = form.client.name || depClientName || 'Client';
+const boatLabel = form.boat.name || depBoatName;
+const title = boatLabel
+  ? `Devis - ${clientLabel} / ${boatLabel}`
+  : `Devis - ${clientLabel}`;
 
           // MODIFICATION ICI : Assurer que valid_until est une date valide
           const validUntilForInsert = form.validUntil.trim() === '' ? new Date().toISOString().split('T')[0] : form.validUntil;
+
+          // --- VALIDATION ASSOUPLIE ---
+// client requis
+const clientIdNum = parseInt(depClientId);
+if (isNaN(clientIdNum)) {
+  Alert.alert('Erreur', 'ID du client manquant ou invalide. Impossible de créer le devis.');
+  setIsLoading(false);
+  return;
+}
+// bateau optionnel
+const boatIdNum = depBoatId ? parseInt(depBoatId) : null;
+// --- FIN VALIDATION ---
 
           const { data: newQuoteRow, error: createQuoteError } = await supabase
             .from('quotes')
@@ -165,8 +181,8 @@ export default function NewQuoteScreen() {
               reference,
               valid_until: validUntilForInsert, // Utiliser la date valide ici
               service_request_id: depRequestId ? parseInt(depRequestId) : null,
-              id_client: parseInt(depClientId),
-              id_boat: parseInt(depBoatId),
+              id_client: clientIdNum, // Utiliser le nombre validé ici
+              id_boat: boatIdNum, // Utiliser le nombre validé ici
               id_boat_manager,
               id_companie,
               provider_type,
@@ -419,7 +435,11 @@ const localPdfPath = await generateQuotePDF({
   validUntil: form.validUntil,
   provider: getProviderFields(),
   client: form.client,
-  boat: form.boat,
+  boat: {
+  id: form.boat.id || 'N/A',
+  name: form.boat.name || 'Aucun bateau',
+  type: form.boat.type || '',
+},
   services: form.services,
   totalAmount: totalAmount,
 });
@@ -475,12 +495,12 @@ if (updateQuoteError) {
         return;
       }
 
-      // 4. Mettre à jour le statut de la service_request associée à 'transmise'
+      // 4. Mettre à jour le statut de la service_request associée à 'devis envoyé'
       if (form.requestId) {
         const { error: updateRequestError } = await supabase
           .from('service_request')
           .update({
-            statut: 'transmise', // Statut 'transmise'
+            statut: 'quote_sent', // Statut 'devis envoyé'
             prix: totalAmount,
             note_add: `Devis créé et envoyé: ${pdfUrl}`,
           })
@@ -603,7 +623,7 @@ if (updateQuoteError) {
               <Text style={styles.label}>Nom du bateau</Text>
               <TextInput
                 style={styles.input}
-                value={form.boat.name}
+                value={form.boat.name || '— Aucun bateau lié —'}
                 editable={false}
                 onChangeText={(text) => setForm(prev => ({
                   ...prev,
@@ -616,7 +636,7 @@ if (updateQuoteError) {
               <Text style={styles.label}>Type</Text>
               <TextInput
                 style={styles.input}
-                value={form.boat.type}
+                value={form.boat.type || '— Aucun bateau lié —'}
                 editable={false}
                 onChangeText={(text) => setForm(prev => ({
                   ...prev,

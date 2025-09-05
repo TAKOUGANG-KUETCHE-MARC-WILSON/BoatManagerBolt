@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal } from 'react-native';
+// app/boats/inventory/[id].tsx
+
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal, useWindowDimensions } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Tag, Info, Calendar, FileText, X, User, Tool, Upload, Download, Trash, Check, Building, Search, ChevronRight } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -8,6 +10,7 @@ import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system';
 import CustomDateTimePicker from '@/components/CustomDateTimePicker';
 import { useAuth } from '@/context/AuthContext';
+import * as Sharing from 'expo-sharing'; // Importation de expo-sharing
 
 // Polyfill (utile sur RN/Expo)
 (global as any).Buffer = (global as any).Buffer || Buffer;
@@ -175,6 +178,19 @@ const CompanySelectionModal = ({
 };
 
 
+function useResponsive() {
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const isTablet = width >= 768;          // iPad / grandes phablettes
+  const isSmallPhone = width < 360;       // vieux/mini téléphones
+
+  // Échelle douce autour d’une base ~390px (iPhone 12)
+  const scale = Math.min(Math.max(width / 390, 0.85), 1.2);
+
+  return { width, height, isLandscape, isTablet, isSmallPhone, scale };
+}
+
+
 export default function InventoryItemDetailScreen() {
   const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const isNewRecord = id === 'new';
@@ -201,6 +217,40 @@ export default function InventoryItemDetailScreen() {
 
   const { user } = useAuth();
 
+  const { width, height, isLandscape, isTablet, isSmallPhone, scale } = useResponsive();
+
+// styles additionnels calculés (à fusionner avec styles.* au rendu)
+const r = useMemo(() => ({
+  // Titre / header
+  title: { fontSize: isTablet ? 24 : isSmallPhone ? 18 : 20 },
+
+  // Form
+  form: { padding: isTablet ? 24 : 16 },
+  label: { fontSize: isTablet ? 18 : 16 },
+  inputWrapper: { height: isTablet ? 56 : isSmallPhone ? 44 : 48 },
+  input: { fontSize: 16 * scale },
+  textArea: { fontSize: 16 * scale, minHeight: isTablet ? 140 : 120 },
+
+  // Modale (sélecteur d’entreprise)
+  modalContent: {
+    width: Math.min(width * 0.95, isTablet ? 640 : 500),
+    maxHeight: isLandscape ? '90%' : '80%',
+  },
+  modalBody: {
+    maxHeight: Math.min(height * (isLandscape ? 0.6 : 0.5), 380),
+  },
+
+  // Liste de documents
+  documentName: { fontSize: isTablet ? 15 : 14 },
+  documentDate: { fontSize: isTablet ? 13 : 12 },
+
+  // Boutons
+  submitButton: { paddingVertical: isTablet ? 18 : 16 },
+  submitButtonText: { fontSize: isTablet ? 18 : 16 },
+  deleteButtonText: { fontSize: isTablet ? 18 : 16 },
+}), [width, height, isLandscape, isTablet, isSmallPhone, scale]);
+
+
   // Fetch current user's row ID
   useEffect(() => {
     if (!user?.email) return;
@@ -214,17 +264,17 @@ export default function InventoryItemDetailScreen() {
       });
   }, [user?.email]);
 
-  // Fetch nautical companies for the modal
+  // Fetch nautical companies for the modal (and for fetchInventoryItem)
   const fetchNauticalCompanies = useCallback(async () => {
-    if (!user?.id) return; // Ensure user is logged in
-    if (companiesLoading) return; // Prevent multiple fetches
-    setCompaniesLoading(true);
+    // No need for companiesLoading state here, as it's managed by the outer loading state
+    // if (!user?.id) return; // Ensure user is logged in
+    // if (companiesLoading) return; // Prevent multiple fetches
+    // setLoading(true); // This will be handled by the main useEffect
     try {
-      // Fetch the current user's port IDs
       const { data: userPortsData, error: userPortsError } = await supabase
         .from('user_ports')
         .select('port_id')
-        .eq('user_id', user.id); // Filter by current user's ID
+        .eq('user_id', user.id);
 
       if (userPortsError) {
         console.error('Error fetching user ports:', userPortsError);
@@ -235,7 +285,6 @@ export default function InventoryItemDetailScreen() {
 
       const userPortIds = userPortsData.map(p => p.port_id);
 
-      // Fetch nautical companies that are assigned to any of the user's ports
       const { data: companiesData, error } = await supabase
        .from('users')
        .select('id, company_name, user_ports(port_id, ports(name)), address')
@@ -248,34 +297,24 @@ export default function InventoryItemDetailScreen() {
         return;
       }
 
-      // Filter companies by user's ports
       const filteredCompanies = (companiesData || []).filter(company =>
-  company.user_ports?.some((up: any) => userPortIds.includes(up.port_id))
-);
+        company.user_ports?.some((up: any) => userPortIds.includes(up.port_id))
+      );
 
-setCompanies(filteredCompanies.map(c => ({
-  id: c.id.toString(),
-  name: c.company_name,
-  location: c.user_ports?.[0]?.ports?.name || undefined
-})));
+      setCompanies(filteredCompanies.map(c => ({
+        id: c.id.toString(),
+        name: c.company_name,
+        location: c.user_ports?.[0]?.ports?.name || undefined
+      })));
 
     } catch (e) {
       console.error('Unexpected error fetching nautical companies:', e);
       Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des entreprises.');
-    } finally {
-      setCompaniesLoading(false);
     }
-  }, [companiesLoading, user?.id]); // Depend on companiesLoading and user.id
+    // finally { setLoading(false); } // Handled by main useEffect
+  }, [user?.id]); // Depend on user.id
 
-  //useEffect(() => {
-  //  fetchNauticalCompanies(); // Fetch companies on component mount
-  //}, [fetchNauticalCompanies]);
-
-  const toDate = (v?: string) => {
-    const d = v ? new Date(v) : new Date();
-    return isNaN(d.getTime()) ? new Date() : d;
-  };
-
+  // Main useEffect to fetch all necessary data
   useEffect(() => {
     if (!boatId) {
       setFetchError("ID du bateau manquant. Impossible de charger ou d'ajouter un équipement.");
@@ -283,70 +322,94 @@ setCompanies(filteredCompanies.map(c => ({
       return;
     }
 
-    const fetchInventoryItem = async () => {
-      setLoading(true);
-      setFetchError(null);
+    // Set loading to true at the very beginning of this effect
+    setLoading(true);
+    setFetchError(null);
+
+    const loadAllData = async () => {
       try {
-        const { data: itemData, error: itemError } = await supabase
-          .from('boat_inventory')
-          .select('id, name, description, installation_date, installed_by, installed_by_label, boat_id')
-          .eq('id', id)
-          .eq('boat_id', boatId)
-          .single();
+        await fetchNauticalCompanies(); // Fetch companies first
 
-        if (itemError) {
-          setFetchError(itemError.message || 'Erreur inconnue');
-          return;
-        }
+        if (!isNewRecord) {
+          // Only fetch item data if it's an existing record
+          const { data: itemData, error: itemError } = await supabase
+            .from('boat_inventory')
+            .select('id, name, description, installation_date, installed_by, installed_by_label, boat_id')
+            .eq('id', id)
+            .eq('boat_id', boatId)
+            .single();
 
-        const { data: documentsData } = await supabase
-          .from('boat_inventory_documents')
-          .select('*')
-          .eq('inventory_item_id', id);
-
-        let resolvedInstalledByLabel = itemData.installed_by_label || '';
-        let resolvedInstalledById = itemData.installed_by ?? null;
-
-        if (!resolvedInstalledByLabel && resolvedInstalledById) {
-          if (resolvedInstalledById === currentUserRowId) {
-            resolvedInstalledByLabel = 'Moi-même';
-          } else {
-            const company = companies.find(c => Number(c.id) === resolvedInstalledById);
-            resolvedInstalledByLabel = company?.name || 'Utilisateur inconnu';
+          if (itemError) {
+            setFetchError(itemError.message || 'Erreur inconnue');
+            setLoading(false); // Ensure loading is false on error
+            return;
           }
-        }
 
-        setForm({
-          id: itemData.id.toString(),
-          name: itemData.name || '',
-          description: itemData.description || '',
-          installationDate: itemData.installation_date || '',
-          installedById: resolvedInstalledById,
-          installedByLabel: resolvedInstalledByLabel,
-          boat_id: itemData.boat_id.toString(),
-          documents: (documentsData || []).map(doc => ({
-            id: doc.id.toString(),
-            name: doc.name,
-            type: doc.type,
-            date: doc.date,
-            uri: doc.file_url,
-          })),
-        });
+          const { data: documentsData } = await supabase
+            .from('boat_inventory_documents')
+            .select('*')
+            .eq('inventory_item_id', id);
+
+          let resolvedInstalledByLabel = itemData.installed_by_label || '';
+          let resolvedInstalledById = itemData.installed_by ?? null;
+
+          // If installedByLabel is missing but ID is present, try to resolve it
+          if (!resolvedInstalledByLabel && resolvedInstalledById) {
+            if (resolvedInstalledById === currentUserRowId) {
+              resolvedInstalledByLabel = 'Moi-même';
+            } else {
+              // Find the company from the already fetched `companies` list
+              const company = companies.find(c => Number(c.id) === resolvedInstalledById);
+              resolvedInstalledByLabel = company?.name || 'Utilisateur inconnu';
+            }
+          }
+
+          setForm({
+            id: itemData.id.toString(),
+            name: itemData.name || '',
+            description: itemData.description || '',
+            installationDate: itemData.installation_date || '',
+            installedById: resolvedInstalledById,
+            installedByLabel: resolvedInstalledByLabel,
+            boat_id: itemData.boat_id.toString(),
+            documents: (documentsData || []).map(doc => ({
+              id: doc.id.toString(),
+              name: doc.name,
+              type: doc.type,
+              date: doc.date,
+              uri: doc.file_url,
+            })),
+          });
+        } else {
+          // For new records, ensure installedByLabel is set to 'Moi-même' by default
+          setForm(prev => ({
+            ...prev,
+            installedById: currentUserRowId,
+            installedByLabel: 'Moi-même',
+          }));
+        }
       } catch (e) {
         setFetchError('Erreur inattendue');
         console.error(e);
       } finally {
-        setLoading(false);
+        setLoading(false); // Always set loading to false
       }
     };
 
-    // Only run this effect if currentUserRowId is loaded and companies are loaded (or if it's a new record)
-    if (!isNewRecord && currentUserRowId !== null && companies.length > 0) {
-      fetchInventoryItem();
-    } else if (isNewRecord && currentUserRowId !== null) { // For new records, just set loading to false
+    // Only run loadAllData if user is available (which implies currentUserRowId will be set)
+    // and if it's an existing record or a new record that needs initial setup.
+    if (user?.id) { // Check for user.id to ensure auth context is ready
+      loadAllData();
+    } else if (isNewRecord) { // If it's a new record and user is not yet loaded, still set loading to false
       setLoading(false);
     }
-  }, [id, boatId, isNewRecord, currentUserRowId, companies]); // Add currentUserRowId and companies to dependencies
+
+  }, [id, boatId, isNewRecord, currentUserRowId, user?.id, fetchNauticalCompanies]); // Add fetchNauticalCompanies to dependencies
+
+  const toDate = (v?: string) => {
+    const d = v ? new Date(v) : new Date();
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
 
   const validateForm = () => {
     const newErrors: FormErrors = {};
@@ -389,6 +452,38 @@ setCompanies(filteredCompanies.map(c => ({
     } catch (error) {
       console.error('Error picking document:', error);
       Alert.alert('Erreur', 'Une erreur est survenue lors de la sélection du document.');
+    }
+  };
+
+  const handleDownloadDocument = async (document: Document) => {
+    try {
+      if (Platform.OS === 'web') {
+        // Pour le web, ouvrir l'URL du document dans un nouvel onglet
+        const pdfWindow = window.open(document.uri, '_blank');
+        if (!pdfWindow) {
+          throw new Error('Échec de l\'ouverture du document dans une nouvelle fenêtre. Vérifiez si les pop-ups sont bloqués.');
+        }
+      } else {
+        // Pour mobile, télécharger le fichier et le partager
+        const filename = document.name;
+        const fileUri = FileSystem.cacheDirectory + filename;
+
+        // Télécharger le fichier
+        const { uri: downloadedUri } = await FileSystem.downloadAsync(
+          document.uri,
+          fileUri
+        );
+
+        // Partager le fichier
+        await Sharing.shareAsync(downloadedUri, {
+          mimeType: document.type,
+          UTI: document.type === 'application/pdf' ? '.pdf' : undefined, // Spécifier l'UTI pour les PDF
+        });
+      }
+      Alert.alert('Succès', 'Le document a été téléchargé.');
+    } catch (error: any) {
+      console.error('Erreur lors du téléchargement du document:', error);
+      Alert.alert('Erreur', `Impossible de télécharger le document: ${error.message || 'Veuillez réessayer.'}`);
     }
   };
 
@@ -781,16 +876,24 @@ setCompanies(filteredCompanies.map(c => ({
                     <View style={styles.documentInfo}>
                       <FileText size={20} color="#0066CC" />
                       <View style={styles.documentDetails}>
-                        <Text style={styles.documentName}>{document.name}</Text>
+                        <Text style={styles.documentName} numberOfLines={1} ellipsizeMode="tail">{document.name}</Text>
                         <Text style={styles.documentDate}>{document.date}</Text>
                       </View>
                     </View>
-                    <TouchableOpacity
-                      style={styles.removeDocumentButton}
-                      onPress={() => handleRemoveDocument(document.id)}
-                    >
-                      <X size={16} color="#ff4444" />
-                    </TouchableOpacity>
+                    <View style={styles.documentActions}>
+                      <TouchableOpacity
+                        style={styles.downloadDocumentButton}
+                        onPress={() => handleDownloadDocument(document)}
+                      >
+                        <Download size={20} color="#0066CC" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.removeDocumentButton}
+                        onPress={() => handleRemoveDocument(document.id)}
+                      >
+                        <X size={16} color="#ff4444" />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 ))}
               </View>
@@ -966,18 +1069,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    flex: 1,
   },
   documentDetails: {
     gap: 2,
+    flex: 1,
   },
   documentName: {
     fontSize: 14,
     color: '#1a1a1a',
     fontWeight: '500',
+   flexShrink: 1, // Ajouté: Permet au texte de se réduire si nécessaire
+    marginRight: 8, // Ajouté: Marge pour éviter le chevauchement avec le bouton
   },
   documentDate: {
     fontSize: 12,
     color: '#666',
+  },
+  documentActions: { // Nouveau style pour le conteneur des actions
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8, // Espace entre les boutons
+  },
+  downloadDocumentButton: { // Nouveau style pour le bouton de téléchargement
+    padding: 4,
   },
   removeDocumentButton: {
     padding: 4,
