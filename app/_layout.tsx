@@ -1,3 +1,4 @@
+declare const global: any;
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -12,6 +13,11 @@ export default function RootLayout() {
 // ⚠️ en PROD seulement : on coupe les warnings/overlays et on redirige les logs
   useEffect(() => {
     if (__DEV__) return;
+
+
+     LogBox.ignoreLogs([
+    'Text strings must be rendered within a <Text> component',
+  ]);
 
     // 1) Couper les warnings “YellowBox/LogBox”
     LogBox.ignoreAllLogs(true);
@@ -50,12 +56,14 @@ export default function RootLayout() {
 
 
   return (
+    
     <SafeAreaProvider> {/* ✅ wrapper pour encoche/caméra */}
       <AuthProvider>
         <Stack
           screenOptions={{
             headerShown: false,
             headerBackTitleVisible: false,
+            contentStyle: { backgroundColor: '#fff' }, 
           }}
         >
           <Stack.Screen name="(tabs)" />
@@ -65,11 +73,12 @@ export default function RootLayout() {
           <Stack.Screen name="services" />
           <Stack.Screen name="+not-found" />
         </Stack>
-        <StatusBar style="auto" />
+        <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
       </AuthProvider>
     </SafeAreaProvider>
   );
 }
+
 
 
 export function ErrorBoundary() {
