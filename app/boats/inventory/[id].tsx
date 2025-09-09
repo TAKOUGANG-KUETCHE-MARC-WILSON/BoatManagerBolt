@@ -1,8 +1,41 @@
 // app/boats/inventory/[id].tsx
 
+
+// --- Notifications & logs (prod-safe) ---
+const GENERIC_ERR = "Une erreur est survenue. Veuillez réessayer.";
+const GENERIC_LOAD_ERR = "Impossible de charger ces informations. Réessayez plus tard.";
+
+const notifyError = () => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(GENERIC_ERR, m.ToastAndroid.LONG));
+  } else {
+    Alert.alert('Oups', GENERIC_ERR);
+  }
+};
+
+const notifyInfo = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(msg, m.ToastAndroid.SHORT));
+  } else {
+    Alert.alert('', msg);
+  }
+};
+
+const logError = (scope: string, err: unknown) => {
+  if (__DEV__) console.error(`[${scope}]`, err);
+};
+
+
+
+
+
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal, useWindowDimensions } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, Stack } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, Tag, Info, Calendar, FileText, X, User, Tool, Upload, Download, Trash, Check, Building, Search, ChevronRight } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase';
@@ -340,7 +373,8 @@ const r = useMemo(() => ({
             .single();
 
           if (itemError) {
-            setFetchError(itemError.message || 'Erreur inconnue');
+           setFetchError('error'); // on ne stocke pas le détail ; l’UI affichera GENERIC_LOAD_ERR
+
             setLoading(false); // Ensure loading is false on error
             return;
           }
@@ -482,8 +516,9 @@ const r = useMemo(() => ({
       }
       Alert.alert('Succès', 'Le document a été téléchargé.');
     } catch (error: any) {
-      console.error('Erreur lors du téléchargement du document:', error);
-      Alert.alert('Erreur', `Impossible de télécharger le document: ${error.message || 'Veuillez réessayer.'}`);
+      logError('downloadInventoryDoc', error);
+      notifyError();
+
     }
   };
 
@@ -523,8 +558,8 @@ const r = useMemo(() => ({
           .single();
 
         if (error) {
-          console.error('Error inserting inventory item:', error);
-          Alert.alert('Erreur', `Échec de l'ajout de l'équipement: ${error.message}`);
+          logError('insertInventoryItem', error);
+          notifyError(); // message générique
           setLoading(false);
           return;
         }
@@ -543,8 +578,8 @@ const r = useMemo(() => ({
           .eq('id', inventoryItemId);
 
         if (error) {
-          console.error('Error updating inventory item:', error);
-          Alert.alert('Erreur', `Échec de la mise à jour de l'équipement: ${error.message}`);
+          logError('updateInventoryItem', error);
+          notifyError();
           setLoading(false);
           return;
         }
@@ -589,8 +624,8 @@ const r = useMemo(() => ({
           });
 
         if (uploadError) {
-          console.error('Error uploading document file:', uploadError);
-          Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
+          logError('uploadInventoryDoc', uploadError);
+          notifyError();
           continue;
         }
 
@@ -699,68 +734,79 @@ const r = useMemo(() => ({
   };
 
   if (loading) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <ArrowLeft size={24} color="#1a1a1a" />
-          </TouchableOpacity>
-          <Text style={styles.title}>
-            {isNewRecord ? 'Nouvel équipement' : 'Modifier l\'équipement'}
-          </Text>
-        </View>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Chargement...</Text>
-        </View>
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <StatusBar style="dark" backgroundColor="#fff" />
+
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <ArrowLeft size={24} color="#1a1a1a" />
+        </TouchableOpacity>
+
+        <Text style={styles.title}>
+          {isNewRecord ? 'Nouvel équipement' : 'Modifier l\'équipement'}
+        </Text>
+
+        {/* placeholder pour garder le titre centré */}
+        <View style={{ width: 36, height: 36 }} />
       </View>
-    );
-  }
+
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Chargement...</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
 
   if (fetchError) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <ArrowLeft size={24} color="#1a1a1a" />
-          </TouchableOpacity>
-          <Text style={styles.title}>Erreur</Text>
-        </View>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{fetchError}</Text>
-          <TouchableOpacity
-            style={styles.errorButton}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.errorButtonText}>Retour</Text>
-          </TouchableOpacity>
-        </View>
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <StatusBar style="dark" backgroundColor="#fff" />
+
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <ArrowLeft size={24} color="#1a1a1a" />
+        </TouchableOpacity>
+        <Text style={styles.title}>Erreur</Text>
+        <View style={{ width: 36, height: 36 }} />
       </View>
-    );
-  }
+
+      <View style={styles.errorContainer}>
+        {/* on MASQUE le détail technique */}
+        <Text style={styles.errorText}>{GENERIC_LOAD_ERR}</Text>
+        <TouchableOpacity style={styles.errorButton} onPress={() => router.back()}>
+          <Text style={styles.errorButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 
   return (
+   <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+    <Stack.Screen options={{ headerShown: false }} />
+    <StatusBar style="dark" backgroundColor="#fff" />
+
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
-      <ScrollView style={styles.scrollView}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={{ paddingBottom: 24 }}>
         <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <ArrowLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
+
           <Text style={styles.title}>
             {isNewRecord ? 'Nouvel équipement' : 'Modifier l\'équipement'}
           </Text>
+
+          {/* placeholder droite pour centrage parfait */}
+          <View style={{ width: 36, height: 36 }} />
         </View>
 
         <View style={styles.form}>
@@ -929,10 +975,35 @@ const r = useMemo(() => ({
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+
+safeArea: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  // container, scrollView : inchangés
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',   // <-- pour centrer le titre visuellement
+    padding: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    textAlign: 'center',
+    flex: 1,                           // <-- le titre prend l'espace central
+  },
+
+
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -940,23 +1011,12 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
+ 
   backButton: {
     padding: 8,
     marginRight: 16,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
+  
   form: {
     padding: 16,
     gap: 20,

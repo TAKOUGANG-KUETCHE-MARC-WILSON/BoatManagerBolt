@@ -4,6 +4,7 @@ import { Mail, User, ArrowLeft, Anchor, MapPin, Lock, Plus, X } from 'lucide-rea
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import PortSelectionModal from '@/components/PortSelectionModal';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface SignupForm {
   firstName: string;
@@ -18,6 +19,7 @@ interface SignupForm {
 }
 
 export default function SignupScreen() {
+  const insets = useSafeAreaInsets();
   const { clearPendingServiceRequest, ports, login } = useAuth();
   const [form, setForm] = useState<SignupForm>({
     firstName: '',
@@ -85,8 +87,8 @@ export default function SignupScreen() {
         throw new Error(errorMsg);
       }
 
-      const user = await res.json();
-      console.log('✅ Utilisateur créé:', user);
+      const user = await res.json()
+      if (__DEV__) console.log('✅ Utilisateur créé:', user);
 
       // 🔐 Connexion auto (rien d'autre ne change)
     const firstPortId = form.ports[0].portId; // déjà validé par le formulaire
@@ -96,7 +98,7 @@ export default function SignupScreen() {
       setShowWelcomeModal1(true);
 
     } catch (error: any) {
-      console.error('Failed to create account:', error);
+      if (__DEV__) console.error('Failed to create account:', error);
       setErrors(prev => ({ ...prev, general: error.message || 'Échec de la création du compte.' }));
     } finally {
       setIsLoading(false);
@@ -128,11 +130,16 @@ export default function SignupScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
-    >
-      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+  style={styles.container}
+  behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+  keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 16 : 0}
+>
+      <ScrollView
+  style={styles.container}
+  contentContainerStyle={styles.contentContainer}
+  keyboardShouldPersistTaps="handled"
+  showsVerticalScrollIndicator={false}
+>
         <ImageBackground
           source={{ uri: 'https://images.unsplash.com/photo-1528154291023-a6525fabe5b4?q=80&w=1964&auto=format&fit=crop' }}
           style={styles.heroBackground}
@@ -288,7 +295,7 @@ export default function SignupScreen() {
         onClose={() => setShowPortModal(false)}
         onSelectPort={handleAddPort}
         selectedPortId={null}
-        portsData={ports}
+        portsData={ports ?? []}
         searchQuery={portSearch}
         onSearchQueryChange={setPortSearch}
       />
@@ -325,14 +332,15 @@ export default function SignupScreen() {
 
       {/* Welcome Modal 2 */}
       <Modal
-        visible={showWelcomeModal2}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          setShowWelcomeModal2(false);
-          router.push('/(tabs)');// Redirect to login if second modal is dismissed
-        }}
-      >
+  visible={showWelcomeModal2}
+  transparent
+  animationType="fade"
+  onRequestClose={() => {
+    setShowWelcomeModal2(false);
+    router.replace('/(tabs)/profile');     // enlève /signup de l’historique
+    setTimeout(() => router.push('/boats/new'), 0);
+  }}
+>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Personnalisez votre application</Text>

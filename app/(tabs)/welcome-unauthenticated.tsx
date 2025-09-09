@@ -1,42 +1,53 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView } from 'react-native';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { Anchor, Plus, LogIn } from 'lucide-react-native';
 
 export default function WelcomeUnauthenticatedScreen() {
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <View style={styles.heroContent}>
-        <Anchor size={60} color="#0066CC" style={styles.heroIcon} />
-        <Text style={styles.heroTitle}>Bienvenue sur Your Boat Manager</Text>
-        <Text style={styles.heroSubtitle}>
-          Créez votre compte pour accéder à tous nos services
-        </Text>
-      </View>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <StatusBar style="dark" backgroundColor="#f5f5f5" />
 
-      <View style={styles.actionsContainer}>
-        <TouchableOpacity
-          style={styles.createAccountButton}
-          onPress={() => router.push('/signup')}
-        >
-          <Plus size={24} color="white" />
-          <Text style={styles.createAccountButtonText}>Créer un compte plaisancier</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.loginLink}
-          onPress={() => router.push('/login')}
-        >
-          <LogIn size={16} color="#0066CC" />
-          <Text style={styles.loginLinkText}>
-            Déjà un compte ? Connectez-vous
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.heroContent}>
+          <Anchor size={60} color="#0066CC" style={styles.heroIcon} />
+          <Text style={styles.heroTitle}>Bienvenue sur Your Boat Manager</Text>
+          <Text style={styles.heroSubtitle}>
+            Créez votre compte pour accéder à tous nos services
           </Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+        </View>
+
+        <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={styles.createAccountButton}
+            onPress={() => router.push('/signup')}
+          >
+            <Plus size={24} color="white" />
+            <Text style={styles.createAccountButtonText}>Créer un compte plaisancier</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.loginLink}
+            onPress={() => router.push('/login')}
+          >
+            <LogIn size={16} color="#0066CC" />
+            <Text style={styles.loginLinkText}>
+              Déjà un compte ? Connectez-vous
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
   container: {
     flexGrow: 1,
     justifyContent: 'center',

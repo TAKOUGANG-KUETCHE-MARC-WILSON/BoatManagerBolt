@@ -1,12 +1,21 @@
-import { useState, useEffect, useMemo } from 'react';
+
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native';
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import { useAuth } from '@/context/AuthContext'; // Import useAuth
+import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
+import { LogBox } from 'react-native';
+
+if (__DEV__) {
+  LogBox.ignoreAllLogs(true); // masque tous les warnings en dev
+}
+
 
 // Types de statuts pour les différents rôles
-type NauticalCompanyRequestStatus = 'submitted' | 'in_progress' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
+type NauticalCompanyRequestStatus = 'submitted' | 'accepted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
 type SortKey = 'date' | 'type' | 'client' | 'boatManager';
 
@@ -59,11 +68,20 @@ const statusConfig = {
     label: 'Nouvelle',
     description: 'Demande soumise par le client',
   },
+
+  accepted: { icon: CircleDot, color: '#3B82F6', label: 'En cours', description: 'En cours de traitement' },
+
   in_progress: {
     icon: CircleDot,
     color: '#3B82F6', // Bleu vif
     label: 'En cours',
     description: 'En cours de traitement',
+  },
+  forwarded: {
+    icon: Upload,
+    color: '#A855F7', // Violet
+    label: 'Transmise',
+    description: 'Transmise à une entreprise',
   },
   quote_sent: {
     icon: FileText,
@@ -133,19 +151,22 @@ export default function RequestsScreen() {
   const [requests, setRequests] = useState<Request[]>([]); // Initialize as empty
   const [loading, setLoading] = useState(true); // Add loading state
 
-  useEffect(() => {
-    const fetchRequests = async () => {
-      setLoading(true);
-      if (!user?.id) {
-        Alert.alert('Erreur', 'Utilisateur non authentifié.');
-        setLoading(false);
-        return;
-      }
+  // State for status change modal
+  const [showStatusChangeModal, setShowStatusChangeModal] = useState(false);
+  const [requestToUpdate, setRequestToUpdate] = useState<Request | null>(null);
 
-      try {
-        const { data, error } = await supabase
-          .from('service_request')
-          .select(`
+  const fetchRequests = useCallback(async () => {
+    setLoading(true);
+    if (!user?.id) {
+      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('service_request')
+        .select(`
             id,
             description,
             statut,
@@ -160,117 +181,166 @@ export default function RequestsScreen() {
             users!id_client(id, first_name, last_name, avatar, e_mail, phone),
             boat(name, type, place_de_port)
           `)
-          .eq('id_companie', user.id); // Filter by the current Nautical Company's ID
+          .or(`id_companie.eq.${user.id},and(statut.eq.forwarded,id_companie.is.null)`); // Filter by current Nautical Company's ID OR forwarded requests with no company assigned
 
-        if (error) {
-          console.error('Error fetching requests:', error);
-          Alert.alert('Erreur', 'Impossible de charger les demandes.');
-          return;
+      if (error) {
+        console.error('Error fetching requests:', error);
+        Alert.alert('Erreur', 'Impossible de charger les demandes.');
+        return;
+      }
+
+      const formattedRequests: Request[] = await Promise.all(data.map(async (req: any) => {
+        // Fetch boat manager details if id_boat_manager is present
+        let boatManagerDetails: Request['boatManager'] | undefined;
+        if (req.id_boat_manager) {
+          const { data: bmData, error: bmError } = await supabase
+            .from('users')
+            .select('id, first_name, last_name, user_ports(ports(name))') // Assuming 'ports' is a relation to get port name
+            .eq('id', req.id_boat_manager)
+            .single();
+          if (!bmError && bmData) {
+  boatManagerDetails = {
+    id: bmData.id.toString(),
+    name: `${bmData.first_name} ${bmData.last_name}`,
+    port: bmData.user_ports?.[0]?.ports?.name ?? 'N/A',
+  };
+}
         }
 
-        const formattedRequests: Request[] = await Promise.all(data.map(async (req: any) => {
-          // Fetch boat manager details if id_boat_manager is present
-          let boatManagerDetails: Request['boatManager'] | undefined;
-          if (req.id_boat_manager) {
-            const { data: bmData, error: bmError } = await supabase
-              .from('users')
-              .select('id, first_name, last_name, user_ports(ports(name))') // Assuming 'ports' is a relation to get port name
-              .eq('id', req.id_boat_manager)
-              .single();
-            if (!bmError && bmData) {
-              boatManagerDetails = {
-                id: bmData.id.toString(),
-                name: `${bmData.first_name} ${bmData.last_name}`,
-                port: bmData.user_ports && bmData.user_ports.length > 0 ? bmData.user_ports[0].ports.name : 'N/A'
-              };
-            }
+        // Fetch company details if id_companie is present
+        let companyDetails: Request['company'] | undefined;
+        if (req.id_companie) {
+          const { data: companyData, error: companyError } = await supabase
+            .from('users')
+            .select('id, company_name')
+            .eq('id', req.id_companie)
+            .single();
+          if (!companyError && companyData) {
+            companyDetails = {
+              id: companyData.id.toString(),
+              name: companyData.company_name || 'N/A'
+            };
           }
+        }
 
-          // Fetch company details if id_companie is present
-          let companyDetails: Request['company'] | undefined;
-          if (req.id_companie) {
-            const { data: companyData, error: companyError } = await supabase
-              .from('users')
-              .select('id, company_name')
-              .eq('id', req.id_companie)
-              .single();
-            if (!companyError && companyData) {
-              companyDetails = {
-                id: companyData.id.toString(),
-                name: companyData.company_name || 'N/A'
-              };
-            }
+        // Parse invoice details from note_add if present
+        let invoiceReference: string | undefined;
+        let invoiceDate: string | undefined;
+        if (req.note_add && (req.statut === 'to_pay' || req.statut === 'paid')) {
+          const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
+          if (invoiceMatch) {
+            invoiceReference = invoiceMatch[1];
+            invoiceDate = invoiceMatch[2];
           }
-
-          // Parse invoice details from note_add if present
-          let invoiceReference: string | undefined;
-          let invoiceDate: string | undefined;
-          if (req.note_add && (req.statut === 'to_pay' || req.statut === 'paid')) {
-            const invoiceMatch = req.note_add.match(/Facture (\S+) • (\d{4}-\d{2}-\d{2})/);
-            if (invoiceMatch) {
-              invoiceReference = invoiceMatch[1];
-              invoiceDate = invoiceMatch[2];
-            }
+        }
+        
+        // Determine scheduledDate from note_add if present
+        let scheduledDate: string | undefined;
+        if (req.statut === 'scheduled' && req.note_add) {
+          const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
+          if (scheduledMatch) {
+            scheduledDate = scheduledMatch[1];
           }
-          
-          // Determine scheduledDate from note_add if present
-          let scheduledDate: string | undefined;
-          if (req.statut === 'scheduled' && req.note_add) {
-            const scheduledMatch = req.note_add.match(/Planifiée le (\d{4}-\d{2}-\d{2})/);
-            if (scheduledMatch) {
-              scheduledDate = scheduledMatch[1];
-            }
-          }
+        }
 
-          return {
-            id: req.id.toString(),
-            title: req.description, // Using description as title for now
-            type: req.categorie_service?.description1 || 'N/A',
-            status: req.statut as NauticalCompanyRequestStatus,
-            urgency: req.urgence as UrgencyLevel,
-            date: req.date,
-            description: req.description,
-            category: 'Services', // Default category, adjust if needed
-            client: {
-              id: req.users.id.toString(),
-              name: `${req.users.first_name} ${req.users.last_name}`,
-              avatar: req.users.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop', // Default avatar
-              email: req.users.e_mail,
-              phone: req.users.phone,
-              boat: {
-                name: req.boat.name,
-                type: req.boat.type
-              }
-            },
-            boatManager: boatManagerDetails,
-            company: companyDetails,
-            notes: req.note_add,
-            scheduledDate: scheduledDate,
-            invoiceReference: invoiceReference,
-            invoiceAmount: req.prix,
-            invoiceDate: invoiceDate,
-            isNew: false, // Managed client-side
-            hasStatusUpdate: false // Managed client-side
-          };
-        }));
+        // On sécurise la casse éventuelle renvoyée par la BDD
+const rawStatus = String(req.statut).toLowerCase() as NauticalCompanyRequestStatus;
+let requestStatus = rawStatus;
 
-        setRequests(formattedRequests);
-      } catch (e) {
-        console.error('Unexpected error:', e);
-        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
-      } finally {
-        setLoading(false);
-      }
-    };
+// forwarded -> submitted uniquement si adressée à CETTE entreprise
+const isForwardedForThisCompany =
+  requestStatus === 'forwarded' && String(req.id_companie) === String(user.id);
+if (isForwardedForThisCompany) {
+  requestStatus = 'submitted';
+}
 
-    fetchRequests();
+// accepted (BDD) -> in_progress à l’affichage/compteurs
+if (requestStatus === 'accepted') {
+  requestStatus = 'in_progress';
+}
+
+        return {
+          id: req.id.toString(),
+          title: req.description, // Using description as title for now
+          type: req.categorie_service?.description1 || 'N/A',
+          status: requestStatus, // Use the potentially modified status
+          urgency: req.urgence as UrgencyLevel,
+          date: req.date,
+          description: req.description,
+          category: 'Services', // Default category, adjust if needed
+          client: {
+  id: req.users?.id?.toString?.() ?? 'unknown',
+  name: [req.users?.first_name, req.users?.last_name].filter(Boolean).join(' ') || 'Client inconnu',
+  avatar: req.users?.avatar || 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?q=80&w=2070&auto=format&fit=crop',
+  email: req.users?.e_mail ?? '',
+  phone: req.users?.phone ?? '',
+  boat: {
+    name: req.boat?.name ?? 'N/A',
+    type: req.boat?.type ?? 'N/A',
+  }
+},
+          boatManager: boatManagerDetails,
+          company: companyDetails,
+          notes: req.note_add,
+          scheduledDate: scheduledDate,
+          invoiceReference: invoiceReference,
+          invoiceAmount: req.prix,
+          invoiceDate: invoiceDate,
+          isNew: false, // Managed client-side
+          hasStatusUpdate: false // Managed client-side
+        };
+      }));
+
+      setRequests(formattedRequests);
+    } catch (e) {
+      console.error('Unexpected error:', e);
+      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+    } finally {
+      setLoading(false);
+    }
   }, [user]); // Add user to dependency array to refetch when user changes
+
+  // Realtime subscription for service_request table
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('nautical_company_requests_channel')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'service_request',
+          filter: `id_companie=eq.${user.id}` // Filter for requests related to this company
+        },
+        (payload) => {
+          console.log('Realtime change received!', payload);
+          // Re-fetch all requests to ensure data consistency
+          fetchRequests();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, fetchRequests]);
+
+  // Use useFocusEffect to re-fetch requests when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchRequests();
+      // No cleanup needed for this effect, as it's just fetching data
+    }, [fetchRequests]) // Dependency on the memoized fetch function
+  );
 
   const requestsSummary = useMemo(() => {
     return {
       total: requests.length,
       submitted: requests.filter(r => r.status === 'submitted').length,
       inProgress: requests.filter(r => r.status === 'in_progress').length,
+      forwarded: requests.filter(r => r.status === 'forwarded').length, // Compte les demandes "transmises"
       quoteSent: requests.filter(r => r.status === 'quote_sent').length,
       quoteAccepted: requests.filter(r => r.status === 'quote_accepted').length,
       scheduled: requests.filter(r => r.status === 'scheduled').length,
@@ -290,15 +360,17 @@ export default function RequestsScreen() {
     
     // Appliquer le filtre de recherche
     if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filteredRequests = filteredRequests.filter(request => 
-        request.client.name.toLowerCase().includes(query) ||
-        request.company?.name?.toLowerCase().includes(query) ||
-        request.title.toLowerCase().includes(query) ||
-        request.type.toLowerCase().includes(query) ||
-        request.client.boat.name.toLowerCase().includes(query)
-      );
-    }
+  const query = searchQuery.toLowerCase();
+  const contains = (v?: string) => (v ?? '').toLowerCase().includes(query);
+
+  filteredRequests = filteredRequests.filter(request =>
+    contains(request.client?.name) ||
+    contains(request.company?.name) ||
+    contains(request.title) ||
+    contains(request.type) ||
+    contains(request.client?.boat?.name)
+  );
+}
 
     // Appliquer le filtre de statut
     if (selectedStatus) {
@@ -402,6 +474,79 @@ export default function RequestsScreen() {
     return null;
   };
 
+  const handleAcceptRequest = async (request: Request) => {
+  Alert.alert('Accepter la demande', 'Voulez-vous accepter cette demande ? Elle passera au statut "En cours".', [
+    { text: 'Annuler', style: 'cancel' },
+    {
+      text: 'Accepter',
+      onPress: async () => {
+        try {
+          // Étape 1 : assigner l’entreprise
+          const step1 = await supabase
+            .from('service_request')
+            .update({ id_companie: user.id })
+            .eq('id', parseInt(request.id))
+            .in('statut', ['forwarded', 'submitted'])
+            .select('id, statut')
+            .single();
+
+          if (step1.error) throw step1.error;
+          console.log('Après step1:', step1.data?.statut); // souvent "in_progress" à cause du trigger
+
+          // Étape 2 : remettre "accepted"
+          const step2 = await supabase
+            .from('service_request')
+            .update({ statut: 'accepted' })
+            .eq('id', parseInt(request.id))
+            .select('id, statut')
+            .single();
+
+          if (step2.error) throw step2.error;
+          console.log('Après step2:', step2.data?.statut); // doit rester "accepted" si le trigger ne se base que sur le changement d’id_companie
+
+          Alert.alert('Succès', `Demande mise à jour: ${step2.data?.statut}`);
+        } catch (e: any) {
+          console.error('Accept error:', e);
+          Alert.alert('Erreur', e.message ?? 'Une erreur inattendue est survenue.');
+        }
+      },
+    },
+  ]);
+};
+
+
+  const handleRejectRequest = async (request: Request) => {
+    Alert.alert(
+      'Refuser la demande',
+      'Voulez-vous refuser cette demande ? Elle passera au statut "Annulée".',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Refuser',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('service_request')
+                .update({ statut: 'cancelled' })
+                .eq('id', parseInt(request.id));
+
+              if (error) {
+                console.error('Error rejecting request:', error);
+                Alert.alert('Erreur', `Impossible de refuser la demande: ${error.message}`);
+              } else {
+                Alert.alert('Succès', 'Demande refusée.');
+                // Realtime will handle UI update
+              }
+            } catch (e) {
+              console.error('Unexpected error rejecting request:', e);
+              Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) {
     return (
       <View style={[styles.container, styles.centered]}>
@@ -446,7 +591,7 @@ export default function RequestsScreen() {
           <TouchableOpacity 
             style={[
               styles.summaryCard, 
-              { backgroundColor: '#FEE2E2' },
+              { backgroundColor: '#FEE2F2' },
               selectedUrgency === 'urgent' && styles.summaryCardSelected
             ]}
             onPress={() => handleFilterByUrgency('urgent')}
@@ -604,28 +749,28 @@ export default function RequestsScreen() {
 
       {showFilters && (
         <View style={styles.filtersContainer}>
-          <Text style={styles.filtersTitle}>Filtres</Text>
+          <Text style={styles.filtersTitle}>Filtres par statut</Text>
           <View style={styles.statusFilters}>
             
-            {Object.entries(statusConfig).map(([status,config]) => {
-              const StatusIcon = config.icon;
-              return (
-                <TouchableOpacity 
-                  key={status}
-                  style={[
-                    styles.statusFilter,
-                    { backgroundColor: `${config.color}15` },
-                    selectedStatus === status && { borderColor: config.color, borderWidth: 2 }
-                  ]}
-                  onPress={() => handleFilterByStatus(status as NauticalCompanyRequestStatus)}
-                >
-                  <StatusIcon size={16} color={config.color} />
-                  <Text style={[styles.statusFilterText, { color: config.color }]}>
-                    {config.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {Object.entries(statusConfig)
+  .filter(([k]) => k !== 'default')
+  .map(([status, config]) => {
+    const StatusIcon = config.icon;
+    return (
+      <TouchableOpacity
+        key={status}
+        style={[
+          styles.statusFilter,
+          { backgroundColor: `${config.color}15` },
+          selectedStatus === status && { borderColor: config.color, borderWidth: 2 }
+        ]}
+        onPress={() => handleFilterByStatus(status as NauticalCompanyRequestStatus)}
+      >
+        <StatusIcon size={16} color={config.color} />
+        <Text style={[styles.statusFilterText, { color: config.color }]}>{config.label}</Text>
+      </TouchableOpacity>
+    );
+  })}
           </View>
         </View>
       )}
@@ -734,7 +879,7 @@ export default function RequestsScreen() {
                       <View style={styles.boatInfo}>
                         <Boat size={16} color="#666" />
                         <Text style={styles.boatType}>
-                          {request.client.boat.name} • {request.client.boat.type}
+                          {request.client.boat?.name ?? '—'} • {request.client.boat?.type ?? '—'}
                         </Text>
                       </View>
                     </View>
@@ -772,20 +917,43 @@ export default function RequestsScreen() {
                     )}
                   </View>
 
-                  <View style={styles.requestActions}>
-                    <TouchableOpacity 
-                      style={styles.actionButton}
-                      onPress={() => handleMessage(request.client.id)}
-                    >
-                      <MessageSquare size={20} color="#0066CC" />
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={styles.actionButton}
-                      onPress={() => handleRequestDetails(request.id)}
-                    >
-                      <ChevronRight size={20} color="#0066CC" />
-                    </TouchableOpacity>
-                  </View>
+                  {/* Action buttons for 'forwarded' requests */}
+                  {request.status === 'submitted' && request.company?.id === user?.id && (
+                    <View style={styles.requestActions}>
+                      <TouchableOpacity
+                        style={[styles.actionButton, styles.acceptButton]}
+                        onPress={() => handleAcceptRequest(request)}
+                      >
+                        <CheckCircle2 size={20} color="white" />
+                        <Text style={[styles.actionButtonText, { color: 'white' }]}>Accepter</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionButton, styles.rejectButton]}
+                        onPress={() => handleRejectRequest(request)}
+                      >
+                        <XCircle size={20} color="#EF4444" />
+                        <Text style={[styles.actionButtonText, { color: '#EF4444' }]}>Refuser</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Default message and details buttons */}
+                 {!(request.status === 'submitted' && String(request.company?.id) === String(user?.id)) && (
+  <View style={styles.requestActions}>
+    <TouchableOpacity
+      style={styles.actionButton}
+      onPress={() => handleMessage(request.client.id)}
+    >
+      <MessageSquare size={20} color="#0066CC" />
+    </TouchableOpacity>
+    <TouchableOpacity
+      style={styles.actionButton}
+      onPress={() => handleRequestDetails(request.id)}
+    >
+      <ChevronRight size={20} color="#0066CC" />
+    </TouchableOpacity>
+  </View>
+)}
                 </TouchableOpacity>
               );
             })
@@ -854,7 +1022,7 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
       },
       android: {
-        elevation: 2,
+        elevation: 0,
       },
       web: {
         boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
@@ -1138,7 +1306,7 @@ const styles = StyleSheet.create({
   urgentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEE2E2',
+    backgroundColor: '#FEE2F2',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
@@ -1305,5 +1473,99 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
-  }
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    width: '90%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+      },
+    }),
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  modalBody: {
+    padding: 16,
+    maxHeight: 400,
+  },
+  statusOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  statusOptionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  statusOptionLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  statusOptionDescription: {
+    fontSize: 12,
+    color: '#666',
+  },
+  acceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#10B981',
+    padding: 12,
+    borderRadius: 8,
+  },
+  rejectButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#fff5f5',
+    padding: 12,
+    borderRadius: 8,
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useFocusEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert } from 'react-native';
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro } from 'lucide-react-native';
 import { router } from 'expo-router';
@@ -856,6 +856,7 @@ const styles = StyleSheet.create({
     minWidth: '30%',
     backgroundColor: '#f8fafc',
     borderRadius: 12,
+    overflow: Platform.OS === 'android' ? 'hidden' : 'visible', 
     padding: 12,
     alignItems: 'center',
     position: 'relative',
@@ -869,7 +870,7 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
       },
       android: {
-        elevation: 2,
+        elevation: 0,
       },
       web: {
         boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',

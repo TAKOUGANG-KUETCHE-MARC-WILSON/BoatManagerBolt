@@ -1,12 +1,14 @@
-import { Platform } from 'react-native';
+import { Platform, TouchableOpacity } from 'react-native';
 import { Tabs } from 'expo-router';
-import { Users, FileText, MessageSquare, User, Calendar, Plus } from 'lucide-react-native';
+import { Users, FileText, MessageSquare, User, Calendar, Plus, ArrowLeft } from 'lucide-react-native';
 import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
 import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase'; // Importation du client Supabase
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+
 
 export default function BoatManagerTabLayout() {
   const { user } = useAuth();
@@ -91,6 +93,8 @@ export default function BoatManagerTabLayout() {
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
+      <StatusBar style="dark" backgroundColor="#ffffff" hidden={false} />
+
     <Tabs
       screenOptions={{
         headerShown: true,
@@ -172,15 +176,22 @@ export default function BoatManagerTabLayout() {
         }}
       />
       <Tabs.Screen
-        name="clients-list"
-        options={{
-         title: 'Devis',
-          headerShown: false,
-          href: null, // Masquer cet écran de la barre d'onglets
-        }}
-      />
+  name="clients-list"
+  options={{
+    title: 'Tous mes clients',
+    href: null,                    // écran masqué de la barre d’onglets
+   // headerShown: true,             // ⬅️ on affiche le header natif
+    headerLargeTitle: false,       // ⬅️ pas de gros titre iOS
+    headerTitleStyle: { fontSize: 16, fontWeight: '600' },
+    headerStyle: { height: Platform.OS === 'ios' ? 48 : 56 },
+    headerLeft: () => (            // ⬅️ bouton retour identique aux autres
+      <TouchableOpacity onPress={() => router.back()} style={{ paddingHorizontal: 12 }}>
+        <ArrowLeft size={20} color="#1a1a1a" />
+      </TouchableOpacity>
+    ),
+  }}
+/>
     </Tabs>
     </SafeAreaView>
   );
 }
-

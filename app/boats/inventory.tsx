@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { ArrowLeft, Save, Check, Ship, Anchor, Wrench, Zap, Droplets, Umbrella, Navigation, ShieldAlert, Utensils, Thermometer, Radio, Tv, Refrigerator, Wind, Compass, Waves, ChevronDown, ChevronUp, Info } from 'lucide-react-native';
-
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 interface ChecklistItem {
   id: string;
   name: string;
@@ -311,24 +312,23 @@ export default function BoatInventoryScreen() {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Inventaire du bateau</Text>
-        <TouchableOpacity 
-          style={styles.saveButton}
-          onPress={handleSave}
-        >
-          <Save size={24} color="#0066CC" />
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+    <Stack.Screen options={{ headerShown: false }} />
+    <StatusBar style="dark" backgroundColor="#fff" />
 
-      <ScrollView style={styles.content}>
+    {/* header en dehors du ScrollView pour rester propre sous la barre d’état */}
+    <View style={styles.header}>
+      <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <ArrowLeft size={24} color="#1a1a1a" />
+      </TouchableOpacity>
+      <Text style={styles.title}>Inventaire du bateau</Text>
+      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+        <Save size={24} color="#0066CC" />
+      </TouchableOpacity>
+    </View>
+
+    {/* un seul ScrollView pour le contenu */}
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
         <Text style={styles.description}>
           Cochez les équipements présents sur votre bateau et ajoutez des détails si nécessaire.
         </Text>
@@ -390,11 +390,15 @@ export default function BoatInventoryScreen() {
           </View>
         ))}
       </ScrollView>
-    </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -407,6 +411,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+  },
+  // remplace "content" par ceci
+  contentContainer: {
+    padding: 16,
+    paddingBottom: 32,
   },
   backButton: {
     padding: 8,

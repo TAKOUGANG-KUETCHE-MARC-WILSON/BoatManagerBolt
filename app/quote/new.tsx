@@ -1,193 +1,199 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator } from 'react-native';
+// app/(boat-manager)/quote/new.tsx
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+  Platform,
+  ActivityIndicator,
+} from 'react-native';
 import { ArrowLeft, Plus, Trash, Bot as Boat, User, Calendar, FileText, Euro } from 'lucide-react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
-import { generateQuotePDF } from '@/utils/pdf'; // Assurez-vous que cette fonction retourne le base64
+import { generateQuotePDF } from '@/utils/pdf';
 import * as FileSystem from 'expo-file-system';
-import { Buffer } from 'buffer';
+import { decode as decodeBase64 } from 'base64-arraybuffer';
 
+// ---------- Notifs + logs (erreurs masquées côté client) ----------
+const notifyError = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(({ ToastAndroid }) => ToastAndroid.show(msg, ToastAndroid.LONG));
+  } else {
+    // @ts-ignore
+    import('react-native').then(({ Alert }) => Alert.alert('Oups', msg));
+  }
+};
+const notifyInfo = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(({ ToastAndroid }) => ToastAndroid.show(msg, ToastAndroid.SHORT));
+  } else {
+    // @ts-ignore
+    import('react-native').then(({ Alert }) => Alert.alert('', msg));
+  }
+};
+const devError = (scope: string, err: unknown) => { if (__DEV__) console.error(`[${scope}]`, err); };
+
+// ---------- Types ----------
 interface Service {
   id: string;
   name: string;
   description: string;
   amount: number;
 }
-
 interface QuoteForm {
-  client: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  boat: {
-    id: string;
-    name: string;
-    type: string;
-  };
+  client: { id: string; name: string; email: string };
+  boat: { id: string; name: string; type: string };
   validUntil: string;
   services: Service[];
   requestId?: string;
-  quoteId?: number; // Ajout de quoteId pour stocker l'ID du devis principal
+  quoteId?: number;
 }
 
+// ---------- Utilitaires ----------
+const generateQuoteReference = (requestId?: string, clientId?: string) => {
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  return `DEV-${requestId || clientId || 'GEN'}-${stamp}`;
+};
+
 export default function NewQuoteScreen() {
-  const params = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
+  const rawParams = useLocalSearchParams();
   const { user } = useAuth();
 
-  // --- DÉBUT: clés stables extraites de params (primitives) ---
-  const depClientId = Array.isArray(params?.clientId) ? String(params!.clientId[0]) : String(params?.clientId ?? '');
-  const depClientName = Array.isArray(params?.clientName) ? String(params!.clientName[0]) : String(params?.clientName ?? '');
-  const depClientEmail = Array.isArray(params?.clientEmail) ? String(params!.clientEmail[0]) : String(params?.clientEmail ?? '');
-  const depBoatId = Array.isArray(params?.boatId) ? String(params!.boatId[0]) : String(params?.boatId ?? '');
-  const depBoatName = Array.isArray(params?.boatName) ? String(params!.boatName[0]) : String(params?.boatName ?? '');
-  const depBoatType = Array.isArray(params?.boatType) ? String(params!.boatType[0]) : String(params?.boatType ?? '');
-  const depRequestId = Array.isArray(params?.requestId) ? String(params!.requestId[0]) : String(params?.requestId ?? '');
-  // --- FIN: clés stables extraites de params ---
+  // Normalise les params (string | string[] -> string)
+  const params = useMemo(() => {
+    const obj: Record<string, string> = {};
+    Object.entries(rawParams).forEach(([k, v]) => {
+      obj[k] = Array.isArray(v) ? (v[0] ?? '') : (v ?? '');
+    });
+    return obj;
+  }, [rawParams]);
 
-  const DEFAULT_TAX_RATE = 0;
-
-  const generateQuoteReference = (requestId?: string, clientId?: string) => {
-    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-    return `DEV-${requestId || clientId || 'GEN'}-${stamp}`;
-  };
+  const depClientId   = params.clientId || '';
+  const depClientName = params.clientName || '';
+  const depClientEmail= params.clientEmail || '';
+  const depBoatId     = params.boatId || '';
+  const depBoatName   = params.boatName || '';
+  const depBoatType   = params.boatType || '';
+  const depRequestId  = params.requestId || '';
 
   const getProviderFields = () => {
     const role = (user as any)?.role;
     const uid = Number((user as any)?.id) || null;
-
-    if (role === 'nautical_company') {
-      return { provider_type: 'nautical_company', id_boat_manager: null, id_companie: uid };
-    }
-    return { provider_type: 'boat_manager', id_boat_manager: uid, id_companie: null };
+    if (role === 'nautical_company') return { provider_type: 'nautical_company' as const, id_boat_manager: null, id_companie: uid };
+    return { provider_type: 'boat_manager' as const, id_boat_manager: uid, id_companie: null };
   };
 
   const [form, setForm] = useState<QuoteForm>({
-    client: {
-      id: '',
-      name: '',
-      email: '',
-    },
-    boat: {
-      id: '',
-      name: '',
-      type: '',
-    },
+    client: { id: '', name: '', email: '' },
+    boat: { id: '', name: '', type: '' },
     validUntil: '',
-    services: [
-      {
-        id: 'temp-1', // Utiliser un ID temporaire pour les nouveaux services non encore persistés
-        name: '',
-        description: '',
-        amount: 0,
-      },
-    ],
+    services: [{ id: 'temp-1', name: '', description: '', amount: 0 }],
     requestId: '',
-    quoteId: undefined, // Initialisé à undefined
+    quoteId: undefined,
   });
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errors, setErrors] = useState<any>({}); // Pour gérer les erreurs de validation
+  const [errors, setErrors] = useState<Record<string, any>>({});
 
-  // --- Initialisation du formulaire et chargement/création du devis principal ---
+  // ---------- Init: préremplissage + chargement/creation du devis principal ----------
   useEffect(() => {
+    let alive = true;
+
     const initializeQuote = async () => {
       setIsLoading(true);
       let currentQuoteId: number | undefined;
       let initialServices: Service[] = [];
 
-      // Pré-remplir les infos client/bateau/requête depuis les params
+      // Pré-remplir infos
       setForm(prev => {
         const next = { ...prev };
-        if (depClientId) next.client = { ...next.client, id: depClientId };
-        if (depClientName) next.client = { ...next.client, name: depClientName };
-        if (depClientEmail) next.client = { ...next.client, email: depClientEmail };
-        if (depBoatId) next.boat = { ...next.boat, id: depBoatId };
-        if (depBoatName) next.boat = { ...next.boat, name: depBoatName };
-        if (depBoatType) next.boat = { ...next.boat, type: depBoatType };
-        if (depRequestId) next.requestId = depRequestId;
+        next.client = { id: depClientId || prev.client.id, name: depClientName || prev.client.name, email: depClientEmail || prev.client.email };
+        next.boat   = { id: depBoatId || prev.boat.id, name: depBoatName || prev.boat.name, type: depBoatType || prev.boat.type };
+        next.requestId = depRequestId || prev.requestId;
         if (!prev.validUntil) {
-          const d = new Date();
-          d.setDate(d.getDate() + 30);
+          const d = new Date(); d.setDate(d.getDate() + 30);
           next.validUntil = d.toISOString().split('T')[0];
         }
         return next;
       });
 
       try {
-        // 1. Tenter de charger un devis existant pour cette service_request
+        // 1) Devis existant lié à la demande ?
         if (depRequestId) {
           const { data: existingQuote, error: fetchQuoteError } = await supabase
             .from('quotes')
-            .select('id, valid_until, status') // Sélectionner le statut pour vérifier s'il est déjà 'sent'
+            .select('id, valid_until')
             .eq('service_request_id', parseInt(depRequestId))
-            .single();
+            .maybeSingle();
 
-          if (existingQuote) {
+          if (fetchQuoteError && fetchQuoteError.code !== 'PGRST116') {
+            devError('fetchQuote', fetchQuoteError);
+            notifyError('Chargement du devis impossible.');
+          }
+
+          if (existingQuote?.id) {
             currentQuoteId = existingQuote.id;
+            if (!alive) return;
             setForm(prev => ({ ...prev, quoteId: currentQuoteId, validUntil: existingQuote.valid_until || prev.validUntil }));
 
-            // Charger les quote_items existants
+            // Items existants
             const { data: existingItems, error: fetchItemsError } = await supabase
               .from('quote_items')
               .select('id, label, description, unit_price')
               .eq('quote_id', currentQuoteId)
               .order('position', { ascending: true });
 
-            if (fetchItemsError) {
-              console.error('Error fetching existing quote items:', fetchItemsError);
-              Alert.alert('Erreur', 'Impossible de charger les services du devis existant.');
-            } else if (existingItems && existingItems.length > 0) {
-              initialServices = existingItems.map(item => ({
-                id: item.id.toString(),
-                name: item.label,
-                description: item.description || '',
-                amount: item.unit_price || 0,
+            if (fetchItemsError) devError('fetchItems', fetchItemsError);
+            if (existingItems?.length) {
+              initialServices = existingItems.map(it => ({
+                id: String(it.id),
+                name: it.label,
+                description: it.description || '',
+                amount: it.unit_price || 0,
               }));
             }
           }
         }
 
-        // 2. Si aucun devis existant n'a été trouvé, en créer un nouveau en statut 'draft'
+        // 2) Sinon, créer un brouillon
         if (!currentQuoteId) {
           const { provider_type, id_boat_manager, id_companie } = getProviderFields();
+
+          // Validation minimale: client obligatoire (numérique)
+          const clientIdNum = parseInt(depClientId);
+          if (Number.isNaN(clientIdNum)) {
+            notifyError("Client manquant. Impossible de créer le devis.");
+            return;
+          }
+          const boatIdNum = depBoatId ? parseInt(depBoatId) : null;
+
           const reference = generateQuoteReference(depRequestId, depClientId);
-          const clientLabel = form.client.name || depClientName || 'Client';
-const boatLabel = form.boat.name || depBoatName;
-const title = boatLabel
-  ? `Devis - ${clientLabel} / ${boatLabel}`
-  : `Devis - ${clientLabel}`;
-
-          // MODIFICATION ICI : Assurer que valid_until est une date valide
-          const validUntilForInsert = form.validUntil.trim() === '' ? new Date().toISOString().split('T')[0] : form.validUntil;
-
-          // --- VALIDATION ASSOUPLIE ---
-// client requis
-const clientIdNum = parseInt(depClientId);
-if (isNaN(clientIdNum)) {
-  Alert.alert('Erreur', 'ID du client manquant ou invalide. Impossible de créer le devis.');
-  setIsLoading(false);
-  return;
-}
-// bateau optionnel
-const boatIdNum = depBoatId ? parseInt(depBoatId) : null;
-// --- FIN VALIDATION ---
+          const clientLabel = depClientName || 'Client';
+          const title = depBoatName ? `Devis - ${clientLabel} / ${depBoatName}` : `Devis - ${clientLabel}`;
+          const validUntilForInsert = form.validUntil?.trim() || new Date().toISOString().split('T')[0];
 
           const { data: newQuoteRow, error: createQuoteError } = await supabase
             .from('quotes')
             .insert({
               reference,
-              valid_until: validUntilForInsert, // Utiliser la date valide ici
+              valid_until: validUntilForInsert,
               service_request_id: depRequestId ? parseInt(depRequestId) : null,
-              id_client: clientIdNum, // Utiliser le nombre validé ici
-              id_boat: boatIdNum, // Utiliser le nombre validé ici
+              id_client: clientIdNum,
+              id_boat: boatIdNum,
               id_boat_manager,
               id_companie,
               provider_type,
               title,
-              status: 'draft', // Statut initial 'draft'
+              status: 'draft',
               currency: 'EUR',
               subtotal_excl_tax: 0,
               tax_amount: 0,
@@ -197,351 +203,262 @@ const boatIdNum = depBoatId ? parseInt(depBoatId) : null;
             .single();
 
           if (createQuoteError || !newQuoteRow?.id) {
-            console.error('Error creating new draft quote:', createQuoteError);
-            Alert.alert('Erreur', 'Impossible de créer un nouveau devis brouillon.');
-            setIsLoading(false);
+            devError('createQuote', createQuoteError);
+            notifyError('Impossible de créer le devis.');
             return;
           }
           currentQuoteId = newQuoteRow.id;
+          if (!alive) return;
           setForm(prev => ({ ...prev, quoteId: currentQuoteId }));
         }
 
-        // Mettre à jour les services dans l'état local
+        // 3) Services init
+        if (!alive) return;
         if (initialServices.length > 0) {
           setForm(prev => ({ ...prev, services: initialServices }));
         } else {
-          // S'il n'y a pas de services existants, s'assurer qu'il y a au moins un service vide
           setForm(prev => ({ ...prev, services: [{ id: 'temp-1', name: '', description: '', amount: 0 }] }));
         }
-
       } catch (e) {
-        console.error('Error during quote initialization:', e);
-        Alert.alert('Erreur', 'Une erreur est survenue lors de l\'initialisation du devis.');
+        devError('initializeQuote', e);
+        notifyError("Initialisation du devis impossible.");
       } finally {
-        setIsLoading(false);
+        if (alive) setIsLoading(false);
       }
     };
 
     initializeQuote();
+    return () => { alive = false; };
   }, [depRequestId, depClientId, depClientName, depClientEmail, depBoatId, depBoatName, depBoatType, user]);
 
-  // --- Fonctions de gestion des services ---
-
-  const validateService = (service: Service) => {
-    const newErrors: any = {};
-    if (!service.name.trim()) newErrors.name = 'Le nom du service est requis';
-    if (!service.description.trim()) newErrors.description = 'La description est requise';
-    if (service.amount <= 0) newErrors.amount = 'Le montant doit être supérieur à 0';
-    return newErrors;
+  // ---------- Helpers services ----------
+  const validateService = (s: Service) => {
+    const errs: any = {};
+    if (!s.name.trim()) errs.name = 'Le nom du service est requis';
+    if (!s.description.trim()) errs.description = 'La description est requise';
+    if (s.amount <= 0) errs.amount = 'Le montant doit être > 0';
+    return errs;
   };
 
-  const addService = async () => {
-    if (!form.quoteId) {
-      Alert.alert('Erreur', 'Le devis n\'est pas encore initialisé. Veuillez patienter.');
-      return;
-    }
+  const addService = useCallback(async () => {
+    if (!form.quoteId) { notifyError("Devis non initialisé."); return; }
 
-    const lastService = form.services[form.services.length - 1];
-    const serviceErrors = validateService(lastService);
-
+    const last = form.services[form.services.length - 1];
+    const serviceErrors = validateService(last);
     if (Object.keys(serviceErrors).length > 0) {
-      setErrors((prev: any) => ({ ...prev, [`service-${lastService.id}`]: serviceErrors }));
-      Alert.alert('Validation', 'Veuillez remplir tous les champs du service actuel avant d\'en ajouter un nouveau.');
-      return;
-    }
-
-    setIsSubmitting(true); // Activer l'indicateur de chargement
-    try {
-      // Insérer le dernier service dans la DB s'il n'a pas encore d'ID de DB
-      if (lastService.id.startsWith('temp-')) {
-        const { data: newItem, error: insertError } = await supabase
-          .from('quote_items')
-          .insert({
-            quote_id: form.quoteId,
-            label: lastService.name,
-            description: lastService.description,
-            unit_price: lastService.amount,
-            quantity: 1, // Valeur par défaut
-            position: form.services.length, // Position basée sur l'ordre actuel
-          })
-          .select('id')
-          .single();
-
-        if (insertError || !newItem) {
-          console.error('Error inserting quote item:', insertError);
-          Alert.alert('Erreur', 'Impossible d\'ajouter le service.');
-          return;
-        }
-        // Mettre à jour l'ID du service dans l'état local
-        setForm(prev => ({
-          ...prev,
-          services: prev.services.map(s => s.id === lastService.id ? { ...s, id: newItem.id.toString() } : s)
-        }));
-      }
-
-      // Ajouter un nouveau service vide à l'état local
-      setForm(prev => ({
-        ...prev,
-        services: [
-          ...prev.services,
-          {
-            id: `temp-${Date.now()}`, // Nouvel ID temporaire
-            name: '',
-            description: '',
-            amount: 0,
-          },
-        ],
-      }));
-      setErrors({}); // Réinitialiser les erreurs après un ajout réussi
-    } catch (e) {
-      console.error('Error adding service:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'ajout du service.');
-    } finally {
-      setIsSubmitting(false); // Désactiver l'indicateur de chargement
-    }
-  };
-
-  const removeService = async (id: string) => {
-    if (form.services.length <= 1) {
-      Alert.alert('Attention', 'Un devis doit contenir au moins un service.');
+      setErrors(prev => ({ ...prev, [`service-${last.id}`]: serviceErrors }));
+      notifyError('Complétez le service en cours avant.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // Supprimer de la DB si ce n'est pas un ID temporaire
-      if (!id.startsWith('temp-')) {
-        const { error: deleteError } = await supabase
+      // Persiste le dernier service s'il est temporaire
+      if (last.id.startsWith('temp-')) {
+        const { data: newItem, error } = await supabase
           .from('quote_items')
-          .delete()
-          .eq('id', parseInt(id));
-
-        if (deleteError) {
-          console.error('Error deleting quote item:', deleteError);
-          Alert.alert('Erreur', 'Impossible de supprimer le service.');
-          return;
-        }
+          .insert({
+            quote_id: form.quoteId,
+            label: last.name,
+            description: last.description,
+            unit_price: last.amount,
+            quantity: 1,
+            position: form.services.length,
+          })
+          .select('id')
+          .single();
+        if (error || !newItem) throw error;
+        setForm(prev => ({
+          ...prev,
+          services: prev.services.map(s => s.id === last.id ? ({ ...s, id: String(newItem.id) }) : s),
+        }));
       }
 
+      // Ajoute une nouvelle ligne vide
       setForm(prev => ({
         ...prev,
-        services: prev.services.filter(service => service.id !== id),
+        services: [...prev.services, { id: `temp-${Date.now()}`, name: '', description: '', amount: 0 }],
       }));
+      setErrors({});
     } catch (e) {
-      console.error('Error removing service:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la suppression du service.');
+      devError('addService', e);
+      notifyError("Ajout de service impossible.");
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [form.quoteId, form.services]);
 
-  const updateService = async (id: string, field: keyof Service, value: string | number) => {
-    setForm(prev => {
-      const updatedServices = prev.services.map(service =>
-        service.id === id ? { ...service, [field]: value } : service
-      );
-      return { ...prev, services: updatedServices };
+  const removeService = useCallback(async (id: string) => {
+    if (form.services.length <= 1) { notifyError('Au moins un service est requis.'); return; }
+    setIsSubmitting(true);
+    try {
+      if (!id.startsWith('temp-')) {
+        const { error } = await supabase.from('quote_items').delete().eq('id', parseInt(id));
+        if (error) throw error;
+      }
+      setForm(prev => ({ ...prev, services: prev.services.filter(s => s.id !== id) }));
+    } catch (e) {
+      devError('removeService', e);
+      notifyError("Suppression du service impossible.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [form.services]);
+
+  const updateService = useCallback(async (id: string, field: keyof Service, value: string | number) => {
+    setForm(prev => ({ ...prev, services: prev.services.map(s => s.id === id ? { ...s, [field]: value } : s) }));
+
+    // Nettoie erreurs locales pour ce champ
+    setErrors(prev => {
+      const n = { ...prev };
+      if (n[`service-${id}`]?.[field]) {
+        delete n[`service-${id}`][field];
+        if (Object.keys(n[`service-${id}`]).length === 0) delete n[`service-${id}`];
+      }
+      return n;
     });
 
-    // Mettre à jour la DB si le service a déjà un ID de DB
+    // Persiste si déjà en DB
     if (!id.startsWith('temp-')) {
       try {
-        const serviceToUpdate = form.services.find(s => s.id === id);
-        if (serviceToUpdate) {
-          const { error: updateError } = await supabase
-            .from('quote_items')
-            .update({ [field === 'amount' ? 'unit_price' : field === 'name' ? 'label' : field]: value })
-            .eq('id', parseInt(id));
-
-          if (updateError) {
-            console.error('Error updating quote item:', updateError);
-            // Gérer l'erreur de manière appropriée, peut-être un rollback local ou un message à l'utilisateur
-          }
-        }
+        const dbField =
+          field === 'amount' ? 'unit_price' :
+          field === 'name'   ? 'label'      :
+          field;
+        const { error } = await supabase.from('quote_items').update({ [dbField]: value }).eq('id', parseInt(id));
+        if (error) throw error;
       } catch (e) {
-        console.error('Error updating service in DB:', e);
+        devError('updateService', e);
       }
     }
-    setErrors((prev: any) => {
-      const newErrors = { ...prev };
-      if (newErrors[`service-${id}`] && newErrors[`service-${id}`][field]) {
-        delete newErrors[`service-${id}`][field];
-        if (Object.keys(newErrors[`service-${id}`]).length === 0) {
-          delete newErrors[`service-${id}`];
-        }
-      }
-      return newErrors;
-    });
-  };
+  }, []);
 
-  const totalAmount = form.services.reduce((sum, service) => sum + (Number(service.amount) || 0), 0);
+  const totalAmount = useMemo(
+    () => form.services.reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
+    [form.services]
+  );
 
-  // --- Soumission finale du devis ---
-  const handleSubmit = async () => {
-    if (!form.quoteId) {
-      Alert.alert('Erreur', 'Le devis n\'est pas initialisé. Veuillez réessayer.');
-      return;
-    }
+  // ---------- Soumission finale ----------
+  const handleSubmit = useCallback(async () => {
+    if (!form.quoteId) { notifyError("Devis non initialisé."); return; }
 
-    // Valider le dernier service avant la soumission finale
-    const lastService = form.services[form.services.length - 1];
-    const serviceErrors = validateService(lastService);
+    const last = form.services[form.services.length - 1];
+    const serviceErrors = validateService(last);
     if (Object.keys(serviceErrors).length > 0) {
-      setErrors((prev: any) => ({ ...prev, [`service-${lastService.id}`]: serviceErrors }));
-      Alert.alert('Validation', 'Veuillez remplir tous les champs du dernier service.');
+      setErrors(prev => ({ ...prev, [`service-${last.id}`]: serviceErrors }));
+      notifyError('Complétez le dernier service.');
       return;
     }
 
-    // S'assurer que tous les services temporaires sont persistés
-    for (const service of form.services) {
-      if (service.id.startsWith('temp-')) {
-        const { data: newItem, error: insertError } = await supabase
-          .from('quote_items')
-          .insert({
-            quote_id: form.quoteId,
-            label: service.name,
-            description: service.description,
-            unit_price: service.amount,
-            quantity: 1,
-            position: form.services.indexOf(service) + 1,
-          })
-          .select('id')
-          .single();
-
-        if (insertError || !newItem) {
-          console.error('Error persisting temporary service:', insertError);
-          Alert.alert('Erreur', 'Impossible de sauvegarder tous les services.');
+    // Persiste toutes les lignes temporaires
+    for (const s of form.services) {
+      if (s.id.startsWith('temp-')) {
+        try {
+          const { data: newItem, error } = await supabase
+            .from('quote_items')
+            .insert({
+              quote_id: form.quoteId,
+              label: s.name,
+              description: s.description,
+              unit_price: s.amount,
+              quantity: 1,
+              position: form.services.indexOf(s) + 1,
+            })
+            .select('id')
+            .single();
+          if (error || !newItem) throw error;
+          setForm(prev => ({
+            ...prev,
+            services: prev.services.map(x => x.id === s.id ? ({ ...x, id: String(newItem.id) }) : x),
+          }));
+        } catch (e) {
+          devError('persistTempService', e);
+          notifyError("Sauvegarde des services impossible.");
           return;
         }
-        // Mettre à jour l'ID du service dans l'état local (important pour la suite)
-        setForm(prev => ({
-          ...prev,
-          services: prev.services.map(s => s.id === service.id ? { ...s, id: newItem.id.toString() } : s)
-        }));
       }
     }
 
-    if (totalAmount <= 0) {
-      Alert.alert('Erreur', 'Le montant total du devis doit être supérieur à 0.');
-      return;
-    }
+    if (totalAmount <= 0) { notifyError('Le total doit être supérieur à 0.'); return; }
 
     setIsSubmitting(true);
     try {
-      // 1. Générer le PDF → retourne un chemin local
-const localPdfPath = await generateQuotePDF({
-  reference: generateQuoteReference(form.requestId, form.client.id),
-  date: new Date().toISOString().split('T')[0],
-  validUntil: form.validUntil,
-  provider: getProviderFields(),
-  client: form.client,
-  boat: {
-  id: form.boat.id || 'N/A',
-  name: form.boat.name || 'Aucun bateau',
-  type: form.boat.type || '',
-},
-  services: form.services,
-  totalAmount: totalAmount,
-});
+      // 1) Génère le PDF → renvoie un chemin local (file://…)
+      const providerFields = getProviderFields();
+      const providerName =
+        (user?.firstName || '') + (user?.lastName ? ` ${user.lastName}` : '') ||
+        (providerFields.provider_type === 'nautical_company' ? 'Entreprise' : 'Boat Manager');
 
-if (!localPdfPath) {
-  Alert.alert('Erreur', 'Impossible de générer le PDF du devis.');
-  return;
-}
+      const localPdfPath = await generateQuotePDF({
+        reference: generateQuoteReference(form.requestId, form.client.id),
+        date: new Date().toISOString().split('T')[0],
+        validUntil: form.validUntil,
+        provider: { name: providerName, type: providerFields.provider_type },
+        client: form.client,
+        boat: { id: form.boat.id || 'N/A', name: form.boat.name || '—', type: form.boat.type || '' },
+        services: form.services,
+        totalAmount,
+      });
+      if (!localPdfPath) { notifyError('Génération du PDF impossible.'); return; }
 
-// 2. Lire le fichier en base64
-const base64Pdf = await FileSystem.readAsStringAsync(localPdfPath, {
-  encoding: FileSystem.EncodingType.Base64,
-});
+      // 2) Lit le fichier en base64 puis en Uint8Array
+      const base64Pdf = await FileSystem.readAsStringAsync(localPdfPath, { encoding: FileSystem.EncodingType.Base64 });
+      const bytes = new Uint8Array(decodeBase64(base64Pdf));
 
-// 3. Uploader dans Supabase
-const pdfFileName = `quote_${form.quoteId}_${Date.now()}.pdf`;
-const { data: uploadData, error: uploadError } = await supabase.storage
-  .from('quotes')
-  .upload(pdfFileName, decode(base64Pdf), {
-    contentType: 'application/pdf',
-    upsert: true,
-  });
+      // 3) Upload Supabase (chemin structuré)
+      const fileName = `quote_${form.quoteId}_${Date.now()}.pdf`;
+      const storagePath = `quotes/${form.quoteId}/${fileName}`;
+      const { data: up, error: uploadError } = await supabase.storage
+        .from('quotes')
+        .upload(storagePath, bytes, { contentType: 'application/pdf', upsert: true });
+      if (uploadError || !up?.path) {
+        devError('uploadPdf', uploadError);
+        notifyError('Téléversement du PDF impossible.');
+        return;
+      }
+      const { data: pub } = supabase.storage.from('quotes').getPublicUrl(up.path);
+      const pdfUrl = pub.publicUrl;
 
-if (uploadError) {
-  console.error('Error uploading PDF:', uploadError);
-  Alert.alert('Erreur', `Échec du téléchargement du PDF: ${uploadError.message}`);
-  return;
-}
-
-const pdfUrl = supabase.storage.from('quotes').getPublicUrl(uploadData.path).data.publicUrl;
-
-// 4. Mettre à jour la table 'quotes' avec le lien
-const { error: updateQuoteError } = await supabase
-  .from('quotes')
-  .update({
-    file_url: pdfUrl,
-    status: 'sent',
-    total_incl_tax: totalAmount,
-    subtotal_excl_tax: totalAmount,
-  })
-  .eq('id', form.quoteId);
-
-if (updateQuoteError) {
-  console.error('Error updating quote status and file_url:', updateQuoteError);
-  Alert.alert('Erreur', `Impossible de finaliser le devis: ${updateQuoteError.message}`);
-  return;
-}
-
-
-      if (updateQuoteError) {
-        console.error('Error updating quote status and file_url:', updateQuoteError);
-        Alert.alert('Erreur', `Impossible de finaliser le devis: ${updateQuoteError.message}`);
+      // 4) Met à jour la table quotes
+      const { error: qErr } = await supabase
+        .from('quotes')
+        .update({
+          file_url: pdfUrl,
+          status: 'sent',
+          total_incl_tax: totalAmount,
+          subtotal_excl_tax: totalAmount,
+        })
+        .eq('id', form.quoteId);
+      if (qErr) {
+        devError('updateQuote', qErr);
+        notifyError('Finalisation du devis impossible.');
         return;
       }
 
-      // 4. Mettre à jour le statut de la service_request associée à 'devis envoyé'
+      // 5) Met à jour la service_request liée (si présente)
       if (form.requestId) {
-        const { error: updateRequestError } = await supabase
+        const { error: rErr } = await supabase
           .from('service_request')
           .update({
-            statut: 'quote_sent', // Statut 'devis envoyé'
+            statut: 'quote_sent',
             prix: totalAmount,
             note_add: `Devis créé et envoyé: ${pdfUrl}`,
           })
           .eq('id', parseInt(form.requestId));
-
-        if (updateRequestError) {
-          console.error('Error updating service_request status:', updateRequestError);
-          Alert.alert('Avertissement', 'Devis créé, mais la mise à jour de la demande a échoué.');
-        }
+        if (rErr) devError('updateRequest', rErr);
       }
 
-      Alert.alert(
-        'Succès',
-        'Le devis a été créé et envoyé avec succès.',
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
-
+      notifyInfo('Devis créé et envoyé ✅');
+      router.back();
     } catch (e) {
-      console.error('Unexpected error during quote submission:', e);
-      Alert.alert('Erreur', `Une erreur inattendue est survenue: ${e instanceof Error ? e.message : String(e)}.`);
+      devError('handleSubmit', e);
+      notifyError('Une erreur est survenue lors de la création du devis.');
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [form, totalAmount, user]);
 
-  // Fonction utilitaire pour décoder le base64 (nécessaire pour l'upload de Blob)
-  const decode = (base64: string) => {
-  try {
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
-  } catch (error) {
-    console.error("Base64 decode error:", error);
-    throw new Error("Erreur de décodage du PDF.");
-  }
-};
-
+  // ---------- UI ----------
   if (isLoading) {
     return (
       <View style={[styles.container, styles.centered]}>
@@ -553,31 +470,35 @@ if (updateQuoteError) {
 
   return (
     <ScrollView style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Revenir en arrière"
+          onPress={() => {
+            try { router.back(); } catch (e) { devError('nav:back', e); notifyError('Retour impossible.'); }
+          }}
         >
           <ArrowLeft size={24} color="#1a1a1a" />
         </TouchableOpacity>
         <Text style={styles.title}>Nouveau devis</Text>
       </View>
 
-      <View style={styles.content}>
-        {/* Request Info (if from a request) */}
-        {form.requestId && (
+      <View style={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
+        {/* Info demande (optionnel) */}
+        {!!form.requestId && (
           <View style={styles.requestInfoCard}>
             <View style={styles.requestInfoHeader}>
               <FileText size={20} color="#0066CC" />
               <Text style={styles.requestInfoTitle}>Devis lié à une demande</Text>
             </View>
             <Text style={styles.requestInfoText}>
-              Ce devis est lié à la demande #{form.requestId}. Une fois le devis créé, le client en sera notifié.
+              Ce devis est lié à la demande #{form.requestId}. Le client sera notifié à l’envoi.
             </Text>
           </View>
         )}
 
-        {/* Client Section */}
+        {/* Client */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Client</Text>
           <View style={styles.card}>
@@ -586,32 +507,17 @@ if (updateQuoteError) {
               <Text style={styles.cardTitle}>Informations client</Text>
             </View>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Nom du client</Text>
-              <TextInput
-                style={styles.input}
-                value={form.client.name}
-                editable={false}
-                onChangeText={(text) => setForm(prev => ({
-                  ...prev,
-                  client: { ...prev.client, name: text }
-                }))}
-                placeholder="Nom du client"
-              />
+              <Text style={styles.label}>Nom</Text>
+              <TextInput style={styles.input} value={form.client.name} editable={false} />
             </View>
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Email</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: '#e2e8f0' }]}
-                value={form.client.email}
-                editable={false}
-                placeholder="Email du client"
-                keyboardType="email-address"
-              />
+              <TextInput style={[styles.input, { backgroundColor: '#e2e8f0' }]} value={form.client.email} editable={false} />
             </View>
           </View>
         </View>
 
-        {/* Boat Section */}
+        {/* Bateau */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Bateau</Text>
           <View style={styles.card}>
@@ -620,35 +526,17 @@ if (updateQuoteError) {
               <Text style={styles.cardTitle}>Informations bateau</Text>
             </View>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Nom du bateau</Text>
-              <TextInput
-                style={styles.input}
-                value={form.boat.name || '— Aucun bateau lié —'}
-                editable={false}
-                onChangeText={(text) => setForm(prev => ({
-                  ...prev,
-                  boat: { ...prev.boat, name: text }
-                }))}
-                placeholder="Nom du bateau"
-              />
+              <Text style={styles.label}>Nom</Text>
+              <TextInput style={styles.input} value={form.boat.name || '— Aucun bateau lié —'} editable={false} />
             </View>
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Type</Text>
-              <TextInput
-                style={styles.input}
-                value={form.boat.type || '— Aucun bateau lié —'}
-                editable={false}
-                onChangeText={(text) => setForm(prev => ({
-                  ...prev,
-                  boat: { ...prev.boat, type: text }
-                }))}
-                placeholder="Type de bateau"
-              />
+              <TextInput style={styles.input} value={form.boat.type || '—'} editable={false} />
             </View>
           </View>
         </View>
 
-        {/* Validity Section */}
+        {/* Validité */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Validité</Text>
           <View style={styles.card}>
@@ -657,34 +545,23 @@ if (updateQuoteError) {
               <Text style={styles.cardTitle}>Date de validité</Text>
             </View>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Valable jusqu'au</Text>
+              <Text style={styles.label}>Valable jusqu’au</Text>
               <TextInput
                 style={styles.input}
                 value={form.validUntil}
-                onChangeText={(text) => setForm(prev => ({
-                  ...prev,
-                  validUntil: text
-                }))}
+                onChangeText={(text) => setForm(prev => ({ ...prev, validUntil: text }))}
                 placeholder="AAAA-MM-JJ"
               />
             </View>
           </View>
         </View>
 
-        {/* Services Section */}
+        {/* Services */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Services</Text>
-            <TouchableOpacity
-              style={styles.addServiceButton}
-              onPress={addService}
-              disabled={isSubmitting} // Désactiver pendant la soumission
-            >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#0066CC" />
-              ) : (
-                <Plus size={20} color="#0066CC" />
-              )}
+            <TouchableOpacity style={styles.addServiceButton} onPress={addService} disabled={isSubmitting}>
+              {isSubmitting ? <ActivityIndicator size="small" color="#0066CC" /> : <Plus size={20} color="#0066CC" />}
               <Text style={styles.addServiceButtonText}>Ajouter un service</Text>
             </TouchableOpacity>
           </View>
@@ -694,11 +571,7 @@ if (updateQuoteError) {
               <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle}>Service {index + 1}</Text>
                 {form.services.length > 1 && (
-                  <TouchableOpacity
-                    style={styles.removeServiceButton}
-                    onPress={() => removeService(service.id)}
-                    disabled={isSubmitting}
-                  >
+                  <TouchableOpacity style={styles.removeServiceButton} onPress={() => removeService(service.id)} disabled={isSubmitting}>
                     <Trash size={20} color="#ff4444" />
                   </TouchableOpacity>
                 )}
@@ -736,7 +609,7 @@ if (updateQuoteError) {
                   <Euro size={20} color="#666" />
                   <TextInput
                     style={[styles.amountInput, errors[`service-${service.id}`]?.amount && styles.inputError]}
-                    value={service.amount.toString()}
+                    value={String(service.amount)}
                     onChangeText={(text) => {
                       const amount = text.replace(/[^0-9.]/g, '');
                       updateService(service.id, 'amount', parseFloat(amount) || 0);
@@ -752,64 +625,50 @@ if (updateQuoteError) {
           ))}
         </View>
 
-        {/* Total Section */}
+        {/* Total */}
         <View style={styles.totalSection}>
           <Text style={styles.totalLabel}>Total TTC</Text>
           <Text style={styles.totalAmount}>{totalAmount.toFixed(2)} €</Text>
         </View>
 
-        {/* Submit Button */}
+        {/* Submit */}
         <TouchableOpacity
           style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
           onPress={handleSubmit}
           disabled={isSubmitting}
         >
-          {isSubmitting ? (
-            <ActivityIndicator color="white" size="small" />
-          ) : (
-            <Text style={styles.submitButtonText}>Créer le devis</Text>
-          )}
+          {isSubmitting ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.submitButtonText}>Créer le devis</Text>}
         </TouchableOpacity>
       </View>
     </ScrollView>
   );
 }
 
+// ---------- Styles ----------
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-  centered: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    flex: 1,
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    color: '#666',
-  },
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  centered: { justifyContent: 'center', alignItems: 'center', flex: 1 },
+  loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
+    }),
   },
-  backButton: {
-    padding: 8,
-    marginRight: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
-  content: {
-    padding: 20,
-  },
+  backButton: { padding: 8, marginRight: 12 },
+  title: { fontSize: 20, fontWeight: 'bold', color: '#1a1a1a' },
+
+  content: { paddingHorizontal: 20, paddingTop: 20 },
+
   requestInfoCard: {
     backgroundColor: '#f0f7ff',
     borderRadius: 12,
@@ -818,37 +677,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#bfdbfe',
   },
-  requestInfoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  requestInfoTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0066CC',
-  },
-  requestInfoText: {
-    fontSize: 14,
-    color: '#1a1a1a',
-    lineHeight: 20,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 16,
-  },
+  requestInfoHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  requestInfoTitle: { fontSize: 16, fontWeight: '600', color: '#0066CC' },
+  requestInfoText: { fontSize: 14, color: '#1a1a1a', lineHeight: 20 },
+
+  section: { marginBottom: 24 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sectionTitle: { fontSize: 18, fontWeight: '600', color: '#1a1a1a', marginBottom: 16 },
+
   card: {
     backgroundColor: 'white',
     borderRadius: 12,
@@ -856,38 +692,16 @@ const styles = StyleSheet.create({
     gap: 16,
     marginBottom: 16,
     ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  inputContainer: {
-    gap: 8,
-  },
-  label: {
-    fontSize: 14,
-    color: '#666',
-  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  cardTitle: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
+
+  inputContainer: { gap: 8 },
+  label: { fontSize: 14, color: '#666' },
   input: {
     backgroundColor: '#f8fafc',
     borderRadius: 8,
@@ -897,14 +711,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  inputError: { // Style pour les champs en erreur
-    borderColor: '#ff4444',
-    backgroundColor: '#fff5f5',
-  },
-  textArea: {
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
+  inputError: { borderColor: '#ff4444', backgroundColor: '#fff5f5' },
+  textArea: { minHeight: 80, textAlignVertical: 'top' },
+
   amountInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -914,27 +723,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  amountInput: {
-    flex: 1,
-    padding: 12,
-    fontSize: 16,
-    color: '#1a1a1a',
-    marginLeft: 8,
-  },
-  addServiceButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 8,
-  },
-  addServiceButtonText: {
-    fontSize: 14,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  removeServiceButton: {
-    padding: 8,
-  },
+  amountInput: { flex: 1, padding: 12, fontSize: 16, color: '#1a1a1a', marginLeft: 8 },
+
+  addServiceButton: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8 },
+  addServiceButtonText: { fontSize: 14, color: '#0066CC', fontWeight: '500' },
+  removeServiceButton: { padding: 8 },
+
   totalSection: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -944,62 +738,26 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 24,
     ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
-  totalLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  totalAmount: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#0066CC',
-  },
+  totalLabel: { fontSize: 18, fontWeight: '600', color: '#1a1a1a' },
+  totalAmount: { fontSize: 24, fontWeight: 'bold', color: '#0066CC' },
+
   submitButton: {
     backgroundColor: '#0066CC',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
     ...Platform.select({
-      ios: {
-        shadowColor: '#0066CC',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
-      },
+      ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
+      android: { elevation: 4 },
+      web: { boxShadow: '0 4px 8px rgba(0,102,204,0.2)' },
     }),
   },
-  submitButtonDisabled: {
-    backgroundColor: '#94a3b8', // Style pour le bouton désactivé
-  },
-  submitButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
-    marginTop: 4,
-    marginLeft: 4,
-  },
+  submitButtonDisabled: { backgroundColor: '#94a3b8' },
+  submitButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
+  errorText: { color: '#ff4444', fontSize: 12, marginTop: 4, marginLeft: 4 },
 });

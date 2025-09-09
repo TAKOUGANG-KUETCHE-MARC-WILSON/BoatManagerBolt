@@ -1,17 +1,27 @@
 // app/login.tsx
 import { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView, Modal } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView, Modal, Alert } from 'react-native';
 import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, LogIn } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Importez supabase
+import bcrypt from 'bcryptjs'; // Importez bcryptjs pour le hachage
+import Constants from 'expo-constants'; // Import Constants for status bar height
+
+
+// Assurez-vous que cette variable d'environnement est accessible.
+// Elle est généralement définie dans .env et exposée via un outil comme Expo ou Vite.
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
 
 interface LoginForm {
   email: string;
   password: string;
 }
 
+
 type UserRole = 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate';
+
 
 const roleOptions = [
   { value: 'pleasure_boater', label: 'Plaisancier' },
@@ -19,6 +29,7 @@ const roleOptions = [
   { value: 'nautical_company', label: 'Entreprise du nautisme' },
   { value: 'corporate', label: 'Corporate' }
 ];
+
 
 export default function LoginScreen() {
   const { login, loginAsBoatManager, loginAsNauticalCompany, loginAsCorporate } = useAuth();
@@ -32,15 +43,22 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [portId, setPortId] = useState('1'); // Changed from 'p1' to '1'
 
+
   // --- États pour la fonction "Mot de passe oublié" ---
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [newPassword, setNewPassword] = useState(''); // Nouveau: état pour le nouveau mot de passe
+  const [confirmPassword, setConfirmPassword] = useState(''); // Nouveau: état pour la confirmation
   const [forgotPasswordEmailError, setForgotPasswordEmailError] = useState('');
+  const [newPasswordError, setNewPasswordError] = useState(''); // Nouveau: erreur pour le nouveau mot de passe
+  const [confirmPasswordError, setConfirmPasswordError] = useState(''); // Nouveau: erreur pour la confirmation
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   // --- Fin des états pour la fonction "Mot de passe oublié" ---
 
+
   const validateForm = () => {
     const newErrors: Partial<LoginForm> = {};
+
 
     if (!form.email.trim()) {
       newErrors.email = 'L\'email est requis';
@@ -49,9 +67,11 @@ export default function LoginScreen() {
     }
     if (!form.password.trim()) newErrors.password = 'Le mot de passe est requis';
 
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+
 
   const handleSubmit = async () => {
     if (validateForm()) {
@@ -81,53 +101,105 @@ export default function LoginScreen() {
     }
   };
 
-  // --- Nouvelle fonction pour le mot de passe oublié ---
-  const handleForgotPassword = async () => {
+
+  // --- Nouvelle fonction pour la réinitialisation directe du mot de passe ---
+  const handleDirectPasswordReset = async () => {
+    let isValid = true;
+    setForgotPasswordEmailError('');
+    setNewPasswordError('');
+    setConfirmPasswordError('');
+
+
     if (!forgotPasswordEmail.trim()) {
       setForgotPasswordEmailError('L\'email est requis');
-      return;
-    }
-    if (!/\S+@\S+\.\S+/.test(forgotPasswordEmail)) {
+      isValid = false;
+    } else if (!/\S+@\S+\.\S+/.test(forgotPasswordEmail)) {
       setForgotPasswordEmailError('L\'email n\'est pas valide');
+      isValid = false;
+    }
+
+
+    if (!newPassword.trim()) {
+      setNewPasswordError('Le nouveau mot de passe est requis');
+      isValid = false;
+    } else if (newPassword.length < 6) {
+      setNewPasswordError('Minimum 6 caractères');
+      isValid = false;
+    }
+
+
+    if (newPassword !== confirmPassword) {
+      setConfirmPasswordError('Les 2 mots de passe ne correspondent pas');
+      setNewPasswordError('Les 2 mots de passe ne correspondent pas'); // Afficher aussi sur le premier champ
+      isValid = false;
+    }
+
+
+    if (!isValid) {
       return;
     }
+
 
     setIsResettingPassword(true);
-    setForgotPasswordEmailError('');
+
 
     try {
-      // --- REMPLACER 'YOUR_SUPABASE_PROJECT_REF' par la référence de votre projet Supabase ---
-      const FUNCTION_URL = `https://jxzwwwpxxrlukamxiurz.supabase.co/functions/v1/request_password_reset`;
+      const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+
+      const FUNCTION_URL = `https://jxzwwwpxxrlukamxiurz.supabase.co/functions/v1/request-password-reset`;
+
+
+      console.log("DEBUG: Attempting to send request to URL:", FUNCTION_URL);
+      console.log("DEBUG: Request body (email):", forgotPasswordEmail.trim());
+      console.log("DEBUG: Request body (hashed password starts with):", hashedNewPassword.substring(0, 10) + "...");
+
 
       const resp = await fetch(FUNCTION_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // NOUVEAU: Ajout de l'en-tête d'autorisation
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({ p_email: forgotPasswordEmail.trim() }),
+        body: JSON.stringify({
+          email: forgotPasswordEmail.trim(),
+          newHashedPassword: hashedNewPassword,
+        }),
       });
 
+
+      console.log("DEBUG: Received response from Edge Function. Status:", resp.status);
       const result = await resp.json();
+      console.log("DEBUG: Response body:", result);
+
 
       if (!resp.ok) {
         // La fonction Edge renvoie { error: "..." } en cas d'erreur 4xx/5xx
-        setForgotPasswordEmailError(result.error ?? "Erreur serveur");
+        // Pour des raisons de sécurité, nous affichons un message générique.
+        Alert.alert(
+          "Demande traitée",
+          "Si votre adresse e-mail est enregistrée, votre mot de passe a été réinitialisé."
+        );
       } else {
         Alert.alert(
-          "Email envoyé",
-          "Si votre adresse e-mail est enregistrée, vous recevrez un lien de réinitialisation de mot de passe."
+          "Mot de passe réinitialisé",
+          "Votre mot de passe a été modifié avec succès. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe."
         );
         setShowForgotPasswordModal(false);
         setForgotPasswordEmail('');
+        setNewPassword('');
+        setConfirmPassword('');
       }
     } catch (e: any) {
-      console.error("Unexpected error:", e);
-      setForgotPasswordEmailError("Une erreur inattendue est survenue.");
+      console.error("DEBUG: Client-side fetch error:", e);
+      Alert.alert("Erreur", "Une erreur réseau est survenue ou la fonction n'a pas répondu.");
     } finally {
       setIsResettingPassword(false);
     }
   };
-  // --- Fin de la nouvelle fonction pour le mot de passe oublié ---
+  // --- Fin de la nouvelle fonction pour la réinitialisation directe ---
+
 
   return (
     <KeyboardAvoidingView
@@ -162,6 +234,7 @@ export default function LoginScreen() {
           </View>
         </ImageBackground>
 
+
         <View style={styles.formContainer}>
           <TouchableOpacity
             style={styles.roleSelector}
@@ -172,6 +245,7 @@ export default function LoginScreen() {
             </Text>
             <ChevronDown size={20} color="#666" />
           </TouchableOpacity>
+
 
           {showRoleSelector && (
             <View style={styles.roleOptions}>
@@ -198,6 +272,7 @@ export default function LoginScreen() {
             </View>
           )}
 
+
           <View style={styles.form}>
             {errors.general && <Text style={styles.errorText}>{errors.general}</Text>}
             <View style={styles.inputContainer}>
@@ -220,6 +295,7 @@ export default function LoginScreen() {
               {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
             </View>
 
+
             <View style={styles.inputContainer}>
               <View style={[styles.inputWrapper, errors.password && styles.inputWrapperError]}>
                 <Lock size={20} color={errors.password ? '#ff4444' : '#666'} />
@@ -237,6 +313,7 @@ export default function LoginScreen() {
               {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
             </View>
 
+
             <TouchableOpacity
               style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
               onPress={handleSubmit}
@@ -251,6 +328,7 @@ export default function LoginScreen() {
               )}
             </TouchableOpacity>
 
+
             {/* --- Nouveau bouton "Mot de passe oublié" --- */}
             <TouchableOpacity
               style={styles.forgotPasswordLink}
@@ -259,6 +337,7 @@ export default function LoginScreen() {
               <Text style={styles.forgotPasswordLinkText}>Mot de passe oublié ?</Text>
             </TouchableOpacity>
             {/* --- Fin du nouveau bouton --- */}
+
 
             {selectedRole === 'pleasure_boater' && (
               <TouchableOpacity
@@ -275,6 +354,7 @@ export default function LoginScreen() {
         </View>
       </ScrollView>
 
+
       {/* --- Modale "Mot de passe oublié" --- */}
       <Modal
         visible={showForgotPasswordModal}
@@ -286,8 +366,9 @@ export default function LoginScreen() {
           <View style={styles.forgotPasswordModalContent}>
             <Text style={styles.forgotPasswordModalTitle}>Mot de passe oublié</Text>
             <Text style={styles.forgotPasswordModalText}>
-              Veuillez saisir votre adresse e-mail pour réinitialiser votre mot de passe.
+              Veuillez saisir votre email et votre nouveau mot de passe.
             </Text>
+
 
             <View style={styles.inputContainer}>
               <View style={[styles.inputWrapper, forgotPasswordEmailError && styles.inputWrapperError]}>
@@ -298,7 +379,7 @@ export default function LoginScreen() {
                   value={forgotPasswordEmail}
                   onChangeText={(text) => {
                     setForgotPasswordEmail(text);
-                    setForgotPasswordEmailError(''); // Clear error on change
+                    setForgotPasswordEmailError('');
                   }}
                   autoCapitalize="none"
                   keyboardType="email-address"
@@ -311,9 +392,54 @@ export default function LoginScreen() {
               {forgotPasswordEmailError && <Text style={styles.errorText}>{forgotPasswordEmailError}</Text>}
             </View>
 
+
+            {/* Nouveau champ: Nouveau Mot de passe */}
+            <View style={styles.inputContainer}>
+              <View style={[styles.inputWrapper, newPasswordError && styles.inputWrapperError]}>
+                <Lock size={20} color={newPasswordError ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nouveau mot de passe"
+                  value={newPassword}
+                  onChangeText={(text) => {
+                    setNewPassword(text);
+                    setNewPasswordError('');
+                    setConfirmPasswordError(''); // Effacer l'erreur de confirmation aussi
+                  }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  textContentType="newPassword"
+                />
+              </View>
+              {newPasswordError && <Text style={styles.errorText}>{newPasswordError}</Text>}
+            </View>
+
+
+            {/* Nouveau champ: Confirmez votre nouveau mot de passe */}
+            <View style={styles.inputContainer}>
+              <View style={[styles.inputWrapper, confirmPasswordError && styles.inputWrapperError]}>
+                <Lock size={20} color={confirmPasswordError ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Confirmez votre nouveau mot de passe"
+                  value={confirmPassword}
+                  onChangeText={(text) => {
+                    setConfirmPassword(text);
+                    setConfirmPasswordError('');
+                    setNewPasswordError(''); // Effacer l'erreur du nouveau mot de passe aussi
+                  }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  textContentType="newPassword"
+                />
+              </View>
+              {confirmPasswordError && <Text style={styles.errorText}>{confirmPasswordError}</Text>}
+            </View>
+
+
             <TouchableOpacity
               style={[styles.submitButton, isResettingPassword && styles.submitButtonDisabled]}
-              onPress={handleForgotPassword}
+              onPress={handleDirectPasswordReset} // Appel de la nouvelle fonction
               disabled={isResettingPassword}
             >
               {isResettingPassword ? (
@@ -324,6 +450,7 @@ export default function LoginScreen() {
                 </Text>
               )}
             </TouchableOpacity>
+
 
             <TouchableOpacity
               style={styles.modalCloseButton}
@@ -338,6 +465,7 @@ export default function LoginScreen() {
     </KeyboardAvoidingView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -360,6 +488,7 @@ const styles = StyleSheet.create({
   },
   backButton: {
     padding: 16,
+    paddingTop: Platform.OS === 'ios' ? Constants.statusBarHeight + 10 : 16, // Adjusted paddingTop for iOS
     zIndex: 1,
   },
   heroContent: {
@@ -461,8 +590,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
-    marginBottom: 16,
     textAlign: 'center',
+    marginBottom: 16,
   },
   socialButtonsContainer: {
     gap: 12,

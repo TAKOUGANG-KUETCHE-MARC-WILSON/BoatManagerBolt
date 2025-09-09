@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, Stack } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, Calendar, FileText, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
@@ -389,19 +391,24 @@ const handleSubmit = async () => {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>
-          {isNewDocument ? 'Nouveau document' : 'Modifier le document'}
-        </Text>
-      </View>
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+    <Stack.Screen options={{ headerShown: false }} />
+    <StatusBar style="dark" backgroundColor="#fff" />
 
+    <View style={styles.header}>
+      <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <ArrowLeft size={24} color="#1a1a1a" />
+      </TouchableOpacity>
+
+      <Text style={styles.title}>
+        {isNewDocument ? 'Nouveau document' : 'Modifier le document'}
+      </Text>
+
+      {/* petit placeholder pour garder le titre parfaitement centré */}
+      <View style={{ width: 24, height: 24 }} />
+    </View>
+
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <View style={styles.form}>
         <TouchableOpacity
           style={[styles.fileSelector, errors.file_url && styles.fileSelectorError]}
@@ -493,17 +500,26 @@ const handleSubmit = async () => {
         )}
       </View>
     </ScrollView>
+     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#fff', // même fond que le header
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
+  contentContainer: {
+    paddingBottom: 24, // confort de scroll
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between', // espace back / titre / placeholder
     padding: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
@@ -511,13 +527,20 @@ const styles = StyleSheet.create({
   },
   backButton: {
     padding: 8,
-    marginRight: 16,
+    marginRight: 8,
   },
   title: {
+    flex: 1,                  // <-- important pour centrer
+    textAlign: 'center',      // <-- important pour centrer
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
+  form: {
+    padding: 16,
+    gap: 20,
+  },
+  
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -551,10 +574,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  form: {
-    padding: 16,
-    gap: 20,
-  },
+
   fileSelector: {
     flexDirection: 'row',
     alignItems: 'center',

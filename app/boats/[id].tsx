@@ -7,7 +7,67 @@ import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import CustomDateTimePicker from '@/components/CustomDateTimePicker'; // Import CustomDateTimePicker
 import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput, ActivityIndicator } from 'react-native'; // Assurez-vous que tous les imports sont là
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput, ActivityIndicator, useWindowDimensions } from 'react-native'; // Assurez-vous que tous les imports sont là
+import { Stack } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+
+// --- Notifications & logs (prod-safe) ---
+const notifyError = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // Evite l'Alert bloquante sur Android
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(msg, m.ToastAndroid.LONG));
+  } else {
+    Alert.alert('Oups', msg);
+  }
+};
+
+const notifyInfo = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(msg, m.ToastAndroid.SHORT));
+  } else {
+    Alert.alert('', msg);
+  }
+};
+
+const log = (...args: any[]) => { if (__DEV__) console.log(...args); };
+const logError = (scope: string, err: unknown) => {
+  if (__DEV__) console.error(`[${scope}]`, err);
+  // Intégration Sentry/Bugsnag possible ici
+};
+
+// --- Helpers URL image bateau ---
+const DEFAULT_BOAT_PHOTO = 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1';
+const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const getSignedBoatPhoto = async (value?: string) => {
+  try {
+    if (!value) return DEFAULT_BOAT_PHOTO;
+    if (isHttpUrl(value)) return value;
+
+    // cas "storage/v1/object/public/boat.images/xxx"
+    const prefix = '/storage/v1/object/public/boat.images/';
+    const idx = value.indexOf(prefix);
+    if (idx !== -1) {
+      const path = value.substring(idx + prefix.length);
+      const { data, error } = await supabase.storage.from('boat.images').createSignedUrl(path, 60 * 60);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    }
+
+    // cas chemin interne bucket: "boat.images/.../file.jpg"
+    if (value.startsWith('boat.images/')) {
+      const { data, error } = await supabase.storage.from('boat.images').createSignedUrl(value.replace('boat.images/', ''), 60 * 60);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    }
+  } catch (e) {
+    logError('getSignedBoatPhoto', e);
+  }
+  return DEFAULT_BOAT_PHOTO;
+};
+
+
 
 interface BoatDetails {
   id: string;
@@ -50,6 +110,7 @@ interface InventoryItem {
   serial_number?: string; // Changed from serialNumber to serial_number
   purchase_date?: string; // Changed from purchaseDate to purchase_date
   notes?: string;
+  description?: string
 }
 
 interface UsageType {
@@ -108,50 +169,50 @@ const UsageTypeTab = memo(({
   }, [setUsageType]);
 
   const handleSaveUsageType = useCallback(async () => {
-    if (!boatId) {
-      Alert.alert('Erreur', 'ID du bateau manquant pour enregistrer les informations d\'utilisation.');
-      return;
+  if (!boatId) {
+    notifyError('ID du bateau manquant pour enregistrer ces informations.');
+    return;
+  }
+
+  const updatedUsageType: UsageType = {
+    ...usageType,
+    leaseType: usageType.ownershipStatus === 'financial_lease' ? leaseType : undefined,
+    leaseEndDate: usageType.ownershipStatus === 'financial_lease' ? leaseEndDate : undefined,
+    usagePurposes: {
+      ...usageType.usagePurposes,
+      otherDescription: usageType.usagePurposes.other ? otherUsageDescription : undefined,
+    },
+  };
+
+  try {
+    const { error } = await supabase
+      .from('boat_usage_types')
+      .upsert(
+        {
+          boat_id: Number(boatId),
+          legal_nature: updatedUsageType.legalNature,
+          ownership_status: updatedUsageType.ownershipStatus,
+          lease_type: updatedUsageType.leaseType,
+          lease_end_date: updatedUsageType.leaseEndDate,
+          usage_purposes: updatedUsageType.usagePurposes,
+          other_description: updatedUsageType.usagePurposes.otherDescription,
+        },
+        { onConflict: 'boat_id' }
+      )
+      .select()
+      .single();
+
+    if (error) {
+      logError('saveUsageType', error);
+      notifyError(`Échec de l'enregistrement (${error.message}).`);
+    } else {
+      notifyInfo('Type d’utilisation enregistré ✅');
     }
-
-    const updatedUsageType: UsageType = {
-      ...usageType,
-      leaseType: usageType.ownershipStatus === 'financial_lease' ? leaseType : undefined,
-      leaseEndDate: usageType.ownershipStatus === 'financial_lease' ? leaseEndDate : undefined,
-      usagePurposes: {
-        ...usageType.usagePurposes,
-        otherDescription: usageType.usagePurposes.other ? otherUsageDescription : undefined
-      }
-    };
-
-    try {
-      const { data, error } = await supabase
-        .from('boat_usage_types')
-        .upsert(
-          {
-            boat_id: parseInt(boatId),
-            legal_nature: updatedUsageType.legalNature,
-            ownership_status: updatedUsageType.ownershipStatus,
-            lease_type: updatedUsageType.leaseType,
-            lease_end_date: updatedUsageType.leaseEndDate,
-            usage_purposes: updatedUsageType.usagePurposes,
-            other_description: updatedUsageType.usagePurposes.otherDescription,
-          },
-          { onConflict: 'boat_id' } // Upsert based on boat_id
-        )
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error saving usage type:', error);
-        Alert.alert('Erreur', `Échec de l'enregistrement des informations d'utilisation: ${error.message}`);
-      } else {
-        Alert.alert('Succès', 'Les informations d\'utilisation ont été enregistrées avec succès.');
-      }
-    } catch (e) {
-      console.error('Unexpected error saving usage type:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de l\'enregistrement.');
-    }
-  }, [boatId, usageType, leaseType, leaseEndDate, otherUsageDescription]);
+  } catch (e) {
+    logError('saveUsageType', e);
+    notifyError('Erreur inattendue lors de l’enregistrement.');
+  }
+}, [boatId, usageType, leaseType, leaseEndDate, otherUsageDescription]);
 
   return (
     <View style={styles.tabContent}>
@@ -686,6 +747,9 @@ export default function BoatProfileScreen() {
 
   if (loading) {
     return (
+      <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <StatusBar style="dark" backgroundColor="#fff" />
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
@@ -701,11 +765,15 @@ export default function BoatProfileScreen() {
           <Text style={styles.loadingText}>Chargement des données du bateau...</Text>
         </View>
       </View>
+      </SafeAreaView>
     );
   }
 
   if (fetchError || !boatDetails) {
     return (
+      <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <StatusBar style="dark" backgroundColor="#fff" />
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
@@ -726,11 +794,15 @@ export default function BoatProfileScreen() {
           </TouchableOpacity>
         </View>
       </View>
+       </SafeAreaView>
     );
   }
 
   return (
-    <ScrollView style={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+    <Stack.Screen options={{ headerShown: false }} />
+    <StatusBar style="dark" backgroundColor="#fff" />
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
@@ -778,7 +850,7 @@ export default function BoatProfileScreen() {
             Carnet de suivi technique
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity
+       <TouchableOpacity
           style={[styles.tab, activeTab === 'inventory' && styles.activeTab]}
           onPress={() => setActiveTab('inventory')}
         >
@@ -930,13 +1002,13 @@ export default function BoatProfileScreen() {
               <Text style={styles.addButtonText}>Ajouter un équipement</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.checklistButton}
               onPress={handleOpenInventory}
             >
               <ClipboardList size={20} color="#0066CC" />
               <Text style={styles.checklistButtonText}>Inventaire complet</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
           </View>
 
           {inventory.length > 0 ? (
@@ -986,11 +1058,17 @@ export default function BoatProfileScreen() {
         />
       )}
     </ScrollView>
+    </SafeAreaView>
 
   );
 }
 
 const styles = StyleSheet.create({
+   safeArea: {
+    flex: 1,
+    backgroundColor: '#fff', // même couleur que le header
+  },
+
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',

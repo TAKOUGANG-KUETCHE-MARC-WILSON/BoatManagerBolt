@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, Stack } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, Image as ImageIcon, X, MapPin } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
@@ -489,28 +491,23 @@ export default function EditBoatScreen() {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Modifier le bateau</Text>
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => { /* Add navigation to edit boat details if needed */ }}
-        >
-          {/* <Edit size={24} color="#0066CC" /> */}
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
+    <Stack.Screen options={{ headerShown: false }} />
+    <StatusBar style="dark" backgroundColor="#fff" />
 
-      <Image
-    source={{ uri: form.photo }}
-    style={styles.boatImage}
-    resizeMode="cover"
-  />
+    <View style={styles.header}>
+      <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <ArrowLeft size={24} color="#1a1a1a" />
+      </TouchableOpacity>
+
+      <Text style={styles.title}>Modifier le bateau</Text>
+
+      {/* Placeholder pour garder le titre parfaitement centré */}
+      <View style={{ width: 36, height: 36 }} />
+    </View>
+
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+      <Image source={{ uri: form.photo }} style={styles.boatImage} resizeMode="cover" />
 
       {/* Tabs for boat details - assuming these are part of the original file structure */}
       {/* You might need to uncomment and adjust these sections based on your actual file */}
@@ -804,19 +801,27 @@ export default function EditBoatScreen() {
         onSearchQueryChange={setPortSearch}
       />
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+   safeArea: {
+    flex: 1,
+    backgroundColor: '#fff', // comme le header
+  },
   container: {
     flex: 1,
     backgroundColor: '#f7fafc',
   },
+  contentContainer: {
+    paddingBottom: 24,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: Platform.OS === 'ios' ? 48 : 24,
-    paddingBottom: 12,
+    justifyContent: 'space-between',   // <-- clé pour le centrage du titre
+    paddingVertical: 12,               // plus besoin de paddingTop manuel
     paddingHorizontal: 16,
     backgroundColor: '#fff',
     borderBottomWidth: 1,

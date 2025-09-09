@@ -1,10 +1,30 @@
 {
+  "name": "YOUR BOAT MANAGER",
+  "slug": "boat-manager",
+  "scheme": "yourboatmanager",
+  "version": "1.0.0",
+  "orientation": "portrait",
+  "userInterfaceStyle": "light",
+  "jsEngine": "jsc",
+  "icon": "./assets/images/icon.png",
+  "splash": {
+    "image": "./assets/images/splash.png",
+    "backgroundColor": "#ffffff",
+    "resizeMode": "contain"
+  },
+  "web": {
+    "favicon": "./assets/images/favicon.png"
+  },
   "assetBundlePatterns": [
     "**/*"
   ],
   "experiments": {
     "typedRoutes": true
   },
+  "platforms": [
+    "android",
+    "ios"
+  ],
   "extra": {
     "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
     "EXPO_PUBLIC_SUPABASE_URL": "https://jxzwwwpxxrlukamxiurz.supabase.co",
@@ -13,34 +33,35 @@
     },
     "router": {}
   },
-  "icon": "./assets/images/icon.png",
   "ios": {
     "bundleIdentifier": "com.marcwilson.yourboatmanager",
-    "supportsTablet": true
-  },
-  "jsEngine": "jsc",
-  "name": "YOUR BOAT MANAGER",
-  "orientation": "portrait",
-  "platforms": [
-    "android",
-    "ios"
-  ],
-  "plugins": [
-    "expo-router"
-  ],
-  "scheme": "yourboatmanager",
-  "slug": "boat-manager",
-  "splash": {
-    "backgroundColor": "#ffffff",
-    "image": "./assets/images/splash.png",
-    "resizeMode": "contain"
-  },
-  "userInterfaceStyle": "light",
-  "version": "1.0.0",
-  "web": {
-    "favicon": "./assets/images/favicon.png"
+    "supportsTablet": true,
+    "buildNumber": "1",
+    "infoPlist": {
+      "NSCameraUsageDescription": "Cette app utilise la caméra pour prendre des photos (bateaux, documents).",
+      "NSPhotoLibraryUsageDescription": "Cette app a besoin d’accéder à votre photothèque pour sélectionner des images.",
+      "NSPhotoLibraryAddUsageDescription": "Cette app peut enregistrer des photos dans votre photothèque.",
+      "ITSAppUsesNonExemptEncryption": false
+    }
   },
   "android": {
-    "package": "com.marcwilson.yourboatmanager"
-  }
+    "package": "com.marcwilson.yourboatmanager",
+    "versionCode": 1,
+    "softwareKeyboardLayoutMode": "resize",
+    "adaptiveIcon": {
+      "foregroundImage": "./assets/images/adaptive-icon.png",
+      "backgroundColor": "#ffffff"
+    },
+    "permissions": [
+      "CAMERA",
+      "READ_MEDIA_IMAGES",
+      "POST_NOTIFICATIONS"
+    ]
+  },
+  "plugins": [
+    "expo-router",
+    "expo-notifications",
+    "expo-apple-authentication"
+  ],
+  "owner": "marc_wilson237"
 }

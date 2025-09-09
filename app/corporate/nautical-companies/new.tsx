@@ -249,6 +249,8 @@ export default function NewNauticalCompanyScreen() {
     email: '',
     phone: '',
     address: '',
+    iban: '', // Added IBAN
+    bic: '', // Added BIC
     password: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -334,6 +336,14 @@ export default function NewNauticalCompanyScreen() {
 
     if (!formData.address.trim()) {
       newErrors.address = 'L\'adresse est requise';
+    }
+
+    // Validate IBAN and BIC
+    if (!formData.iban.trim()) {
+      newErrors.iban = 'L\'IBAN est requis';
+    }
+    if (!formData.bic.trim()) {
+      newErrors.bic = 'Le BIC est requis';
     }
 
     if (!formData.password.trim()) {
@@ -435,6 +445,8 @@ export default function NewNauticalCompanyScreen() {
             last_name: 'Company', // Use a generic value for last_name
             phone: formData.phone,
             address: formData.address,
+            iban: formData.iban, // Include IBAN
+            bic: formData.bic, // Include BIC
             profile: 'nautical_company',
             status: 'active', // New users are active by default
             last_login: new Date().toISOString(), // Set initial last_login
@@ -594,6 +606,38 @@ export default function NewNauticalCompanyScreen() {
                 />
               </View>
               {errors.address && <Text style={styles.errorText}>{errors.address}</Text>}
+            </View>
+
+            {/* IBAN Field */}
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>IBAN</Text>
+              <View style={[styles.inputContainer, errors.iban && styles.inputError]}>
+                <Mail size={20} color={errors.iban ? '#ff4444' : '#666'} /> {/* Using Mail icon for IBAN */}
+                <TextInput
+                  style={styles.input}
+                  value={formData.iban}
+                  onChangeText={(text) => setFormData(prev => ({ ...prev, iban: text }))}
+                  placeholder="FRXX XXXX XXXX XXXX XXXX XXXX XXX"
+                  autoCapitalize="characters"
+                />
+              </View>
+              {errors.iban && <Text style={styles.errorText}>{errors.iban}</Text>}
+            </View>
+
+            {/* BIC Field */}
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>BIC</Text>
+              <View style={[styles.inputContainer, errors.bic && styles.inputError]}>
+                <Mail size={20} color={errors.bic ? '#ff4444' : '#666'} /> {/* Using Mail icon for BIC */}
+                <TextInput
+                  style={styles.input}
+                  value={formData.bic}
+                  onChangeText={(text) => setFormData(prev => ({ ...prev, bic: text }))}
+                  placeholder="XXXXXXXXXXX"
+                  autoCapitalize="characters"
+                />
+              </View>
+              {errors.bic && <Text style={styles.errorText}>{errors.bic}</Text>}
             </View>
 
             <View style={styles.formGroup}>
@@ -1202,4 +1246,5 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   }
 });
+
 

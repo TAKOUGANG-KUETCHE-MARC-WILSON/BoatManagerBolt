@@ -4,86 +4,102 @@ import { Platform } from 'react-native';
 import { Chrome as Home, MessageSquare, User, FileText } from 'lucide-react-native';
 import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '@/src/lib/supabase'; // Assurez-vous que cette ligne est présente
+import { supabase } from '@/src/lib/supabase';
 
 export default function TabLayout() {
   const { user } = useAuth();
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadRequests, setUnreadRequests] = useState(0);
 
+  const fetchUnreadCounts = useCallback(async () => {
+    // pas d’utilisateur -> on remet à zéro silencieusement
+    if (!user?.id) {
+      setUnreadMessages(0);
+      setUnreadRequests(0);
+      return;
+    }
+
+    let mounted = true;
+
+    // --- Messages non lus ---
+    try {
+      const { data: memberConversations, error: memberError } = await supabase
+        .from('conversation_members')
+        .select('conversation_id,last_read_at')
+        .eq('user_id', user.id);
+
+      if (memberError || !memberConversations?.length) {
+        if (__DEV__) console.warn('[tabs] unread messages: no conversations or query failed');
+        if (mounted) setUnreadMessages(0);
+      } else {
+        // Compter sans transférer les lignes
+        const counts = await Promise.all(
+          memberConversations.map(async (member) => {
+            const { count, error } = await supabase
+              .from('messages')
+              .select('id', { count: 'exact', head: true })
+              .eq('conversation_id', member.conversation_id)
+              .gt('created_at', member.last_read_at || '1970-01-01T00:00:00Z')
+              .neq('sender_id', user.id);
+            if (error) {
+              if (__DEV__) console.warn('[tabs] unread messages: count failed for a conversation');
+              return 0;
+            }
+            return count || 0;
+          })
+        );
+
+        const total = counts.reduce((a, b) => a + b, 0);
+        if (mounted) setUnreadMessages(total);
+      }
+    } catch {
+      if (__DEV__) console.warn('[tabs] unread messages: unexpected error');
+      if (mounted) setUnreadMessages(0);
+    }
+
+    // --- Demandes « nouvelles » / à suivre ---
+    try {
+      const { count, error } = await supabase
+        .from('service_request')
+        .select('id', { count: 'exact', head: true })
+        .eq('id_client', user.id)
+        .in('statut', ['submitted', 'quote_sent']);
+
+      if (error) {
+        if (__DEV__) console.warn('[tabs] unread requests: count failed');
+        if (mounted) setUnreadRequests(0);
+      } else if (mounted) {
+        setUnreadRequests(count || 0);
+      }
+    } catch {
+      if (__DEV__) console.warn('[tabs] unread requests: unexpected error');
+      if (mounted) setUnreadRequests(0);
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
+
   useEffect(() => {
-    const fetchUnreadCounts = async () => {
-      if (!user?.id) {
-        setUnreadMessages(0);
-        setUnreadRequests(0);
-        return;
-      }
+    let cancelled = false;
 
-      // Fetch unread messages
-      try {
-        // Récupérer toutes les conversations de l'utilisateur
-        const { data: memberConversations, error: memberError } = await supabase
-          .from('conversation_members')
-          .select('conversation_id, last_read_at')
-          .eq('user_id', user.id);
-
-        if (memberError) {
-          console.error('Error fetching member conversations for unread count:', memberError);
-          setUnreadMessages(0);
-          return;
-        }
-
-        let totalUnreadMessages = 0;
-        for (const memberConv of memberConversations) {
-          const { count: unreadInConv, error: unreadError } = await supabase
-            .from('messages')
-            .select('id', { count: 'exact' })
-            .eq('conversation_id', memberConv.conversation_id)
-            .gt('created_at', memberConv.last_read_at || '1970-01-01T00:00:00Z') // Compare with last_read_at, default to epoch if null
-            .neq('sender_id', user.id); // Don't count messages sent by the user themselves
-
-          if (unreadError) {
-            console.error('Error counting unread messages in conversation:', unreadError);
-          } else {
-            totalUnreadMessages += unreadInConv || 0;
-          }
-        }
-        setUnreadMessages(totalUnreadMessages);
-
-      } catch (e) {
-        console.error('Unexpected error fetching unread messages count:', e);
-        setUnreadMessages(0);
-      }
-
-      // Fetch unread requests for pleasure boater
-      try {
-        const { count: requestsCount, error: requestsError } = await supabase
-          .from('service_request')
-          .select('id', { count: 'exact' })
-          .eq('id_client', user.id) // Filter by the logged-in pleasure boater's ID
-          .in('statut', ['submitted', 'quote_sent']); // Consider these statuses as "new" for the client
-
-        if (requestsError) {
-          console.error('Error fetching unread requests count:', requestsError);
-          setUnreadRequests(0);
-        } else {
-          setUnreadRequests(requestsCount || 0);
-        }
-      } catch (e) {
-        console.error('Unexpected error fetching unread requests count:', e);
-        setUnreadRequests(0);
-      }
+    const run = async () => {
+      if (!cancelled) await fetchUnreadCounts();
     };
 
-    fetchUnreadCounts();
+    run();
 
-    // Vous pouvez ajouter un intervalle pour rafraîchir les comptes régulièrement
-    const interval = setInterval(fetchUnreadCounts, 30000); // Rafraîchir toutes les 30 secondes
-    return () => clearInterval(interval); // Nettoyer l'intervalle au démontage
-  }, [user]); // Re-run effect when user object changes (e.g., after login/logout)
+    // rafraîchit toutes les 30s si l’utilisateur est connecté
+    const interval = user?.id ? setInterval(run, 30_000) : null;
 
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [user?.id, fetchUnreadCounts]);
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
     <Tabs

@@ -34,7 +34,7 @@ interface Request {
       name: string;
       type: string;
     } | null; // Permet à 'boat' d'être null
-
+  forwardAccepted?: boolean; 
   };
   boatManager?: { // Optional, as not all requests have a BM directly involved in creation
     id: string;
@@ -138,7 +138,9 @@ const statusConfig = {
   }
 };
 
-
+const devAlert = (title: string, message: string) => {
+  if (__DEV__) Alert.alert(title, message);
+};
 export default function RequestsScreen() {
   const { user } = useAuth(); // Get the current user from AuthContext
   const [sortKey, setSortKey] = useState<SortKey>('date');
@@ -157,7 +159,7 @@ export default function RequestsScreen() {
   const fetchRequests = useCallback(async () => {
     setLoading(true);
     if (!user?.id) {
-      Alert.alert('Erreur', 'Utilisateur non authentifié.');
+      devAlert('Erreur', 'Utilisateur non authentifié.');
       setLoading(false);
       return;
     }
@@ -184,7 +186,7 @@ export default function RequestsScreen() {
 
       if (error) {
         console.error('Error fetching requests:', error);
-        Alert.alert('Erreur', 'Impossible de charger les demandes.');
+       devAlert('Erreur', 'Impossible de charger les demandes.');
         return;
       }
 
@@ -244,16 +246,25 @@ export default function RequestsScreen() {
             scheduledDate = scheduledMatch[1];
           }
         }
+const rawStatus = String(req.statut ?? '').trim().toLowerCase();
 
+// accepted -> forwarded + flag
+const isForwardAccepted = rawStatus === 'accepted';
+const normalizedStatus = (isForwardAccepted ? 'forwarded' : rawStatus) as BoatManagerRequestStatus;
 
-        return {
-          id: req.id.toString(),
-          title: req.description, // Using description as title for now
-          type: req.categorie_service?.description1 || 'N/A',
-          status: req.statut as BoatManagerRequestStatus,
-          urgency: req.urgence as UrgencyLevel,
-          date: req.date,
-          description: req.description,
+// (optionnel mais sûr) si jamais un statut inconnu arrive, retomber sur 'submitted'
+const safeStatus: BoatManagerRequestStatus =
+  (normalizedStatus in (statusConfig as any)) ? normalizedStatus : 'submitted';
+
+return {
+  id: req.id.toString(),
+  title: req.description,
+  type: req.categorie_service?.description1 || 'N/A',
+  status: safeStatus,                          // 👈 toujours une clé connue
+  forwardAccepted: isForwardAccepted,          // 👈 flag “acceptée”
+  urgency: (req.urgence as UrgencyLevel) ?? 'normal',
+  date: req.date,
+  description: req.description,
           category: 'Services', // Default category, adjust if needed
           client: {
             id: req.users.id.toString(),
@@ -281,7 +292,7 @@ export default function RequestsScreen() {
       setRequests(formattedRequests);
     } catch (e) {
       console.error('Unexpected error:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
+     devAlert('Erreur', 'Une erreur inattendue est survenue lors du chargement des demandes.');
     } finally {
       setLoading(false);
     }
@@ -444,7 +455,7 @@ export default function RequestsScreen() {
 
         if (error) {
           console.error('Error updating status:', error);
-          Alert.alert('Erreur', `Impossible de mettre à jour le statut: ${error.message}`);
+         devAlert('Erreur', `Impossible de mettre à jour le statut: ${error.message}`);
         } else {
           setRequests(prev =>
             prev.map(req =>
@@ -455,11 +466,11 @@ export default function RequestsScreen() {
           );
           setRequestToUpdate(null);
           setShowStatusChangeModal(false);
-          Alert.alert('Succès', 'Statut mis à jour avec succès.');
+         devAlert('Succès', 'Statut mis à jour avec succès.');
         }
       } catch (e) {
         console.error('Unexpected error during status update:', e);
-        Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la mise à jour du statut.');
+       devAlert('Erreur', 'Une erreur inattendue est survenue lors de la mise à jour du statut.');
       }
     }
   };
@@ -833,18 +844,24 @@ export default function RequestsScreen() {
                       </View>
                       <Text style={styles.requestType}>{request.type}</Text>
                     </View>
-                    <TouchableOpacity // Wrap status badge with TouchableOpacity
-                      style={[styles.statusBadge, { backgroundColor: `${status.color}15` }]}
-                      onPress={() => {
-                        setRequestToUpdate(request);
-                        setShowStatusChangeModal(true);
-                      }}
-                    >
-                      <StatusIcon size={16} color={status.color} />
-                      <Text style={[styles.statusText, { color: status.color }]}>
-                        {status.label}
-                      </Text>
-                    </TouchableOpacity>
+                    <TouchableOpacity
+  style={[styles.statusBadge, { backgroundColor: `${status.color}15` }]}
+  onPress={() => {
+    setRequestToUpdate(request);
+    setShowStatusChangeModal(true);
+  }}
+>
+  <StatusIcon size={16} color={status.color} />
+  <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+
+  {/* 👇 pastille "acceptée" si ça vient d'un statut 'accepted' côté DB */}
+  {request.forwardAccepted && (
+    <View style={styles.acceptedPill}>
+      <CheckCircle2 size={12} color="#16A34A" />
+      <Text style={styles.acceptedPillText}>acceptée</Text>
+    </View>
+  )}
+</TouchableOpacity>
                   </View>
                   
                   <View style={styles.requestDetails}>
@@ -991,7 +1008,7 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
       },
       android: {
-        elevation: 2,
+        elevation: 0,
       },
       web: {
         boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
@@ -1519,6 +1536,21 @@ const styles = StyleSheet.create({
     gap: 12,
     flex: 1,
   },
+  acceptedPill: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 4,
+  marginLeft: 6,
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 12,
+  backgroundColor: 'rgba(22, 163, 74, 0.12)', // vert léger
+},
+acceptedPillText: {
+  fontSize: 10,
+  fontWeight: '600',
+  color: '#16A34A',
+},
   statusOptionLabel: {
     fontSize: 16,
     fontWeight: '500',

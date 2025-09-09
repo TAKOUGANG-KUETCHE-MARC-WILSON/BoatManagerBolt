@@ -1,9 +1,9 @@
 // app/(tabs)/index.tsx
 
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ImageBackground, ScrollView, TouchableOpacity, Platform, Animated, Image, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, ImageBackground, ScrollView, TouchableOpacity, Platform, Animated, Image, Modal, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { Wrench, MessagesSquare, Handshake as HandshakeIcon, Tag, ShoppingBag as Cart, PenTool as Tool, Hammer, Settings, Gauge, Key, Shield, FileText, ChevronDown, Plus, User, Phone, Mail, Star, Search, MapPin, X, ArrowLeft, Anchor, MessageSquare, ChevronRight } from 'lucide-react-native';
+import { Wrench, MessagesSquare, Handshake as HandshakeIcon, Tag, ShoppingBag as Cart, PenTool as Tool, Hammer, Settings, Gauge, Key, Shield, FileText, ChevronDown, Phone, Mail, Star, MapPin, X, ArrowLeft, Anchor, MessageSquare, ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import TemporaryPortModal from '../../components/TemporaryPortModal'; // <-- Importation du nouveau composant
@@ -48,7 +48,38 @@ interface BoatManagerDetails {
 }
 
 const AVATAR_BUCKET = 'avatars';
+const BOAT_BUCKET = 'boat.images';
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+
+const DEFAULT_BOAT_IMAGE =
+  'https://images.unsplash.com/photo-1505852679233-d9fd70aff56d?q=80&w=1600&auto=format&fit=crop';
+
+const devLog   = (...a: any[]) => { if (__DEV__) console.log(...a); };
+const devError = (...a: any[]) => { if (__DEV__) console.error(...a); };
+
+/** Wrap générique : n'émet jamais d'exception, renvoie un fallback si erreur */
+async function safeQuery<T>(
+  fn: () => Promise<{ data: T; error: any }>,
+  fallback: T
+): Promise<T> {
+  try {
+    const { data, error } = await fn();
+    if (error || data == null) return fallback;
+    return data;
+  } catch (e) {
+    devError('safeQuery error:', e);
+    return fallback;
+  }
+}
+
+/** Timeout doux pour éviter les promesses qui pendent */
+function withTimeout<T>(p: Promise<T>, ms = 10_000): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]) as Promise<T>;
+}
+
 
 const isHttpUrl = (v?: string) =>
   !!v && (v.startsWith('http://') || v.startsWith('https://'));
@@ -61,6 +92,14 @@ function extractBucketAndPathFromSupabaseUrl(url: string) {
   return { bucket, path };
 }
 
+
+
+function inferBucketFromPath(path: string) {
+  if (path.startsWith('boat.images/')) return BOAT_BUCKET;
+  if (path.startsWith('avatars/')) return AVATAR_BUCKET;
+  // si tu stockes sans préfixe de bucket, garde un défaut
+  return AVATAR_BUCKET;
+}
 async function getAvatarUrl(value?: string | null): Promise<string> {
   if (!value || !`${value}`.trim()) return DEFAULT_AVATAR;
 
@@ -68,33 +107,27 @@ async function getAvatarUrl(value?: string | null): Promise<string> {
 
   // 1) Si c'est déjà une URL http(s)
   if (isHttpUrl(raw)) {
-    // Si c’est une URL Supabase, on en extrait bucket+path puis on signe
     const bp = extractBucketAndPathFromSupabaseUrl(raw);
-    if (bp) {
-      const { data, error } = await supabase.storage
-        .from(bp.bucket)
-        .createSignedUrl(bp.path, 60 * 60);
-      if (error || !data?.signedUrl) {
-        console.error('createSignedUrl failed (from http url):', { error, bp, raw });
-        return DEFAULT_AVATAR;
-      }
-      return data.signedUrl;
-    }
-    // Sinon, URL externe classique → on la garde telle quelle
-    return raw;
+    if (!bp) return raw; // URL externe → on laisse tel quel
+    const signed = await safeQuery(
+      () => supabase.storage.from(bp.bucket).createSignedUrl(bp.path, 60 * 60),
+      { signedUrl: '' } as any
+    );
+    return signed?.signedUrl || DEFAULT_AVATAR;
   }
 
-  // 2) Chemin brut dans le bucket (avec ou sans slash en tête)
-  const path = raw.replace(/^\/+/, ''); // supprime les '/' initiaux
-  const { data, error } = await supabase.storage
-    .from(AVATAR_BUCKET)
-    .createSignedUrl(path, 60 * 60);
+  // 2) Chemin brut "bucket/chemin/dans/bucket"
+  const path = raw.replace(/^\/+/, '');
+  const bucket = inferBucketFromPath(path);
+  const relative = path.startsWith(bucket + '/')
+    ? path.slice(bucket.length + 1)
+    : path;
 
-  if (error || !data?.signedUrl) {
-    console.error('createSignedUrl failed (from path):', { error, bucket: AVATAR_BUCKET, path, raw });
-    return DEFAULT_AVATAR;
-  }
-  return data.signedUrl;
+  const signed = await safeQuery(
+    () => supabase.storage.from(bucket).createSignedUrl(relative, 60 * 60),
+    { signedUrl: '' } as any
+  );
+  return signed?.signedUrl || DEFAULT_AVATAR;
 }
 
 
@@ -279,127 +312,110 @@ export default function HomeScreen() {
 
 
   useEffect(() => {
-    const fetchInitialData = async () => {
-      if (!user?.id) return;
+  let alive = true; // ← évite setState après unmount
 
-      // 1. Récupérer tous les ports du client
-      const { data: userPorts, error: userPortsError } = await supabase
-        .from('user_ports')
-        .select('port_id')
-        .eq('user_id', user.id);
+  const fetchInitialData = async () => {
+    if (!user?.id) return;
 
-      if (userPortsError) {
-        console.error('Error fetching user ports:', userPortsError);
-        return;
+    // 1) ports de l’utilisateur
+    const userPorts = await withTimeout(
+      safeQuery(() =>
+        supabase.from('user_ports').select('port_id').eq('user_id', user.id),
+        [] as Array<{ port_id: number }>
+      )
+    ).catch(() => [] as Array<{ port_id: number }>);
+    const portIds = userPorts.map(p => p.port_id);
+
+    // 2) tous les ports (pour la modale)
+    const portsData = await withTimeout(
+      safeQuery(() => supabase.from('ports').select('id, name'), [] as Array<{ id: number; name: string }>)
+    ).catch(() => [] as Array<{ id: number; name: string }>);
+
+    if (!alive) return;
+    const portsList = portsData.map(p => ({ id: String(p.id), name: p.name }));
+    setAllPorts(portsList);
+    const portsById = new Map(portsList.map(p => [p.id, p.name]));
+
+    // 3) BMs associés aux ports
+    if (portIds.length) {
+      const bmPortAssignments = await withTimeout(
+        safeQuery(() =>
+          supabase.from('user_ports').select('user_id, port_id').in('port_id', portIds),
+          [] as Array<{ user_id: string | number; port_id: number }>
+        )
+      ).catch(() => [] as Array<{ user_id: string | number; port_id: number }>);
+
+      const bmIds = [...new Set(bmPortAssignments.map(bm => bm.user_id))];
+      if (bmIds.length) {
+        const bmsData = await withTimeout(
+          safeQuery(() =>
+            supabase
+              .from('users')
+              .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
+              .in('id', bmIds)
+              .eq('profile', 'boat_manager'),
+            [] as any[]
+          )
+        ).catch(() => [] as any[]);
+
+        const formattedBms = await Promise.all(
+          bmsData.map(async (bm) => {
+            const assignedPortId = bmPortAssignments.find(x => x.user_id === bm.id)?.port_id?.toString();
+            const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
+            const avatarUrl = await getAvatarUrl(bm.avatar);
+            return {
+              id: String(bm.id),
+              name: `${bm.first_name} ${bm.last_name}`,
+              email: bm.e_mail,
+              phone: bm.phone,
+              avatar: avatarUrl || DEFAULT_AVATAR,
+              location: bmPortName,
+              rating: bm.rating,
+              reviewCount: bm.review_count,
+              bio: bm.bio || 'Boat Manager à votre écoute',
+            } as BoatManagerDetails;
+          })
+        );
+        if (!alive) return;
+        setAssociatedBoatManagers(formattedBms);
       }
+    }
 
-      const portIds = userPorts ? userPorts.map(p => p.port_id) : [];
+    // 4) Bateaux utilisateur
+    const boatsData = await withTimeout(
+      safeQuery(() =>
+        supabase
+          .from('boat')
+          .select('id, name, type, image, id_port, ports(name)')
+          .eq('id_user', user.id),
+        [] as any[]
+      )
+    ).catch(() => [] as any[]);
 
-      // 2. Récupérer tous les ports pour la modale (non filtrés)
-      const { data: portsData, error: portsError } = await supabase
-        .from('ports')
-        .select('id, name');
+    const formattedBoats = await Promise.all(
+      boatsData.map(async (boat: any) => {
+        const img = await getAvatarUrl(boat.image);
+        return {
+          id: String(boat.id),
+          name: boat.name,
+          type: boat.type,
+          image: img || DEFAULT_BOAT_IMAGE,
+          portName: boat.ports?.name || 'Port non spécifié',
+        } as BoatDetails;
+      })
+    );
+    if (!alive) return;
+    setUserBoats(formattedBoats);
+  };
 
-      if (portsError) {
-        console.error('Error fetching all ports:', portsError);
-      } else {
-        setAllPorts(portsData.map(p => ({ id: p.id.toString(), name: p.name })));
-      }
-
-      // 3. Récupérer tous les Boat Managers associés aux ports de l'utilisateur
-      if (portIds.length > 0) {
-        const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
-          .from('user_ports')
-          .select('user_id, port_id')
-          .in('port_id', portIds);
-
-        if (bmPortAssignmentsError) {
-          console.error('Error fetching BM assignments:', bmPortAssignmentsError);
-          return;
-        }
-
-        const bmIds = [...new Set(bmPortAssignments.map(bm => bm.user_id))]; // Unique BM IDs
-
-        if (bmIds.length > 0) {
-          const { data: bmsData, error: bmsError } = await supabase
-            .from('users')
-            .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
-            .in('id', bmIds)
-            .eq('profile', 'boat_manager');
-
-          if (bmsError) {
-            console.error('Error fetching BMs details:', bmsError);
-            return;
-          }
-
-          // Après avoir récupéré portsData:
-const portsList = (portsData ?? []).map(p => ({ id: p.id.toString(), name: p.name }));
-setAllPorts(portsList);
-const portsById = new Map(portsList.map(p => [p.id, p.name]));
-
-// ⬇️ getAvatarUrl est async → Promise.all
-const formattedBms: BoatManagerDetails[] = await Promise.all(
-  (bmsData ?? []).map(async (bm) => {
-    const assignedPortId = bmPortAssignments.find(bmpa => bmpa.user_id === bm.id)?.port_id?.toString();
-    const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
-    const avatarUrl = await getAvatarUrl(bm.avatar);
-
-    return {
-      id: bm.id.toString(),
-      name: `${bm.first_name} ${bm.last_name}`,
-      email: bm.e_mail,
-      phone: bm.phone,
-      avatar: avatarUrl || DEFAULT_AVATAR,
-      location: bmPortName,
-      rating: bm.rating,
-      reviewCount: bm.review_count,
-      bio: bm.bio || 'Boat Manager à votre écoute',
-    };
-  })
-);
-
-setAssociatedBoatManagers(formattedBms);
-        }
-      }
-
-      // 4. Fetch user's boats with image and port name
-      const { data: boatsData, error: boatsError } = await supabase
-        .from('boat')
-        .select(`
-          id,
-          name,
-          type,
-          image,
-          id_port,
-          ports(name) // Select port name
-        `)
-        .eq('id_user', user.id);
-
-      if (boatsError) {
-        console.error('Error fetching user boats:', boatsError);
-      } else {
-        const formattedBoats = await Promise.all(
-  (boatsData ?? []).map(async (boat) => {
-    const imageUrl = await getAvatarUrl(boat.image); // réutilisation de ta fonction
-    return {
-      id: boat.id.toString(),
-      name: boat.name,
-      type: boat.type,
-      image: imageUrl || 'https://images.pexels.com/photos/163236/...',
-      portName: boat.ports?.name || 'Port non spécifié',
-    };
-  })
-);
-
-setUserBoats(formattedBoats);
-      }
-    };
-
-    fetchInitialData();
-  }, [user]); // Added allPorts to dependencies
+  fetchInitialData().catch(devError);
+  return () => { alive = false; };
+}, [user]); // Added allPorts to dependencies
 
   useEffect(() => {
-  const fetchTemporaryBms = async () => {
+  let alive = true;
+
+  (async () => {
     if (!selectedTemporaryPortId) {
       setSelectedTemporaryPort(null);
       setTemporaryBoatManagers([]);
@@ -414,47 +430,38 @@ setUserBoats(formattedBoats);
     }
     setSelectedTemporaryPort(port);
 
-    // 1) Qui est affecté à ce port ?
-    const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
-      .from('user_ports')
-      .select('user_id, ports(name)')
-      .eq('port_id', Number(port.id));
+    const bmPortAssignments = await withTimeout(
+      safeQuery(
+        () =>
+          supabase
+            .from('user_ports')
+            .select('user_id, ports(name)')
+            .eq('port_id', Number(port.id)),
+        [] as Array<{ user_id: string | number; ports?: { name?: string } }>
+      )
+    ).catch(() => [] as Array<{ user_id: string | number; ports?: { name?: string } }>);
 
-    if (bmPortAssignmentsError) {
-      console.error('Erreur chargement BM escale:', bmPortAssignmentsError);
-      setTemporaryBoatManagers([]);
-      return;
-    }
+    const bmIds = [...new Set(bmPortAssignments.map(r => r.user_id))];
+    if (!bmIds.length) { setTemporaryBoatManagers([]); return; }
 
-    const bmIds = [...new Set((bmPortAssignments ?? []).map(r => r.user_id))];
-    if (bmIds.length === 0) {
-      setTemporaryBoatManagers([]);
-      return;
-    }
+    const bmsData = await withTimeout(
+      safeQuery(
+        () =>
+          supabase
+            .from('users')
+            .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
+            .in('id', bmIds)
+            .eq('profile', 'boat_manager'),
+        [] as any[]
+      )
+    ).catch(() => [] as any[]);
 
-    // 2) Détails des BM
-    const { data: bmsData, error: bmsError } = await supabase
-      .from('users')
-      .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
-      .in('id', bmIds)
-      .eq('profile', 'boat_manager');
-
-    if (bmsError) {
-      console.error('Erreur chargement BM:', bmsError);
-      setTemporaryBoatManagers([]);
-      return;
-    }
-
-    // 3) Même logique d’avatar que pour les BMs associés
-    const formattedBms: BoatManagerDetails[] = await Promise.all(
-      (bmsData ?? []).map(async (bm) => {
-        const avatarUrl = await getAvatarUrl(bm.avatar); // <- IMPORTANT
-        const portName =
-          bmPortAssignments.find(a => a.user_id === bm.id)?.ports?.name
-          ?? port.name;
-
+    const formatted = await Promise.all(
+      bmsData.map(async (bm: any) => {
+        const avatarUrl = await getAvatarUrl(bm.avatar);
+        const portName = bmPortAssignments.find(a => a.user_id === bm.id)?.ports?.name ?? port.name;
         return {
-          id: bm.id.toString(),
+          id: String(bm.id),
           name: `${bm.first_name} ${bm.last_name}`,
           email: bm.e_mail,
           phone: bm.phone,
@@ -463,14 +470,15 @@ setUserBoats(formattedBoats);
           rating: bm.rating,
           reviewCount: bm.review_count,
           bio: bm.bio || 'Boat Manager à votre écoute',
-        };
+        } as BoatManagerDetails;
       })
     );
 
-    setTemporaryBoatManagers(formattedBms);
-  };
+    if (!alive) return;
+    setTemporaryBoatManagers(formatted);
+  })().catch(devError);
 
-  fetchTemporaryBms();
+  return () => { alive = false; };
 }, [selectedTemporaryPortId, allPorts]);
 
 
@@ -495,7 +503,7 @@ setUserBoats(formattedBoats);
       .maybeSingle();
 
     if (error) {
-      console.error('Erreur vérification escale :', error);
+      devError('Erreur vérification escale :', error);
     }
 
     if (existingPort) {
@@ -526,7 +534,7 @@ setUserBoats(formattedBoats);
       .eq('user_id', user.id);
 
     if (convError) {
-      console.error('Erreur recherche conversation existante:', convError);
+      devError('Erreur recherche conversation existante:', convError);
       return;
     }
 
@@ -557,7 +565,7 @@ setUserBoats(formattedBoats);
         .single();
 
       if (newConvError || !newConv) {
-        console.error('Erreur création conversation:', newConvError);
+        devError('Erreur création conversation:', newConvError);
         return;
       }
 
@@ -572,7 +580,7 @@ setUserBoats(formattedBoats);
         ]);
 
       if (membersError) {
-        console.error('Erreur ajout membres conversation:', membersError);
+        devError('Erreur ajout membres conversation:', membersError);
         return;
       }
     }
@@ -587,7 +595,7 @@ setUserBoats(formattedBoats);
     });
 
   } catch (e) {
-    console.error('Erreur handleContactBoatManager:', e);
+    devError('Erreur handleContactBoatManager:', e);
   }
 }
 
@@ -789,7 +797,15 @@ const TemporaryPortSection = () => {
       onPress={() => handleSelectBoatForRequest(boat)}
       activeOpacity={0.8}
     >
-      <Image source={{ uri: boat.image }} style={styles.boatItemImage} />
+      <Image
+  source={{ uri: boat.image }}
+  style={styles.boatItemImage}
+  onError={() => {
+    setUserBoats(prev =>
+      prev.map(b => b.id === boat.id ? { ...b, image: DEFAULT_BOAT_IMAGE } : b)
+    );
+  }}
+/>
 
       {/* ← Regroupe tout le texte dans une View, et CHAQUE morceau est un <Text> */}
       <View style={styles.boatItemInfo}>
@@ -816,12 +832,12 @@ const TemporaryPortSection = () => {
         source={{ uri: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop' }}
         style={styles.heroBackground}>
         <View style={styles.overlay} />
-        <TouchableOpacity
+        {/* <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
           <ArrowLeft size={24} color="white" />
-        </TouchableOpacity>
+        </TouchableOpacity> */}
         <View style={styles.heroContent}>
           <Anchor size={40} color="white" style={styles.heroIcon} />
           <Text style={styles.heroTitle}>Your Boat Manager</Text>
@@ -903,7 +919,7 @@ const TemporaryPortSection = () => {
         )}
 
         {/* Temporary Port Section */}
-        {user && <TemporaryPortSection />}
+        {!!user && <TemporaryPortSection />}
       </View>
       
       <TemporaryPortModal
@@ -929,7 +945,7 @@ const styles = StyleSheet.create({
   },
   heroBackground: {
     height: 280,
-    justifyContent: 'space-between',
+    justifyContent: 'center',
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,

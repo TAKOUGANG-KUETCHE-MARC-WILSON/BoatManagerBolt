@@ -20,6 +20,8 @@ interface NauticalCompanyForm {
   email: string;
   phone: string;
   address: string;
+  iban: string; // Added IBAN
+  bic: string; // Added BIC
   ports: { id: string; name: string }[]; // Array of selected ports
   skills: string[]; // Array of selected skill descriptions
   boatTypes: string[]; // Array of selected boat type descriptions
@@ -36,6 +38,8 @@ export default function EditNauticalCompanyScreen() {
     email: '',
     phone: '',
     address: '',
+    iban: '', // Added IBAN
+    bic: '', // Added BIC
     ports: [],
     skills: [],
     boatTypes: [],
@@ -89,6 +93,8 @@ export default function EditNauticalCompanyScreen() {
             e_mail,
             phone,
             address,
+            iban,
+            bic,
             user_ports(port_id),
             user_categorie_service(categorie_service(description1))
           `)
@@ -114,6 +120,8 @@ export default function EditNauticalCompanyScreen() {
           email: ncData.e_mail || '',
           phone: ncData.phone || '',
           address: ncData.address || '',
+          iban: ncData.iban || '', // Set IBAN
+          bic: ncData.bic || '', // Set BIC
           ports: ncPorts,
           skills: ncSkills,
           boatTypes: [], // Not fetched from DB, will be managed by toggle
@@ -150,6 +158,14 @@ export default function EditNauticalCompanyScreen() {
     if (!formData.address.trim()) {
       newErrors.address = 'L\'adresse est requise';
     }
+
+    // Validate IBAN and BIC
+    if (!formData.iban.trim()) {
+      newErrors.iban = 'L\'IBAN est requis';
+    }
+    if (!formData.bic.trim()) {
+      newErrors.bic = 'Le BIC est requis';
+    }
     
     if (formData.ports.length === 0) {
       newErrors.ports = 'Au moins un port d\'intervention est requis';
@@ -180,6 +196,8 @@ export default function EditNauticalCompanyScreen() {
           e_mail: formData.email,
           phone: formData.phone,
           address: formData.address,
+          iban: formData.iban, // Include IBAN
+          bic: formData.bic, // Include BIC
         })
         .eq('id', id);
 
@@ -434,6 +452,38 @@ export default function EditNauticalCompanyScreen() {
               />
             </View>
             {errors.address && <Text style={styles.errorText}>{errors.address}</Text>}
+          </View>
+
+          {/* IBAN Field */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>IBAN</Text>
+            <View style={[styles.inputContainer, errors.iban && styles.inputError]}>
+              <Mail size={20} color={errors.iban ? '#ff4444' : '#666'} /> {/* Using Mail icon for IBAN */}
+              <TextInput
+                style={styles.input}
+                value={formData.iban}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, iban: text }))}
+                placeholder="FRXX XXXX XXXX XXXX XXXX XXXX XXX"
+                autoCapitalize="characters"
+              />
+            </View>
+            {errors.iban && <Text style={styles.errorText}>{errors.iban}</Text>}
+          </View>
+
+          {/* BIC Field */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>BIC</Text>
+            <View style={[styles.inputContainer, errors.bic && styles.inputError]}>
+              <Mail size={20} color={errors.bic ? '#ff4444' : '#666'} /> {/* Using Mail icon for BIC */}
+              <TextInput
+                style={styles.input}
+                value={formData.bic}
+                onChangeText={(text) => setFormData(prev => ({ ...prev, bic: text }))}
+                placeholder="XXXXXXXXXXX"
+                autoCapitalize="characters"
+              />
+            </View>
+            {errors.bic && <Text style={styles.errorText}>{errors.bic}</Text>}
           </View>
         </View>
         
@@ -825,4 +875,5 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
 });
+
 

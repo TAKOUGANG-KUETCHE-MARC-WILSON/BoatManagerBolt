@@ -9,6 +9,24 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
+import * as FileSystem from 'expo-file-system';
+import { decode as decodeBase64 } from 'base64-arraybuffer';
+
+
+// -- utils locaux pour logs/notifications propres --
+import { Alert, ToastAndroid } from 'react-native';
+
+const notifyError = (msg: string) => {
+  if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
+  else Alert.alert('Oups', msg);
+};
+const notifyInfo = (msg: string) => {
+  if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT);
+  else Alert.alert('', msg);
+};
+const log = (...args: any[]) => { if (__DEV__) console.log(...args); };
+const logError = (scope: string, err: unknown) => { if (__DEV__) console.error(`[${scope}]`, err); };
+
 
 // --- Helper function for avatar URLs ---
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
@@ -60,6 +78,7 @@ interface Chat {
   name?: string; // conversation title
   unreadCount?: number; // For UI, might be calculated
   lastMessage?: Message; // For chat list display
+  messages?: Message[]; 
 }
 
 // --- NewConversationModal Component ---
@@ -479,7 +498,9 @@ export default function MessagesScreen() {
         }
 
       } catch (e) {
-        console.error("Error fetching initial data:", e);
+        logError('fetchInitialData', e)
+
+alert('Conversation créée avec succès !');
       } finally {
         setIsLoadingChats(false);
       }
@@ -586,75 +607,82 @@ export default function MessagesScreen() {
   });
 
   const handleSend = useCallback(async (messageContent: string) => {
-    if (!activeChat || (!messageContent.trim() && !messageContent.includes('://'))) return;
+  if (!activeChat) return;
 
-    const isFile = messageContent.includes('://');
-    const content = isFile ? null : messageContent;
-    const fileUrl = isFile ? messageContent : null;
+  const trimmed = messageContent.trim();
+  if (!trimmed) return;
 
-    const { error } = await supabase.from('messages').insert({
-      conversation_id: Number(activeChat.id), // Ensure ID is number
-      sender_id: Number(user?.id), // Ensure ID is number
-      content: content,
-      file_url: fileUrl,
-    });
+  const isFile = /^\w+:\/\/.+/.test(trimmed); // URL ?
+  const { error } = await supabase.from('messages').insert({
+    conversation_id: Number(activeChat.id),
+    sender_id: currentUserId,        // <— cohérent partout
+    content: isFile ? undefined : trimmed,
+    file_url: isFile ? trimmed : undefined,
+  });
 
-    if (error) {
-      console.error('Erreur envoi message:', error);
-      alert('Échec de l\'envoi du message.');
-    }
-  }, [activeChat, user]);
+  if (error) {
+    console.error('Erreur envoi message:', error);
+    alert('Échec de l\'envoi du message.');
+  }
+}, [activeChat, currentUserId]);
 
   const uploadFileToSupabase = async (fileUri: string, fileName: string, mimeType: string) => {
-    const fileExtension = fileName.split('.').pop();
-    const filePath = `chat_attachments/${user?.id}/${Date.now()}.${fileExtension}`;
+  // 1) Toujours une extension correcte
+  const safeName = fileName || 'file';
+  const hasExt = /\.[A-Za-z0-9]+$/.test(safeName);
+  const guessedExt =
+    hasExt ? '' :
+    mimeType?.includes('jpeg') ? '.jpg' :
+    mimeType?.includes('png')  ? '.png' :
+    mimeType?.includes('pdf')  ? '.pdf' : '';
 
-    try {
-      const response = await fetch(fileUri);
-      const blob = await response.blob();
+  const filePath = `chat_attachments/${user?.id}/${Date.now()}-${safeName}${guessedExt}`;
 
-      const { data, error } = await supabase.storage
-        .from('chat_attachments') // Ensure this bucket exists in Supabase
-        .upload(filePath, blob, {
-          contentType: mimeType,
-          upsert: false,
-        });
+  // 2) Lire le fichier local en Base64 (fiable pour file:// ET content:// si copyToCacheDirectory=true)
+  const base64 = await FileSystem.readAsStringAsync(fileUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
 
-      if (error) throw error;
+  // 3) Convertir en ArrayBuffer pour Supabase
+  const arrayBuffer = decodeBase64(base64);
 
-      const publicUrl = supabase.storage.from('chat_attachments').getPublicUrl(data.path).data.publicUrl;
-      return publicUrl;
-    } catch (e) {
-      console.error('Error uploading file to Supabase Storage:', e);
-      throw new Error('Échec du téléchargement du fichier.');
-    }
-  };
+  // 4) Upload vers le bon bucket
+  const { data, error } = await supabase.storage
+    .from('chat.attachments')
+    .upload(filePath, arrayBuffer, {
+      contentType: mimeType || 'application/octet-stream',
+      upsert: false,
+    });
+
+  if (error) throw error;
+
+  // 5) URL publique
+  return supabase.storage.from('chat.attachments').getPublicUrl(data.path).data.publicUrl;
+};
 
   const handleChooseImage = useCallback(async () => {
     if (!mediaPermission?.granted) {
       const permission = await requestMediaPermission();
       if (!permission.granted) {
-        alert('Permission to access media library is required to choose photos.');
+        notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.')
         return;
       }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
-    });
+  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+  allowsEditing: true,
+  aspect: [4, 3],
+  quality: 1,
+});
 
-    if (!result.canceled && result.assets?.length) {
-      const asset = result.assets[0];
-      try {
-        const publicUrl = await uploadFileToSupabase(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
-        handleSend(publicUrl);
-      } catch (e: any) {
-        alert(e.message);
-      }
-    }
+if (!result.canceled && result.assets?.length) {
+  const asset = result.assets[0];
+  const mime = asset.mimeType || 'image/jpeg';
+  const name = asset.fileName || 'image.jpg';
+  const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
+  await handleSend(publicUrl);
+}
     setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, handleSend]);
 
@@ -671,7 +699,7 @@ export default function MessagesScreen() {
           const publicUrl = await uploadFileToSupabase(file.uri, file.name, file.mimeType || 'application/octet-stream');
           handleSend(publicUrl);
         } catch (e: any) {
-          alert(e.message);
+          notifyError("Téléversement impossible. Réessayez avec un autre fichier.");
         }
       }
     } catch (error) {
@@ -749,7 +777,7 @@ export default function MessagesScreen() {
           id: Number(user?.id), // Ensure ID is number
           name: user?.firstName + ' ' + user?.lastName || 'Current User',
           avatar: user?.avatar || DEFAULT_AVATAR,
-          type: user?.role || 'unknown',
+          type: (user?.role as Contact['type']) || 'nautical_company',
           email: user?.email || '',
           phone: user?.phone || '',
         }],
@@ -768,7 +796,7 @@ export default function MessagesScreen() {
 
     } catch (e: any) {
       console.error('Error creating new conversation:', e);
-      alert('Échec de la création de la conversation: ' + e.message);
+      notifyError("Création de la conversation impossible pour le moment.")
     } finally {
       setIsCreatingConversation(false);
     }
@@ -1014,7 +1042,7 @@ const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
             </Text>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.headerAction}
               onPress={handleCall}
             >
@@ -1025,7 +1053,7 @@ const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
               onPress={handleVideoCall}
             >
               <Video size={24} color="#0066CC" />
-            </TouchableOpacity>
+            </TouchableOpacity> */}
           </View>
         </View>
 

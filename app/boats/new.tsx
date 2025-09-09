@@ -1,15 +1,48 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
+// app/boats/new.tsx (version sans brouillon local)
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Platform,
+  Image,
+  Modal,
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  useWindowDimensions,
+} from 'react-native';
 import { router } from 'expo-router';
-import { ArrowLeft, Image as ImageIcon, X, MapPin, Search, User, Phone, Mail, Info, Check, Ship, Calendar, Wrench, Clock, Ruler } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker'; // Keep this for other ImagePicker functions
+import {
+  ArrowLeft,
+  Image as ImageIcon,
+  X,
+  MapPin,
+  User as UserIcon,
+  Phone,
+  Mail,
+  Info,
+  Check,
+  Ship,
+  Calendar,
+  Wrench,
+  Clock,
+  Ruler,
+} from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/AuthContext';
 import PortSelectionModal from '@/components/PortSelectionModal';
-import { supabase } from '@/src/lib/supabase'; // Import Supabase client
-import * as FileSystem from 'expo-file-system';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { Buffer } from 'buffer';
+import { supabase } from '@/src/lib/supabase';
 
+type IconProps = { size?: number; color?: string };
+type IconType = React.ComponentType<IconProps>;
 
 interface BoatForm {
   photo: string;
@@ -21,9 +54,9 @@ interface BoatForm {
   engine: string;
   engineHours: string;
   length: string;
-  homePort: string; // Display name for the port
-  portId: string; // ID for the port in the database
-  place_de_port: string; // Added place_de_port
+  homePort: string;
+  portId: string;
+  place_de_port: string;
 }
 
 interface BoatManagerDetails {
@@ -32,57 +65,64 @@ interface BoatManagerDetails {
   lastName: string;
   email: string;
   phone: string;
-  avatar: string;
+  avatar: string | null;
 }
 
-const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }: {
+const BASELINE_WIDTH = 375;
+const ms = (size: number, width: number) => Math.round((width / BASELINE_WIDTH) * size);
+
+const PhotoModal = ({
+  visible,
+  onClose,
+  onChoosePhoto,
+  onDeletePhoto,
+  hasPhoto,
+}: {
   visible: boolean;
   onClose: () => void;
   onChoosePhoto: () => void;
   onDeletePhoto: () => void;
   hasPhoto: boolean;
-}) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
-  >
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Photo du bateau</Text>
+}) => {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={modalStyles.overlay}>
+        <View style={modalStyles.content}>
+          <Text style={modalStyles.title}>Photo du bateau</Text>
 
-        <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
-          <ImageIcon size={24} color="#0066CC" />
-          <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
-        </TouchableOpacity>
-
-        {hasPhoto && (
-          <TouchableOpacity 
-            style={[styles.modalOption, styles.deleteOption]} 
-            onPress={() => {
-              onDeletePhoto();
-              onClose();
-            }}
-          >
-            <X size={24} color="#ff4444" />
-            <Text style={styles.deleteOptionText}>Supprimer la photo</Text>
+          <TouchableOpacity style={modalStyles.option} onPress={onChoosePhoto} accessibilityRole="button">
+            <ImageIcon size={20} color="#0066CC" />
+            <Text style={modalStyles.optionText}>Choisir dans la galerie</Text>
           </TouchableOpacity>
-        )}
 
-        <TouchableOpacity 
-          style={styles.modalCancelButton}
-          onPress={onClose}
-        >
-          <Text style={styles.modalCancelText}>Annuler</Text>
-        </TouchableOpacity>
+          {hasPhoto && (
+            <TouchableOpacity
+              style={[modalStyles.option, modalStyles.delete]}
+              onPress={() => {
+                onDeletePhoto();
+                onClose();
+              }}
+              accessibilityRole="button"
+            >
+              <X size={20} color="#ff4444" />
+              <Text style={modalStyles.deleteText}>Supprimer la photo</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={modalStyles.cancel} onPress={onClose}>
+            <Text style={modalStyles.cancelText}>Annuler</Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
-  </Modal>
-);
+    </Modal>
+  );
+};
 
 export default function NewBoatScreen() {
   const { user, ports: availablePorts } = useAuth();
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(width, insets.top), [width, insets.top]);
 
   const [form, setForm] = useState<BoatForm>({
     photo: '',
@@ -96,7 +136,7 @@ export default function NewBoatScreen() {
     length: '',
     homePort: '',
     portId: '',
-    place_de_port: '', // Initialize place_de_port
+    place_de_port: '',
   });
   const [errors, setErrors] = useState<Partial<BoatForm>>({});
   const [showPhotoModal, setShowPhotoModal] = useState(false);
@@ -105,258 +145,255 @@ export default function NewBoatScreen() {
   const [portSearch, setPortSearch] = useState('');
   const [selectedBoatManagerDetails, setSelectedBoatManagerDetails] = useState<BoatManagerDetails | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const submitting = useRef(false);
 
-  // Fetch Boat Manager details when portId changes
+  // Récupérer le Boat Manager associé quand un port valide est choisi
   useEffect(() => {
+    let active = true;
     const fetchBoatManagerDetails = async () => {
-      const parsedPortId = Number(form.portId);
+      try {
+        if (!form.portId) {
+          if (active) setSelectedBoatManagerDetails(null);
+          return;
+        }
+        const parsedPortId = Number(form.portId);
+        if (!Number.isFinite(parsedPortId)) return;
 
-   const { data: userPorts, error: userPortsError } = await supabase
-     .from('user_ports')
-     .select('user_id')
-     .eq('port_id', parsedPortId)
-     .limit(1);
+        const { data: userPorts, error: userPortsError } = await supabase
+          .from('user_ports')
+          .select('user_id')
+          .eq('port_id', parsedPortId)
+          .limit(1);
+
         if (userPortsError) {
           console.error('Error fetching user_ports:', userPortsError);
-          setSelectedBoatManagerDetails(null);
+          if (active) setSelectedBoatManagerDetails(null);
           return;
         }
 
         if (userPorts && userPorts.length > 0) {
           const boatManagerId = userPorts[0].user_id;
-          // Fetch boat manager's profile details
           const { data: bmProfile, error: bmProfileError } = await supabase
             .from('users')
-            .select('id,first_name, last_name, e_mail, phone, avatar')
+            .select('id, first_name, last_name, e_mail, phone, avatar')
             .eq('id', boatManagerId)
-            .eq('profile', 'boat_manager') // Ensure it's a boat manager
+            .eq('profile', 'boat_manager')
             .maybeSingle();
 
           if (bmProfileError) {
             console.error('Error fetching boat manager profile:', bmProfileError);
-            setSelectedBoatManagerDetails(null);
+            if (active) setSelectedBoatManagerDetails(null);
             return;
           }
 
-          if (bmProfile) {
-            setSelectedBoatManagerDetails({
-              id: bmProfile.id,
-              firstName: bmProfile.first_name,
-              lastName: bmProfile.last_name,
-              email: bmProfile.e_mail,
-              phone: bmProfile.phone,
-              avatar: bmProfile.avatar,
-            });
-          } else {
-            setSelectedBoatManagerDetails(null);
+          if (active) {
+            if (bmProfile) {
+              setSelectedBoatManagerDetails({
+                id: bmProfile.id,
+                firstName: bmProfile.first_name,
+                lastName: bmProfile.last_name,
+                email: bmProfile.e_mail,
+                phone: bmProfile.phone,
+                avatar: bmProfile.avatar,
+              });
+            } else {
+              setSelectedBoatManagerDetails(null);
+            }
           }
-        } else {
+        } else if (active) {
           setSelectedBoatManagerDetails(null);
         }
-     
+      } catch (e) {
+        console.error('fetchBoatManagerDetails error:', e);
+        if (active) setSelectedBoatManagerDetails(null);
+      }
     };
 
     fetchBoatManagerDetails();
+    return () => {
+      active = false;
+    };
   }, [form.portId]);
 
-  const handleChoosePhoto = async () => {
-  try {
-    if (!mediaPermission?.granted) {
-      const permissionResponse = await requestMediaPermission();
-      if (!permissionResponse.granted) {
-        Alert.alert('Permission requise', 'Veuillez autoriser l\'accès à votre galerie.');
+  const handleChoosePhoto = useCallback(async () => {
+    try {
+      if (!mediaPermission?.granted) {
+        const res = await requestMediaPermission();
+        if (!res.granted) {
+          Alert.alert('Permission requise', "Veuillez autoriser l'accès à votre galerie.");
+          setShowPhotoModal(false);
+          return;
+        }
+      }
+
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 1,
+      });
+
+      if (pickerResult.canceled || !pickerResult.assets?.length) {
         setShowPhotoModal(false);
         return;
       }
-    }
 
-    const pickerResult = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, // ✅ corrigé l’avertissement
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 1,
-    });
+      const asset = pickerResult.assets[0];
 
-    if (pickerResult.canceled || !pickerResult.assets?.length) {
+      // Compression + normalisation (JPEG)
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [],
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      setForm(prev => ({ ...prev, photo: manipulated.uri }));
+    } catch (e) {
+      console.error('Erreur image:', e);
+      Alert.alert('Erreur', "Impossible de sélectionner l'image.");
+    } finally {
       setShowPhotoModal(false);
-      return;
     }
+  }, [mediaPermission?.granted, requestMediaPermission]);
 
-    const asset = pickerResult.assets[0];
-
-    // ⚙️ manipulation de l'image
-    const manipulatedImage = await ImageManipulator.manipulateAsync(
-      asset.uri,
-      [],
-      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-    );
-
-    // Store the local URI for immediate preview
-    setForm(prev => ({ ...prev, photo: manipulatedImage.uri }));
-    
-  } catch (e) {
-    console.error('Erreur image:', e);
-    Alert.alert('Erreur', 'Impossible de sélectionner l’image.');
-  } finally {
-    setShowPhotoModal(false);
-  }
-};
-
-
-  const handleDeletePhoto = async () => {
-    // Check if the current photo URL is from Supabase Storage
-    if (form.photo && form.photo.includes(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl)) {
-      try {
-        // Extract the file path from the public URL
-        const filePath = form.photo.split(supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl + '/')[1];
-        if (filePath) {
-          const { error } = await supabase.storage
-            .from('boat.images')
-            .remove([filePath]);
-          if (error) {
-            console.error('Error deleting image from storage:', error);
-            Alert.alert('Erreur', `Échec de la suppression de l'image du stockage: ${error.message}`);
-            return;
+  const handleDeletePhoto = useCallback(async () => {
+    try {
+      if (form.photo && form.photo.startsWith('http')) {
+        const url = form.photo;
+        const publicRoot = supabase.storage.from('boat.images').getPublicUrl('').data.publicUrl;
+        if (url.startsWith(publicRoot)) {
+          const path = url.replace(publicRoot + '/', '');
+          if (path) {
+            const { error } = await supabase.storage.from('boat.images').remove([path]);
+            if (error) {
+              console.error('Error deleting image from storage:', error);
+            }
           }
         }
-      } catch (e: any) {
-        console.error('Error processing image deletion:', e.message || e);
-        Alert.alert('Erreur', `Une erreur est survenue lors de la suppression de l'image: ${e.message || 'Veuillez réessayer.'}`);
       }
+    } catch (e) {
+      console.error('Error processing image deletion:', e);
+    } finally {
+      setForm(prev => ({ ...prev, photo: '' }));
     }
-    setForm(prev => ({ ...prev, photo: '' })); // Reset to empty string
-  };
+  }, [form.photo]);
 
-  const handleSelectPort = (port: { id: string; name: string }) => {
-    setForm(prev => ({ 
-      ...prev, 
-      portId: port.id,
-      homePort: port.name 
-    }));
-    setPortSearch(port.name);
-    setShowPortModal(false);
-    if (errors.homePort) {
-      setErrors(prev => ({ ...prev, homePort: undefined }));
-    }
-  };
+  const handleSelectPort = useCallback(
+    (port: { id: string; name: string }) => {
+      setForm(prev => ({ ...prev, portId: port.id, homePort: port.name }));
+      setPortSearch(port.name);
+      setShowPortModal(false);
+      if (errors.homePort || errors.portId) {
+        setErrors(prev => ({ ...prev, homePort: undefined, portId: undefined }));
+      }
+    },
+    [errors.homePort, errors.portId]
+  );
 
-  const handlePortInputChange = (text: string) => {
+  const handlePortInputChange = useCallback((text: string) => {
     setPortSearch(text);
-    setShowPortModal(true); // Always show modal when typing
-    setForm(prev => ({ ...prev, portId: '', homePort: text })); // Clear portId until a valid one is selected
-  };
+    setShowPortModal(true);
+    setForm(prev => ({ ...prev, portId: '', homePort: text }));
+  }, []);
 
-  const validateForm = () => {
+  const validateForm = useCallback(() => {
     const newErrors: Partial<BoatForm> = {};
-    
+
+    const year = form.constructionYear.trim();
+    const engineHours = form.engineHours.trim();
+    const length = form.length.trim();
+
     if (!form.name.trim()) newErrors.name = 'Le nom est requis';
     if (!form.type.trim()) newErrors.type = 'Le type est requis';
     if (!form.manufacturer.trim()) newErrors.manufacturer = 'Le constructeur est requis';
-    if (!form.length.trim()) newErrors.length = 'La longueur est requise';
-    if (!form.homePort.trim()) newErrors.homePort = 'Le port d\'attache est requis'; // Validate homePort text input
-    if (!form.portId) newErrors.portId = 'Le port d\'attache est requis'; // Validate portId selection
-    if (!form.place_de_port.trim()) newErrors.place_de_port = 'La place de port est requise'; // Validate place_de_port
+    if (!length) newErrors.length = 'La longueur est requise';
+    if (!form.homePort.trim()) newErrors.homePort = "Le port d'attache est requis";
+    if (!form.portId) newErrors.portId = "Le port d'attache est requis";
+    if (!form.place_de_port.trim()) newErrors.place_de_port = 'La place de port est requise';
+
+    if (year && (!/^\d{4}$/.test(year) || +year < 1900 || +year > new Date().getFullYear() + 1)) {
+      newErrors.constructionYear = "Format d'année invalide";
+    }
+    if (engineHours && !/^\d+(\.\d+)?$/.test(engineHours)) {
+      newErrors.engineHours = 'Heures moteur invalides';
+    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  };
+  }, [form]);
 
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      return;
+  const uploadImageIfNeeded = useCallback(async (): Promise<string> => {
+    if (!form.photo || form.photo.startsWith('http')) return form.photo || '';
+    try {
+      if (!user?.id) throw new Error('Utilisateur non authentifié');
+      const base64 = await FileSystem.readAsStringAsync(form.photo, { encoding: FileSystem.EncodingType.Base64 });
+      const buffer = Buffer.from(base64, 'base64');
+
+      const fileName = `boat_images/${user.id}/${Date.now()}.jpeg`;
+      const { data: uploadData, error: uploadError } = await supabase
+        .storage
+        .from('boat.images')
+        .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage.from('boat.images').getPublicUrl(uploadData.path);
+      return publicUrlData.publicUrl;
+    } catch (e: any) {
+      console.error('uploadImageIfNeeded error:', e?.message || e);
+      throw new Error("Échec de l'envoi de l'image");
     }
+  }, [form.photo, user?.id]);
 
+  const handleSubmit = useCallback(async () => {
+    if (submitting.current) return;
+    if (!validateForm()) return;
     if (!user?.id) {
       Alert.alert('Erreur', 'Utilisateur non authentifié.');
       return;
     }
 
+    submitting.current = true;
     setIsLoading(true);
-    let finalImageUrl = form.photo;
-
-    // If photo is a local URI, upload it to Supabase
-    if (form.photo && !form.photo.startsWith('http')) {
-      try {
-        const fileName = `boat_images/${user.id}/${Date.now()}.jpeg`;
-        const contentType = 'image/jpeg';
-
-        const base64 = await FileSystem.readAsStringAsync(form.photo, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const fileBuffer = Buffer.from(base64, 'base64');
-
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('boat.images')
-          .upload(fileName, fileBuffer, {
-            contentType,
-            upsert: false,
-          });
-
-        if (uploadError) {
-          console.error('Erreur upload Supabase:', uploadError);
-          Alert.alert('Erreur', `Échec de l'envoi de l'image: ${uploadError.message}`);
-          setIsLoading(false);
-          return;
-        }
-
-        const { data: publicUrlData } = supabase.storage
-          .from('boat.images')
-          .getPublicUrl(uploadData.path);
-
-        finalImageUrl = publicUrlData.publicUrl;
-        setForm(prev => ({ ...prev, photo: finalImageUrl })); // Update form state with public URL
-        
-      } catch (e) {
-        console.error('Erreur lors du téléchargement de l\'image:', e);
-        Alert.alert('Erreur', 'Une erreur est survenue lors du téléchargement de l\'image.');
-        setIsLoading(false);
-        return;
-      }
-    }
 
     try {
+      const finalImageUrl = form.photo ? await uploadImageIfNeeded() : '';
+
       const { data, error } = await supabase
         .from('boat')
         .insert({
           id_user: user.id,
-          name: form.name,
-          type: form.type,
-          modele: form.model,
-          annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null, // Assuming YYYY format, set to Jan 1st
-          type_moteur: form.engine,
-          temps_moteur: form.engineHours ? form.engineHours : null, // Ensure correct type for DB
-          longueur: form.length,
-          image: finalImageUrl, // Use the final image URL
-          id_port: parseInt(form.portId),
-          constructeur: form.manufacturer,
-          place_de_port: form.place_de_port, // Include place_de_port
-          // 'etat' is not in the form, assuming it has a default value in DB or is nullable
+          name: form.name.trim(),
+          type: form.type.trim(),
+          modele: form.model.trim() || null,
+          annee_construction: form.constructionYear ? `${form.constructionYear}-01-01` : null,
+          type_moteur: form.engine.trim() || null,
+          temps_moteur: form.engineHours ? form.engineHours : null,
+          longueur: form.length.trim(),
+          image: finalImageUrl || null,
+          id_port: parseInt(form.portId, 10),
+          constructeur: form.manufacturer.trim(),
+          place_de_port: form.place_de_port.trim(),
         })
         .select('id')
         .single();
 
       if (error) {
         console.error('Error inserting boat:', error);
-        Alert.alert('Erreur', `Échec de l'ajout du bateau: ${error.message}`);
+        Alert.alert('Erreur', `Échec de l\'ajout du bateau: ${error.message}`);
       } else {
-        Alert.alert(
-          'Succès',
-          'Votre bateau a été créé et rattaché au Boat Manager avec succès.',
-          [
-            {
-              text: 'OK',
-              onPress: () => router.replace(`/boats/${data.id}?from=signup`) // Navigate to the new boat's profile
-            }
-          ]
-        );
+        Alert.alert('Succès', 'Votre bateau a été créé et rattaché au Boat Manager avec succès.', [
+          { text: 'OK', onPress: () => router.replace(`/boats/${data.id}?from=signup`) },
+        ]);
       }
-    } catch (e) {
-      console.error('Unexpected error during boat submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+    } catch (e: any) {
+      console.error('Unexpected error during boat submission:', e?.message || e);
+      Alert.alert('Erreur', e?.message || 'Une erreur inattendue est survenue.');
     } finally {
       setIsLoading(false);
+      submitting.current = false;
     }
-  };
+  }, [form, uploadImageIfNeeded, user?.id, validateForm]);
 
   return (
     <KeyboardAvoidingView
@@ -364,134 +401,108 @@ export default function NewBoatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Revenir en arrière"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <ArrowLeft size={24} color="#1a1a1a" />
+            <ArrowLeft size={ms(22, width)} color="#1a1a1a" />
           </TouchableOpacity>
           <Text style={styles.title}>Nouveau bateau</Text>
         </View>
 
         <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Nom du bateau</Text>
-            <View style={[styles.inputWrapper, errors.name && styles.inputWrapperError]}>
-              <Ship size={20} color={errors.name ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.name}
-                onChangeText={(text) => setForm(prev => ({ ...prev, name: text }))}
-                placeholder="ex: Le Grand Bleu"
-              />
-            </View>
-            {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
-          </View>
+          <FormRow
+            label="Nom du bateau"
+            icon={Ship}
+            error={errors.name}
+            value={form.name}
+            onChangeText={t => setForm(p => ({ ...p, name: t }))}
+            placeholder="ex: Le Grand Bleu"
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Type de bateau</Text>
-            <View style={[styles.inputWrapper, errors.type && styles.inputWrapperError]}>
-              <Ship size={20} color={errors.type ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.type}
-                onChangeText={(text) => setForm(prev => ({ ...prev, type: text }))}
-                placeholder="ex: Voilier, Yacht, Catamaran"
-              />
-            </View>
-            {errors.type && <Text style={styles.errorText}>{errors.type}</Text>}
-          </View>
+          <FormRow
+            label="Type de bateau"
+            icon={Ship}
+            error={errors.type}
+            value={form.type}
+            onChangeText={t => setForm(p => ({ ...p, type: t }))}
+            placeholder="ex: Voilier, Yacht, Catamaran"
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Constructeur</Text>
-            <View style={[styles.inputWrapper, errors.manufacturer && styles.inputWrapperError]}>
-              <Info size={20} color={errors.manufacturer ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.manufacturer}
-                onChangeText={(text) => setForm(prev => ({ ...prev, manufacturer: text }))}
-                placeholder="ex: Bénéteau, Jeanneau"
-              />
-            </View>
-            {errors.manufacturer && <Text style={styles.errorText}>{errors.manufacturer}</Text>}
-          </View>
+          <FormRow
+            label="Constructeur"
+            icon={Info}
+            error={errors.manufacturer}
+            value={form.manufacturer}
+            onChangeText={t => setForm(p => ({ ...p, manufacturer: t }))}
+            placeholder="ex: Bénéteau, Jeanneau"
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Modèle</Text>
-            <View style={styles.inputWrapper}>
-              <Info size={20} color="#666" />
-              <TextInput
-                style={styles.input}
-                value={form.model}
-                onChangeText={(text) => setForm(prev => ({ ...prev, model: text }))}
-                placeholder="ex: Oceanis 45"
-              />
-            </View>
-          </View>
+          <FormRow
+            label="Modèle"
+            icon={Info}
+            value={form.model}
+            onChangeText={t => setForm(p => ({ ...p, model: t }))}
+            placeholder="ex: Oceanis 45"
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Année de construction</Text>
-            <View style={styles.inputWrapper}>
-              <Calendar size={20} color="#666" />
-              <TextInput
-                style={styles.input}
-                value={form.constructionYear}
-                onChangeText={(text) => setForm(prev => ({ ...prev, constructionYear: text }))}
-                placeholder="ex: 2020"
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+          <FormRow
+            label="Année de construction"
+            icon={Calendar}
+            value={form.constructionYear}
+            onChangeText={t => setForm(p => ({ ...p, constructionYear: t }))}
+            placeholder="ex: 2020"
+            keyboardType="numeric"
+            error={errors.constructionYear}
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Moteur</Text>
-            <View style={styles.inputWrapper}>
-              <Wrench size={20} color="#666" />
-              <TextInput
-                style={styles.input}
-                value={form.engine}
-                onChangeText={(text) => setForm(prev => ({ ...prev, engine: text }))}
-                placeholder="ex: Volvo Penta D2-50"
-              />
-            </View>
-          </View>
+          <FormRow
+            label="Moteur"
+            icon={Wrench}
+            value={form.engine}
+            onChangeText={t => setForm(p => ({ ...p, engine: t }))}
+            placeholder="ex: Volvo Penta D2-50"
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Heures moteur</Text>
-            <View style={styles.inputWrapper}>
-              <Clock size={20} color="#666" />
-              <TextInput
-                style={styles.input}
-                value={form.engineHours}
-                onChangeText={(text) => setForm(prev => ({ ...prev, engineHours: text }))}
-                placeholder="ex: 500"
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+          <FormRow
+            label="Heures moteur"
+            icon={Clock}
+            value={form.engineHours}
+            onChangeText={t => setForm(p => ({ ...p, engineHours: t }))}
+            placeholder="ex: 500"
+            keyboardType="numeric"
+            error={errors.engineHours}
+            width={width}
+          />
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Longueur</Text>
-            <View style={[styles.inputWrapper, errors.length && styles.inputWrapperError]}>
-              <Ruler size={20} color={errors.length ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.length}
-                onChangeText={(text) => setForm(prev => ({ ...prev, length: text }))}
-                placeholder="ex: 12m"
-              />
-            </View>
-            {errors.length && <Text style={styles.errorText}>{errors.length}</Text>}
-          </View>
+          <FormRow
+            label="Longueur"
+            icon={Ruler}
+            value={form.length}
+            onChangeText={t => setForm(p => ({ ...p, length: t }))}
+            placeholder="ex: 12m"
+            error={errors.length}
+            width={width}
+          />
 
+          {/* Port d'attache + recherche */}
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Port d'attache</Text>
             <View style={[styles.inputWrapper, errors.homePort && styles.inputWrapperError]}>
-              <MapPin size={20} color={errors.homePort ? '#ff4444' : '#666'} />
+              <MapPin size={ms(18, width)} color={errors.homePort ? '#ff4444' : '#666'} />
               <TextInput
-                style={styles.portInput}
+                style={styles.input}
                 placeholder="Port d'attache"
                 value={portSearch}
                 onChangeText={handlePortInputChange}
@@ -505,87 +516,79 @@ export default function NewBoatScreen() {
                     setForm(prev => ({ ...prev, portId: '', homePort: '' }));
                     setSelectedBoatManagerDetails(null);
                   }}
+                  accessibilityLabel="Effacer le port saisi"
                 >
                   <Text style={styles.clearButtonText}>×</Text>
                 </TouchableOpacity>
               )}
             </View>
-            {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
+            {errors.homePort ? <Text style={styles.errorText}>{errors.homePort}</Text> : null}
+            {errors.portId ? <Text style={styles.errorText}>{errors.portId}</Text> : null}
           </View>
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Place de port</Text>
-            <View style={[styles.inputWrapper, errors.place_de_port && styles.inputWrapperError]}>
-              <MapPin size={20} color={errors.place_de_port ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.place_de_port}
-                onChangeText={(text) => setForm(prev => ({ ...prev, place_de_port: text }))}
-                placeholder="ex: A12, Ponton B"
-              />
-            </View>
-            {errors.place_de_port && <Text style={styles.errorText}>{errors.place_de_port}</Text>}
-          </View>
+          <FormRow
+            label="Place de port"
+            icon={MapPin}
+            value={form.place_de_port}
+            onChangeText={t => setForm(p => ({ ...p, place_de_port: t }))}
+            placeholder="ex: A12, Ponton B"
+            error={errors.place_de_port}
+            width={width}
+          />
 
           {selectedBoatManagerDetails && (
             <View style={styles.boatManagerInfo}>
               <View style={styles.boatManagerHeader}>
-                <Info size={20} color="#0066CC" />
+                <Info size={ms(18, width)} color="#0066CC" />
                 <Text style={styles.boatManagerTitle}>Boat Manager assigné</Text>
               </View>
               <View style={styles.boatManagerDetails}>
                 <View style={styles.boatManagerRow}>
-                  <User size={16} color="#666" />
-                  <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.firstName} {selectedBoatManagerDetails.lastName}</Text>
+                  <UserIcon size={ms(14, width)} color="#666" />
+                  <Text style={styles.boatManagerText}>
+                    {selectedBoatManagerDetails.firstName} {selectedBoatManagerDetails.lastName}
+                  </Text>
                 </View>
                 <View style={styles.boatManagerRow}>
-                  <Phone size={16} color="#666" />
+                  <Phone size={ms(14, width)} color="#666" />
                   <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.phone}</Text>
                 </View>
                 <View style={styles.boatManagerRow}>
-                  <Mail size={16} color="#666" />
+                  <Mail size={ms(14, width)} color="#666" />
                   <Text style={styles.boatManagerText}>{selectedBoatManagerDetails.email}</Text>
                 </View>
               </View>
             </View>
           )}
 
-          {/* Moved photo section to the bottom */}
-          <TouchableOpacity 
-            style={styles.photoContainer}
-            onPress={() => setShowPhotoModal(true)}
-          >
+          {/* Photo */}
+          <TouchableOpacity style={styles.photoContainer} onPress={() => setShowPhotoModal(true)} accessibilityRole="button">
             {form.photo ? (
               <>
-                <Image 
-                  source={{ uri: form.photo }}
-                  style={styles.photoPreview}
-                />
-                <TouchableOpacity
-                  style={styles.deletePhotoButton}
-                  onPress={handleDeletePhoto}
-                >
-                  <X size={20} color="white" />
+                <Image source={{ uri: form.photo }} style={styles.photoPreview} />
+                <TouchableOpacity style={styles.deletePhotoButton} onPress={handleDeletePhoto} accessibilityLabel="Supprimer la photo">
+                  <X size={ms(18, width)} color="white" />
                 </TouchableOpacity>
               </>
             ) : (
               <View style={styles.photoPlaceholder}>
-                <ImageIcon size={32} color="#666" />
+                <ImageIcon size={ms(28, width)} color="#666" />
                 <Text style={styles.photoText}>Ajouter une photo</Text>
               </View>
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
+          <TouchableOpacity
+            style={[styles.submitButton, (isLoading || submitting.current) && styles.submitButtonDisabled]}
             onPress={handleSubmit}
-            disabled={isLoading}
+            disabled={isLoading || submitting.current}
+            accessibilityRole="button"
           >
             {isLoading ? (
               <ActivityIndicator color="white" size="small" />
             ) : (
               <>
-                <Check size={20} color="white" />
+                <Check size={ms(18, width)} color="white" />
                 <Text style={styles.submitButtonText}>Enregistrer</Text>
               </>
             )}
@@ -593,7 +596,7 @@ export default function NewBoatScreen() {
         </View>
       </ScrollView>
 
-      <PhotoModal 
+      <PhotoModal
         visible={showPhotoModal}
         onClose={() => setShowPhotoModal(false)}
         onChoosePhoto={handleChoosePhoto}
@@ -613,258 +616,168 @@ export default function NewBoatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  contentContainer: {
-    flexGrow: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  backButton: {
-    padding: 8,
-    marginRight: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
-  form: {
-    padding: 16,
-    gap: 20,
-  },
-  photoContainer: {
-    width: '100%',
-    height: 200,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    overflow: 'hidden',
-    position: 'relative',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-    }),
-  },
-  photoPlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    gap: 8,
-  },
-  photoPreview: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  deletePhotoButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: 20,
-    padding: 8,
-  },
-  photoText: {
-    fontSize: 16,
-    color: '#666',
-  },
-  inputContainer: {
-    gap: 4,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#1a1a1a',
-    marginBottom: 4,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  inputWrapperError: {
-    borderColor: '#ff4444',
-    backgroundColor: '#fff5f5',
-  },
-  input: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#1a1a1a',
-    height: '100%',
-    ...Platform.select({
-      web: {
-        outlineStyle: 'none',
-      },
-    }),
-  },
-  portInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#1a1a1a',
-    height: '100%',
-  },
-  clearButton: {
-    padding: 4,
-  },
-  clearButtonText: {
-    fontSize: 20,
-    color: '#666',
-    fontWeight: 'bold',
-  },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
-    marginLeft: 4,
-  },
-  submitButton: {
-    backgroundColor: '#0066CC',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 16,
-    shadowColor: '#0066CC',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  submitButtonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
-  submitButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    backgroundColor: '#fff5f5',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  deleteButtonText: {
-    color: '#ff4444',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    gap: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-    marginBottom: 8,
-  },
-  modalOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  modalOptionText: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
-  deleteOption: {
-    backgroundColor: '#fff5f5',
-  },
-  deleteOptionText: {
-    fontSize: 16,
-    color: '#ff4444',
-  },
-  modalCancelButton: {
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  modalCancelText: {
-    fontSize: 16,
-    color: '#ff4444',
-    fontWeight: '600',
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    gap: 16,
-  },
-  errorButton: {
-    backgroundColor: '#0066CC',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-  },
-  errorButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  boatManagerInfo: {
-    backgroundColor: '#f0f7ff',
-    borderRadius: 12,
-    padding: 16,
-    gap: 12,
-  },
-  boatManagerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  boatManagerTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0066CC',
-  },
-  boatManagerDetails: {
-    gap: 8,
-  },
-  boatManagerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  boatManagerText: {
-    fontSize: 14,
-    color: '#1a1a1a',
-  },
+/** Sous-composant pour factoriser une rangée de champ texte */
+function FormRow({
+  label,
+  icon: Icon,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+  error,
+  width,
+}: {
+  label: string;
+  icon: IconType;
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder?: string;
+  keyboardType?: 'default' | 'numeric';
+  error?: string;
+  width: number;
+}) {
+  const styles = useMemo(() => makeStyles(width, 0), [width]);
+  return (
+    <View style={styles.inputContainer}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={[styles.inputWrapper, error && styles.inputWrapperError]}>
+        <Icon size={ms(18, width)} color={error ? '#ff4444' : '#666'} />
+        <TextInput
+          style={styles.input}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          keyboardType={keyboardType}
+        />
+      </View>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+    </View>
+  );
+}
+
+function makeStyles(width: number, safeTop: number) {
+  const p2 = ms(8, width);
+  const p3 = ms(12, width);
+  const p4 = ms(16, width);
+  const p5 = ms(20, width);
+  const radius = ms(12, width);
+
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#f5f5f5' },
+    contentContainer: { flexGrow: 1, paddingBottom: p5 },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: Math.max(safeTop, p3),
+      paddingHorizontal: p4,
+      paddingBottom: p3,
+      backgroundColor: 'white',
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: '#f0f0f0',
+      minHeight: 56,
+    },
+    backButton: {
+      padding: p2,
+      marginRight: p3,
+      borderRadius: ms(10, width),
+      minWidth: 44,
+      minHeight: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    title: { fontSize: ms(20, width), fontWeight: 'bold', color: '#1a1a1a' },
+
+    form: { padding: p4, rowGap: p4 },
+
+    inputContainer: { rowGap: p2 - 2 },
+    label: { fontSize: ms(15.5, width), fontWeight: '500', color: '#1a1a1a', marginBottom: 4 },
+    inputWrapper: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: 'white',
+      borderRadius: radius,
+      borderWidth: 1,
+      borderColor: '#e0e0e0',
+      paddingHorizontal: p3,
+      minHeight: 48,
+    },
+    inputWrapperError: { borderColor: '#ff4444', backgroundColor: '#fff5f5' },
+    input: {
+      flex: 1,
+      marginLeft: p3,
+      fontSize: ms(15, width),
+      color: '#1a1a1a',
+      height: '100%',
+      ...Platform.select({ web: { outlineStyle: 'none' } }),
+    },
+
+    clearButton: { padding: p2 },
+    clearButtonText: { fontSize: ms(18, width), color: '#666', fontWeight: 'bold' },
+    errorText: { color: '#ff4444', fontSize: ms(12.5, width) },
+
+    photoContainer: {
+      width: '100%',
+      height: ms(200, width),
+      backgroundColor: 'white',
+      borderRadius: radius,
+      overflow: 'hidden',
+      position: 'relative',
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+        android: { elevation: 3 },
+        web: { /* @ts-ignore */ boxShadow: '0 2px 6px rgba(0,0,0,0.08)' },
+      }),
+    },
+    photoPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8f9fa', rowGap: p2 },
+    photoPreview: { width: '100%', height: '100%', resizeMode: 'cover' },
+    deletePhotoButton: {
+      position: 'absolute',
+      top: p2,
+      right: p2,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      borderRadius: 20,
+      padding: p2,
+    },
+    photoText: { fontSize: ms(14.5, width), color: '#666' },
+
+    submitButton: {
+      backgroundColor: '#0066CC',
+      padding: p4,
+      borderRadius: radius,
+      alignItems: 'center',
+      marginTop: p3,
+      flexDirection: 'row',
+      justifyContent: 'center',
+      columnGap: p3,
+      ...Platform.select({
+        ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
+        android: { elevation: 4 },
+        web: { /* @ts-ignore */ boxShadow: '0 4px 8px rgba(0,102,204,0.2)' },
+      }),
+    },
+    submitButtonDisabled: { backgroundColor: '#94a3b8' },
+    submitButtonText: { color: 'white', fontSize: ms(15.5, width), fontWeight: '600' },
+
+    boatManagerInfo: { backgroundColor: '#f0f7ff', borderRadius: radius, padding: p4, rowGap: p3 },
+    boatManagerHeader: { flexDirection: 'row', alignItems: 'center', columnGap: p2 },
+    boatManagerTitle: { fontSize: ms(15.5, width), fontWeight: '600', color: '#0066CC' },
+    boatManagerDetails: { rowGap: p2 },
+    boatManagerRow: { flexDirection: 'row', alignItems: 'center', columnGap: p2 },
+    boatManagerText: { fontSize: ms(13.5, width), color: '#1a1a1a' },
+  });
+}
+
+const modalStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  content: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, rowGap: 16 },
+  title: { fontSize: 20, fontWeight: 'bold', color: '#1a1a1a' },
+  option: { flexDirection: 'row', alignItems: 'center', columnGap: 12, padding: 14, backgroundColor: '#f8f9fa', borderRadius: 12 },
+  optionText: { fontSize: 16, color: '#1a1a1a' },
+  delete: { backgroundColor: '#fff5f5' },
+  deleteText: { fontSize: 16, color: '#ff4444' },
+  cancel: { padding: 14, alignItems: 'center' },
+  cancelText: { fontSize: 16, color: '#ff4444', fontWeight: '600' },
 });
+
+
 

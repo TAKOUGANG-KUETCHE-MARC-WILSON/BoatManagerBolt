@@ -1,85 +1,155 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, TextInput, Modal, ActivityIndicator } from 'react-native';
-import { Users, MessageSquare, User, Bot as Boat, FileText, ChevronRight, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, X, TriangleAlert as AlertTriangle, Plus, Upload, Mail, Phone, Search, Briefcase, Building, Star } from 'lucide-react-native';
+// app/(boat-manager)/index.tsx (HomeScreen)
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+  Platform,
+  TextInput,
+  Modal,
+  ActivityIndicator,
+} from 'react-native';
+import {
+  Users,
+  MessageSquare,
+  User,
+  Bot as Boat,
+  FileText,
+  ChevronRight,
+  MapPin,
+  Calendar,
+  X,
+  AlertTriangle,
+  Plus,
+  Mail,
+  Phone,
+  Search,
+  Briefcase,
+  Building,
+  Star,
+} from 'lucide-react-native';
 import { router } from 'expo-router';
-import { useAuth, User as AuthUser, PleasureBoater, BoatManagerUser, NauticalCompany, CorporateUser } from '@/context/AuthContext';
+import {
+  useAuth,
+  PleasureBoater,
+  BoatManagerUser,
+  NauticalCompany,
+  CorporateUser,
+} from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
 
-// Définition de l'avatar par défaut
-const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+// ================================
+// Helpers & constants
+// ================================
+const DEFAULT_AVATAR =
+  'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 
-// Fonctions utilitaires pour les URLs d'avatars
-const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+const isHttpUrl = (v?: string) =>
+  !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+const safeLower = (v?: string | null) => (v || '').toLowerCase();
+
+const buildFullName = (first?: string, last?: string) =>
+  [first, last].filter(Boolean).join(' ').trim();
 
 const getSignedAvatarUrl = async (value?: string) => {
-  if (!value) return '';
-  // Si on a déjà une URL (signée ou publique), on la renvoie
+  if (!value) return DEFAULT_AVATAR;
   if (isHttpUrl(value)) return value;
 
-  // Sinon value est un chemin du bucket (ex: "users/<id>/avatar.jpg")
-  const { data, error } = await supabase
+  const { data } = await supabase
     .storage
-    .from('avatars') // Assurez-vous que c'est le bon bucket pour les avatars
-    .createSignedUrl(value, 60 * 60); // 1h de validité
-
-  if (error || !data?.signedUrl) return '';
-  return data.signedUrl;
+    .from('avatars')
+    .createSignedUrl(value, 60 * 60);
+  return data?.signedUrl || DEFAULT_AVATAR;
 };
 
-// Interfaces mises à jour pour correspondre aux données Supabase
+// ================================
+// Types
+// ================================
 interface Client extends PleasureBoater {
+  id: string;
+  first_name: string;
+  last_name: string;
+  name: string;
+  avatar: string;
+  e_mail: string;
+  phone?: string;
   boats: Array<{
     id: string;
     name: string;
     type: string;
   }>;
-  status: 'active' | 'pending' | 'inactive'; // Assuming status is directly on user profile
+  status: 'active' | 'pending' | 'inactive';
   last_contact?: string;
   has_new_requests?: boolean;
   has_new_messages?: boolean;
 }
 
 interface Company extends NauticalCompany {
-  logo: string; // Assuming logo is part of NauticalCompany profile
-  commonPortName?: string; // New field for the common port name
-  fullAddress?: string; // New field for the full address
+  id: string;
+  name: string;
+  logo: string;
+  categories?: Array<{ description1: string }>;
+  ports?: string[]; // pour la modale "Ports d'intervention"
+  commonPortName?: string; // port commun compact
+  fullAddress?: string;
   hasNewRequests?: boolean;
-  contactEmail: string; // Ensure these are always present for display
-  contactPhone: string; // Ensure these are always present for display
+  hasNewMessages?: boolean;
+  contactEmail: string;
+  contactPhone: string;
 }
 
 interface HeadquartersContact extends CorporateUser {
-  department?: string; // Assuming department is part of CorporateUser profile
+  id: string;
+  name: string;
+  avatar: string;
+  department?: string;
   hasNewMessages?: boolean;
+  e_mail: string;
+  phone?: string;
 }
 
 interface OtherBoatManager extends BoatManagerUser {
-  location?: string; // Assuming location can be derived from ports or added to profile
-  specialties?: string[]; // Assuming skills from BoatManagerUser can be used as specialties
+  id: string;
+  name: string;
+  avatar: string;
+  location?: string;
+  specialties?: string[];
   hasNewMessages?: boolean;
+  e_mail: string;
+  phone?: string;
 }
 
+// ================================
+// Component
+// ================================
 export default function HomeScreen() {
   const { user } = useAuth();
+  const userId = useMemo(() => Number(user?.id) || undefined, [user?.id]);
+
+  // recherches
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   const [companySearchQuery, setCompanySearchQuery] = useState('');
   const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [boatManagerSearchQuery, setBoatManagerSearchQuery] = useState('');
 
-  // États pour les données réelles
+  // données
   const [clients, setClients] = useState<Client[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [headquartersContacts, setHeadquartersContacts] = useState<HeadquartersContact[]>([]);
   const [otherBoatManagers, setOtherBoatManagers] = useState<OtherBoatManager[]>([]);
 
-  // États de chargement
+  // chargements
   const [clientsLoading, setClientsLoading] = useState(true);
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [otherBMLoading, setOtherBMLoading] = useState(true);
-  const [statsLoading, setStatsLoading] = useState(true); // Loading for dashboard stats
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  // New state for company details modal
+  // modal entreprise
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
   const [selectedCompanyDetails, setSelectedCompanyDetails] = useState<Company | null>(null);
 
@@ -87,376 +157,420 @@ export default function HomeScreen() {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
-    year: 'numeric'
+    year: 'numeric',
   });
 
-  // Stats for dashboard (now real data)
+  // stats tableau de bord
   const [stats, setStats] = useState({
     urgentRequests: 0,
     upcomingAppointments: 0,
     pendingRequests: 0,
     newMessages: 0,
     clientSatisfaction: 0,
-    reviewCount: 0
+    reviewCount: 0,
   });
 
-  // --- Data Fetching ---
+  // ================================
+  // Data fetching
+  // ================================
   const fetchDashboardStats = useCallback(async () => {
     setStatsLoading(true);
-    if (!user?.id) {
+    if (!userId) {
       setStatsLoading(false);
       return;
     }
+
     try {
-      // Fetch current Boat Manager's rating and review count
-      const { data: bmProfile, error: bmProfileError } = await supabase
+      // profil BM (note + avis)
+      const { data: bmProfile } = await supabase
         .from('users')
         .select('rating, review_count')
-        .eq('id', user.id)
+        .eq('id', userId)
         .single();
 
-      if (bmProfileError) {
-        console.error('Error fetching BM profile for stats:', bmProfileError);
-      }
-
-      // Fetch urgent requests
-      const { count: urgentRequestsCount, error: urgentRequestsError } = await supabase
+      // urgences
+      const { count: urgentRequestsCount } = await supabase
         .from('service_request')
         .select('id', { count: 'exact' })
-        .eq('id_boat_manager', user.id)
+        .eq('id_boat_manager', userId)
         .eq('urgence', 'urgent');
 
-      if (urgentRequestsError) {
-        console.error('Error fetching urgent requests:', urgentRequestsError);
-      }
-
-      // Fetch upcoming appointments
+      // rdv à venir
       const today = new Date().toISOString().split('T')[0];
-      const nowTime = new Date().toTimeString().slice(0, 5); // "HH:MM"
-
-      const { count: upcomingAppointmentsCount, error: appointmentsError } = await supabase
+      const nowTime = new Date().toTimeString().slice(0, 5);
+      const { count: upcomingAppointmentsCount } = await supabase
         .from('rendez_vous')
         .select('id', { count: 'exact' })
-        .or(`invite.eq.${user.id},cree_par.eq.${user.id}`)
+        .or(`invite.eq.${userId},cree_par.eq.${userId}`)
         .in('statut', ['en_attente', 'confirme'])
         .or(`date_rdv.gt.${today},and(date_rdv.eq.${today},heure.gt.${nowTime})`);
 
-      if (appointmentsError) {
-        console.error('Error fetching upcoming appointments:', appointmentsError);
-      }
-
-      // Fetch pending requests (status 'submitted')
-      const { count: pendingRequestsCount, error: pendingRequestsError } = await supabase
+      // demandes en attente
+      const { count: pendingRequestsCount } = await supabase
         .from('service_request')
         .select('id', { count: 'exact' })
-        .eq('id_boat_manager', user.id)
+        .eq('id_boat_manager', userId)
         .eq('statut', 'submitted');
 
-      if (pendingRequestsError) {
-        console.error('Error fetching pending requests:', pendingRequestsError);
+      // messages non lus (toutes convos où je suis membre)
+      const { data: convMembers, error: convErr } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', userId);
+
+      let newMessagesCount = 0;
+      if (!convErr && convMembers?.length) {
+        const convIds = convMembers.map((c) => c.conversation_id);
+        const { count: messagesCount } = await supabase
+          .from('messages')
+          .select('id', { count: 'exact' })
+          .in('conversation_id', convIds)
+          .neq('sender_id', userId)
+          .eq('is_read', false);
+
+        newMessagesCount = messagesCount || 0;
       }
 
-      // Fetch new messages (simplified: count all unread messages for this user)
-      // Fetch unread messages (par conversations où l'utilisateur est membre)
-// Fetch new messages (par conversations où l'utilisateur est membre)
-const { data: convMembers, error: convError } = await supabase
-  .from('conversation_members')
-  .select('conversation_id')
-  .eq('user_id', user.id);
-
-let newMessagesCount = 0; // ✅ variable locale
-
-if (convError || !convMembers) {
-  console.error('Erreur lors de la récupération des conversations:', convError);
-} else {
-  const convIds = convMembers.map(c => c.conversation_id);
-  if (convIds.length > 0) {
-    const { count: messagesCount, error: messagesError } = await supabase
-      .from('messages')
-      .select('id', { count: 'exact' })
-      .in('conversation_id', convIds)
-      .neq('sender_id', user.id)
-      .eq('is_read', false);
-
-    if (messagesError) {
-      console.error('Erreur lors de la récupération des messages non lus:', messagesError);
-    } else {
-      newMessagesCount = messagesCount || 0;
-    }
-  }
-}
-
-setStats(prevStats => ({
-  ...prevStats,
-  urgentRequests: urgentRequestsCount || 0,
-  upcomingAppointments: upcomingAppointmentsCount || 0,
-  pendingRequests: pendingRequestsCount || 0,
-  newMessages: newMessagesCount, // ✅ mise à jour correcte
-  clientSatisfaction: bmProfile?.rating || 0,
-  reviewCount: bmProfile?.review_count || 0,
-}));
-
-
+      setStats({
+        urgentRequests: urgentRequestsCount || 0,
+        upcomingAppointments: upcomingAppointmentsCount || 0,
+        pendingRequests: pendingRequestsCount || 0,
+        newMessages: newMessagesCount,
+        clientSatisfaction: bmProfile?.rating || 0,
+        reviewCount: bmProfile?.review_count || 0,
+      });
     } catch (e) {
       console.error('Dashboard stats fetch error:', e);
     } finally {
       setStatsLoading(false);
     }
-  }, [user]);
+  }, [userId]);
 
-  useEffect(() => {
-    const fetchClients = async () => {
-      setClientsLoading(true);
-      if (!user || user.role !== 'boat_manager') {
-        setClientsLoading(false);
+  // Clients
+  const fetchClients = useCallback(async () => {
+    setClientsLoading(true);
+    if (!userId || user?.role !== 'boat_manager') {
+      setClients([]);
+      setClientsLoading(false);
+      return;
+    }
+
+    try {
+      // ports gérés
+      const { data: bmPorts, error: bmPortsError } = await supabase
+        .from('user_ports')
+        .select('port_id')
+        .eq('user_id', userId);
+
+      if (bmPortsError) throw bmPortsError;
+
+      const managedPortIds = (bmPorts || []).map((p) => p.port_id);
+      if (!managedPortIds.length) {
+        setClients([]);
         return;
       }
-      try {
-        const { data: bmPorts, error: bmPortsError } = await supabase
-          .from('user_ports')
-          .select('port_id')
-          .eq('user_id', user.id);
 
-        if (bmPortsError) throw bmPortsError;
-        const managedPortIds = bmPorts.map(p => p.port_id);
+      // utilisateurs à ces ports
+      const { data: clientPortAssignments, error: clientPortError } = await supabase
+        .from('user_ports')
+        .select('user_id')
+        .in('port_id', managedPortIds);
 
-        if (managedPortIds.length === 0) {
-          setClients([]);
-          setClientsLoading(false);
-          return;
-        }
+      if (clientPortError) throw clientPortError;
 
-        const { data: clientPortAssignments, error: clientPortError } = await supabase
-          .from('user_ports')
-          .select('user_id')
-          .in('port_id', managedPortIds);
-
-        if (clientPortError) throw clientPortError;
-        const uniqueClientIds = [...new Set(clientPortAssignments.map(cpa => cpa.user_id))];
-
-        if (uniqueClientIds.length === 0) {
-          setClients([]);
-          setClientsLoading(false);
-          return;
-        }
-
-        const { data, error: clientsError } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boat(id, name, type)')
-          .in('id', uniqueClientIds)
-          .eq('profile', 'pleasure_boater');
-
-        if (clientsError) throw clientsError;
-
-        const clientsWithSignedAvatars = await Promise.all(data.map(async c => {
-          const signedAvatar = await getSignedAvatarUrl(c.avatar);
-          return { ...c, name: `${c.first_name} ${c.last_name}`, avatar: signedAvatar || DEFAULT_AVATAR, boats: c.boat || [] };
-        }));
-        setClients(clientsWithSignedAvatars as Client[]);
-      } catch (e) {
-        console.error('Error fetching clients:', e);
-      } finally {
-        setClientsLoading(false);
-      }
-    };
-
-    const fetchCompanies = async () => {
-      setCompaniesLoading(true);
-      if (!user || user.role !== 'boat_manager') {
-        setCompaniesLoading(false);
+      const uniqueClientIds = Array.from(new Set((clientPortAssignments || []).map((c) => c.user_id)));
+      if (!uniqueClientIds.length) {
+        setClients([]);
         return;
       }
-      try {
-        // 1. Get ports managed by the current Boat Manager
-        const { data: bmPorts, error: bmPortsError } = await supabase
-          .from('user_ports')
-          .select('port_id, ports(name)') // Also fetch port names
-          .eq('user_id', user.id);
 
-        if (bmPortsError) throw bmPortsError;
-        const managedPortIds = bmPorts.map(p => p.port_id);
-        const managedPortNames = bmPorts.map(p => p.ports?.name).filter(Boolean) as string[]; // Get names for display
+      // profils clients
+      const { data, error: clientsError } = await supabase
+        .from('users')
+        .select(
+          'id, first_name, last_name, avatar, e_mail, phone, status, last_contact, has_new_requests, has_new_messages, boat(id, name, type)'
+        )
+        .in('id', uniqueClientIds)
+        .eq('profile', 'pleasure_boater');
 
-        if (managedPortIds.length === 0) {
-          setCompanies([]);
-          setCompaniesLoading(false);
-          return;
-        }
+      if (clientsError) throw clientsError;
 
-        // 2. Get companies that share at least one port with the current BM
-        const { data: companyUsers, error: companyUsersError } = await supabase
-          .from('users')
-          .select('id, company_name, avatar, address, e_mail, phone, user_categorie_service(categorie_service(description1)), user_ports(port_id, ports(name))')
-          .eq('profile', 'nautical_company');
-
-        if (companyUsersError) throw companyUsersError;
-
-        const formattedCompanies: Company[] = await Promise.all(companyUsers.map(async (company: any) => {
-          const companyPortIds = company.user_ports.map((up: any) => up.port_id);
-          const commonPorts = managedPortIds.filter(bmPid => companyPortIds.includes(bmPid));
-
-          if (commonPorts.length > 0) {
-            // Pick the first common port for display on the compact card
-            const commonPortName = company.user_ports.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '';
-
-            // Get all port names for the detailed view
-            const allCompanyPortNames = company.user_ports.map((up: any) => up.ports?.name).filter(Boolean) as string[];
-            const signedLogo = await getSignedAvatarUrl(company.avatar);
-
-            return {
-              id: company.id,
-              name: company.company_name,
-              logo: signedLogo || DEFAULT_AVATAR,
-              fullAddress: company.address,
-              contactEmail: company.e_mail,
-              contactPhone: company.phone,
-              categories: company.user_categorie_service.map((ucs: any) => ({
-                id: ucs.categorie_service.id,
-                description1: ucs.categorie_service.description1
-              })),
-              ports: allCompanyPortNames, // All ports for modal's "Ports d'intervention"
-              commonPortName: commonPortName, // The common port for compact view
-              // Add other NauticalCompany fields as needed
-              role: 'nautical_company', // Explicitly set role
-              siret: '', // Placeholder
-              certifications: [], // Placeholder
-              permissions: { // Placeholder
-                canManageServices: false, canManageBookings: false,
-                canAccessFinancials: false, canManageStaff: false
-              }
-            };
-          }
-          return null; // Filter out companies not sharing a port
-        }));
-        setCompanies(formattedCompanies.filter(Boolean) as Company[]);
-      } catch (e) {
-        console.error('Error fetching companies:', e);
-      } finally {
-        setCompaniesLoading(false);
-      }
-    };
-
-    const fetchHeadquartersContacts = async () => {
-      setContactsLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, avatar, e_mail, phone, department, has_new_messages')
-          .eq('profile', 'corporate');
-        if (error) throw error;
-
-        const contactsWithSignedAvatars = await Promise.all(data.map(async c => {
-          const signedAvatar = await getSignedAvatarUrl(c.avatar);
+      const clientsWithSigned = await Promise.all(
+        (data || []).map(async (c: any) => {
+          const avatar = await getSignedAvatarUrl(c.avatar);
           return {
             ...c,
-            name: `${c.first_name} ${c.last_name}`,
-            avatar: signedAvatar || DEFAULT_AVATAR,
-            role: 'corporate', // Explicitly set role
-          };
-        }));
-        setHeadquartersContacts(contactsWithSignedAvatars as HeadquartersContact[]);
-      } catch (e) {
-        console.error('Error fetching headquarters contacts:', e);
-      } finally {
-        setContactsLoading(false);
-      }
-    };
+            id: String(c.id),
+            name: buildFullName(c.first_name, c.last_name),
+            avatar: avatar || DEFAULT_AVATAR,
+            boats: c.boat || [],
+          } as Client;
+        })
+      );
 
-    const fetchOtherBoatManagers = async () => {
-      setOtherBMLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, avatar, e_mail, phone, user_categorie_service(categorie_service(description1)), user_ports(port_id, ports(name))')
-          .eq('profile', 'boat_manager')
-          .neq('id', user?.id); // Exclude current user
-        if (error) throw error;
-
-        const managersWithPorts = await Promise.all(data.map(async (bm: any) => {
-          let location = 'N/A';
-          if (bm.user_ports && bm.user_ports.length > 0) {
-            const { data: portData, error: portError } = await supabase
-              .from('ports')
-              .select('name')
-              .eq('id', bm.user_ports[0].port_id)
-              .single();
-            if (!portError) {
-              location = portData.name;
-            }
-          }
-          const signedAvatar = await getSignedAvatarUrl(bm.avatar);
-          return {
-            ...bm,
-            name: `${bm.first_name} ${bm.last_name}`,
-            avatar: signedAvatar || DEFAULT_AVATAR,
-            location: location,
-            specialties: bm.user_categorie_service.map((ucs: any) => ucs.categorie_service.description1), // Using categories as specialties
-            role: 'boat_manager', // Explicitly set role
-            categories: bm.user_categorie_service.map((ucs: any) => ({ id: ucs.categorie_service.id, description1: ucs.categorie_service.description1 }))
-          };
-        }));
-        setOtherBoatManagers(managersWithPorts as OtherBoatManager[]);
-      } catch (e) {
-        console.error('Error fetching other boat managers:', e);
-      } finally {
-        setOtherBMLoading(false);
-      }
-    };
-
-    if (user) {
-      fetchDashboardStats(); // Fetch dashboard stats
-      fetchClients();
-      fetchCompanies();
-      fetchHeadquartersContacts();
-      fetchOtherBoatManagers();
+      setClients(clientsWithSigned);
+    } catch (e) {
+      console.error('Error fetching clients:', e);
+    } finally {
+      setClientsLoading(false);
     }
-  }, [user, fetchDashboardStats]); // Added fetchDashboardStats to dependencies
+  }, [userId, user?.role]);
 
-  // --- Filtering Logic ---
-  const filteredClients = clients.filter(client => {
-    if (!clientSearchQuery) return true;
-    const query = clientSearchQuery.toLowerCase();
-    return (
-      client.name.toLowerCase().includes(query) ||
-      client.e_mail.toLowerCase().includes(query) ||
-      client.phone?.toLowerCase().includes(query) ||
-      client.boats?.some(boat => boat.name.toLowerCase().includes(query))
-    );
-  });
+  // Entreprises
+  const fetchCompanies = useCallback(async () => {
+    setCompaniesLoading(true);
+    if (!userId || user?.role !== 'boat_manager') {
+      setCompanies([]);
+      setCompaniesLoading(false);
+      return;
+    }
 
-  const filteredCompanies = companies.filter(company => {
-    if (!companySearchQuery) return true;
-    const query = companySearchQuery.toLowerCase();
-    return (
-      company.name.toLowerCase().includes(query) ||
-      company.commonPortName?.toLowerCase().includes(query) || // Filter by common port name
-      company.categories?.some(category => category.description1.toLowerCase().includes(query)) // Filter by categories
-    );
-  });
+    try {
+      // 1) ports gérés & noms
+      const { data: bmPorts, error: bmPortsError } = await supabase
+        .from('user_ports')
+        .select('port_id, ports(name)')
+        .eq('user_id', userId);
 
-  const filteredContacts = headquartersContacts.filter(contact => {
-    if (!contactSearchQuery) return true;
-    const query = contactSearchQuery.toLowerCase();
-    return (
-      contact.name.toLowerCase().includes(query) ||
-      contact.e_mail.toLowerCase().includes(query) ||
-      contact.department?.toLowerCase().includes(query)
-    );
-  });
+      if (bmPortsError) throw bmPortsError;
 
-  const filteredBoatManagers = otherBoatManagers.filter(manager => {
-    if (!boatManagerSearchQuery) return true;
-    const query = boatManagerSearchQuery.toLowerCase();
-    return (
-      manager.name.toLowerCase().includes(query) ||
-      manager.location?.toLowerCase().includes(query) ||
-      manager.specialties?.some(specialty => specialty.toLowerCase().includes(query))
-    );
-  });
+      const managedPortIds = (bmPorts || []).map((p) => p.port_id);
+      if (!managedPortIds.length) {
+        setCompanies([]);
+        return;
+      }
 
-  // --- Handlers ---
-  const handleMessage = (clientId: string) => {
-    router.push(`/(boat-manager)/messages?client=${clientId}`);
+      // 2) entreprises (avec catégories & ports)
+      const { data: companyUsers, error: companyUsersError } = await supabase
+        .from('users')
+        .select(
+          `
+          id,
+          company_name,
+          avatar,
+          address,
+          e_mail,
+          phone,
+          has_new_messages,
+          user_categorie_service(categorie_service(description1)),
+          user_ports(port_id, ports(name))
+        `
+        )
+        .eq('profile', 'nautical_company');
+
+      if (companyUsersError) throw companyUsersError;
+
+      const formattedCompanies: Company[] = await Promise.all(
+        (companyUsers || []).map(async (company: any) => {
+          const companyPortIds = (company.user_ports || []).map((up: any) => up.port_id);
+          const commonPorts = managedPortIds.filter((pid) => companyPortIds.includes(pid));
+          if (!commonPorts.length) return null;
+
+          const commonPortName =
+            company.user_ports?.find((up: any) => up.port_id === commonPorts[0])?.ports?.name || '';
+
+          const signedLogo = await getSignedAvatarUrl(company.avatar);
+          const allCompanyPortNames = (company.user_ports || [])
+            .map((up: any) => up.ports?.name)
+            .filter(Boolean);
+
+          return {
+            id: String(company.id),
+            name: company.company_name,
+            logo: signedLogo || DEFAULT_AVATAR,
+            fullAddress: company.address || '',
+            contactEmail: company.e_mail || '',
+            contactPhone: company.phone || '',
+            categories:
+              (company.user_categorie_service || []).map((ucs: any) => ({
+                description1: ucs?.categorie_service?.description1 || '',
+              })) || [],
+            ports: allCompanyPortNames,
+            commonPortName,
+            hasNewRequests: false, // si tu as un indicateur côté DB, branche-le ici
+            hasNewMessages: !!company.has_new_messages,
+          } as Company;
+        })
+      );
+
+      setCompanies(formattedCompanies.filter(Boolean) as Company[]);
+    } catch (e) {
+      console.error('Error fetching companies:', e);
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }, [userId, user?.role]);
+
+  // Siège
+  const fetchHeadquartersContacts = useCallback(async () => {
+    setContactsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, avatar, e_mail, phone, department, has_new_messages')
+        .eq('profile', 'corporate');
+
+      if (error) throw error;
+
+      const contacts = await Promise.all(
+        (data || []).map(async (c: any) => {
+          const avatar = await getSignedAvatarUrl(c.avatar);
+          return {
+            ...c,
+            id: String(c.id),
+            name: buildFullName(c.first_name, c.last_name),
+            avatar: avatar || DEFAULT_AVATAR,
+            hasNewMessages: !!c.has_new_messages,
+          } as HeadquartersContact;
+        })
+      );
+
+      setHeadquartersContacts(contacts);
+    } catch (e) {
+      console.error('Error fetching headquarters contacts:', e);
+    } finally {
+      setContactsLoading(false);
+    }
+  }, []);
+
+  // Autres BM
+  const fetchOtherBoatManagers = useCallback(async () => {
+    setOtherBMLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select(
+          `
+          id,
+          first_name,
+          last_name,
+          avatar,
+          e_mail,
+          phone,
+          has_new_messages,
+          user_categorie_service(categorie_service(description1)),
+          user_ports(port_id, ports(name))
+        `
+        )
+        .eq('profile', 'boat_manager')
+        .neq('id', userId);
+
+      if (error) throw error;
+
+      const managers = await Promise.all(
+        (data || []).map(async (bm: any) => {
+          const avatar = await getSignedAvatarUrl(bm.avatar);
+          const location = bm.user_ports?.[0]?.ports?.name || 'N/A';
+          const specialties =
+            (bm.user_categorie_service || []).map(
+              (ucs: any) => ucs?.categorie_service?.description1 || ''
+            ) || [];
+          return {
+            id: String(bm.id),
+            name: buildFullName(bm.first_name, bm.last_name),
+            avatar: avatar || DEFAULT_AVATAR,
+            e_mail: bm.e_mail,
+            phone: bm.phone,
+            hasNewMessages: !!bm.has_new_messages,
+            location,
+            specialties,
+          } as OtherBoatManager;
+        })
+      );
+
+      setOtherBoatManagers(managers);
+    } catch (e) {
+      console.error('Error fetching other boat managers:', e);
+    } finally {
+      setOtherBMLoading(false);
+    }
+  }, [userId]);
+
+  // Lancer tous les fetchs
+  useEffect(() => {
+    if (!userId) return;
+
+    fetchDashboardStats();
+    // Lancer en parallèle (les setLoading protègent chaque bloc)
+    fetchClients();
+    fetchCompanies();
+    fetchHeadquartersContacts();
+    fetchOtherBoatManagers();
+  }, [
+    userId,
+    fetchDashboardStats,
+    fetchClients,
+    fetchCompanies,
+    fetchHeadquartersContacts,
+    fetchOtherBoatManagers,
+  ]);
+
+  // ================================
+  // Filters
+  // ================================
+  const filteredClients = useMemo(
+    () =>
+      clients.filter((client) => {
+        if (!clientSearchQuery) return true;
+        const q = safeLower(clientSearchQuery);
+        return (
+          safeLower(client.name).includes(q) ||
+          safeLower(client.e_mail).includes(q) ||
+          safeLower(client.phone).includes(q) ||
+          (client.boats || []).some((b) => safeLower(b.name).includes(q))
+        );
+      }),
+    [clients, clientSearchQuery]
+  );
+
+  const filteredCompanies = useMemo(
+    () =>
+      companies.filter((company) => {
+        if (!companySearchQuery) return true;
+        const q = safeLower(companySearchQuery);
+        return (
+          safeLower(company.name).includes(q) ||
+          safeLower(company.commonPortName).includes(q) ||
+          (company.categories || []).some((c) => safeLower(c.description1).includes(q))
+        );
+      }),
+    [companies, companySearchQuery]
+  );
+
+  const filteredContacts = useMemo(
+    () =>
+      headquartersContacts.filter((contact) => {
+        if (!contactSearchQuery) return true;
+        const q = safeLower(contactSearchQuery);
+        return (
+          safeLower(contact.name).includes(q) ||
+          safeLower(contact.e_mail).includes(q) ||
+          safeLower(contact.department).includes(q)
+        );
+      }),
+    [headquartersContacts, contactSearchQuery]
+  );
+
+  const filteredBoatManagers = useMemo(
+    () =>
+      otherBoatManagers.filter((manager) => {
+        if (!boatManagerSearchQuery) return true;
+        const q = safeLower(boatManagerSearchQuery);
+        return (
+          safeLower(manager.name).includes(q) ||
+          safeLower(manager.location).includes(q) ||
+          (manager.specialties || []).some((s) => safeLower(s).includes(q))
+        );
+      }),
+    [otherBoatManagers, boatManagerSearchQuery]
+  );
+
+  // ================================
+  // Handlers & helpers
+  // ================================
+  const handleMessage = (targetUserId: string) => {
+    // MessagesScreen sait gérer ?client= pour ouvrir/Créer la 1:1 si besoin
+    router.push(`/(boat-manager)/messages?client=${targetUserId}`);
   };
 
   const handleRequests = (clientId: string) => {
@@ -473,15 +587,16 @@ setStats(prevStats => ({
   };
 
   const handleCompanyMessage = (companyId: string) => {
-    router.push(`/(boat-manager)/messages?company=${companyId}`);
+    // on route aussi via ?client= pour uniformiser la logique côté messages
+    router.push(`/(boat-manager)/messages?client=${companyId}`);
   };
 
   const handleContactMessage = (contactId: string) => {
-    router.push(`/(boat-manager)/messages?contact=${contactId}`);
+    router.push(`/(boat-manager)/messages?client=${contactId}`);
   };
 
   const handleBoatManagerMessage = (managerId: string) => {
-    router.push(`/(boat-manager)/messages?manager=${managerId}`);
+    router.push(`/(boat-manager)/messages?client=${managerId}`);
   };
 
   const getStatusColor = (status: Client['status']) => {
@@ -510,18 +625,18 @@ setStats(prevStats => ({
     }
   };
 
+  // ================================
+  // Render
+  // ================================
   return (
     <ScrollView style={styles.container}>
+      {/* Header */}
       <View style={styles.welcomeHeader}>
-        <Text style={styles.welcomeText}>
-          Bienvenue {user?.firstName}
-        </Text>
-        <Text style={styles.dateText}>
-          {currentDate}
-        </Text>
+        <Text style={styles.welcomeText}>Bienvenue {user?.firstName}</Text>
+        <Text style={styles.dateText}>{currentDate}</Text>
       </View>
 
-      {/* Dashboard Stats */}
+      {/* Stats */}
       <View style={styles.statsGrid}>
         {statsLoading ? (
           <View style={styles.loadingState}>
@@ -530,7 +645,7 @@ setStats(prevStats => ({
           </View>
         ) : (
           <>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.statCard, styles.urgentCard]}
               onPress={() => router.push('/(boat-manager)/requests?urgency=urgent')}
             >
@@ -543,7 +658,7 @@ setStats(prevStats => ({
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.statCard}
               onPress={() => router.push('/(boat-manager)/planning')}
             >
@@ -552,7 +667,7 @@ setStats(prevStats => ({
               <Text style={styles.statLabel}>RDV à venir</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.statCard}
               onPress={() => router.push('/(boat-manager)/requests?status=submitted')}
             >
@@ -566,7 +681,7 @@ setStats(prevStats => ({
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.statCard}
               onPress={() => router.push('/(boat-manager)/messages')}
             >
@@ -583,10 +698,8 @@ setStats(prevStats => ({
         )}
       </View>
 
-      {/* Carte de performance */}
-      <TouchableOpacity 
-        style={styles.performanceCard}
-      >
+      {/* Performance */}
+      <TouchableOpacity style={styles.performanceCard}>
         <View style={styles.performanceHeader}>
           <View style={styles.performanceTitle}>
             <Star size={24} color="#FFC107" />
@@ -595,34 +708,33 @@ setStats(prevStats => ({
           <View style={styles.ratingContainer}>
             <Text style={styles.ratingText}>{stats.clientSatisfaction.toFixed(1)}</Text>
             <View style={styles.starsContainer}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Star
-                  key={star}
-                  fill={star <= Math.floor(stats.clientSatisfaction) ? '#FFC107' : 'none'}
-                  color={star <= Math.floor(stats.clientSatisfaction) ? '#FFC107' : '#D1D5DB'}
-                />
-              ))}
+              {[1, 2, 3, 4, 5].map((star) => {
+                const active = star <= Math.round(stats.clientSatisfaction);
+                return (
+                  <Star key={star} color={active ? '#FFC107' : '#D1D5DB'} />
+                );
+              })}
               <Text style={styles.reviewCount}>({stats.reviewCount} avis)</Text>
             </View>
           </View>
         </View>
       </TouchableOpacity>
 
-      {/* Mes Clients Section */}
+      {/* Mes Clients */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleContainer}>
             <Users size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Clients</Text>
-            {clients.filter(client => client.has_new_requests || client.has_new_messages).length > 0 && (
+            {clients.filter((c) => c.has_new_requests || c.has_new_messages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {clients.filter(client => client.has_new_requests || client.has_new_messages).length}
+                  {clients.filter((c) => c.has_new_requests || c.has_new_messages).length}
                 </Text>
               </View>
             )}
           </View>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.viewAllButton}
             onPress={() => router.push('/(boat-manager)/clients-list')}
           >
@@ -631,7 +743,7 @@ setStats(prevStats => ({
           </TouchableOpacity>
         </View>
 
-        {/* Client Search */}
+        {/* Recherche */}
         <View style={styles.searchContainer}>
           <Search size={20} color="#666" />
           <TextInput
@@ -649,60 +761,71 @@ setStats(prevStats => ({
           </View>
         ) : filteredClients.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredClients.slice(0, 4).map((client) => ( // Limit to 4 clients
-              <TouchableOpacity 
-                key={client.id} 
+            {filteredClients.slice(0, 4).map((client) => (
+              <TouchableOpacity
+                key={client.id}
                 style={styles.clientCardCompact}
                 onPress={() => handleClientDetails(client.id)}
               >
                 <View style={styles.clientCardHeader}>
-                  <Image 
-                    source={{ uri: client.avatar }} 
-                    style={styles.clientAvatarCompact} 
-                    onError={() => {
-                      // Fallback to default avatar if image fails to load
-                      setClients(prev =>
-                        prev.map(c => c.id === client.id ? { ...c, avatar: DEFAULT_AVATAR } : c)
-                      );
-                    }}
+                  <Image
+                    source={{ uri: client.avatar }}
+                    style={styles.clientAvatarCompact}
+                    onError={() =>
+                      setClients((prev) =>
+                        prev.map((c) =>
+                          c.id === client.id ? { ...c, avatar: DEFAULT_AVATAR } : c
+                        )
+                      )
+                    }
                   />
-                  <View style={[styles.statusBadgeCompact, { backgroundColor: `${getStatusColor(client.status)}15` }]}>
-                    <View style={[styles.statusDot, { backgroundColor: getStatusColor(client.status) }]} />
-                    <Text style={[styles.statusTextCompact, { color: getStatusColor(client.status) }]}>
+                  <View
+                    style={[
+                      styles.statusBadgeCompact,
+                      { backgroundColor: `${getStatusColor(client.status)}15` },
+                    ]}
+                  >
+                    <View
+                      style={[styles.statusDot, { backgroundColor: getStatusColor(client.status) }]}
+                    />
+                    <Text
+                      style={[
+                        styles.statusTextCompact,
+                        { color: getStatusColor(client.status) },
+                      ]}
+                    >
                       {getStatusLabel(client.status)}
                     </Text>
                   </View>
                 </View>
-                
-                <Text style={styles.clientNameCompact}>{client.first_name} {client.last_name}</Text>
-                
+
+                <Text style={styles.clientNameCompact}>
+                  {client.first_name} {client.last_name}
+                </Text>
+
                 <View style={styles.boatsCountContainer}>
                   <Boat size={16} color="#0066CC" />
                   <Text style={styles.boatsCount}>
                     {client.boats.length} bateau{client.boats.length > 1 ? 'x' : ''}
                   </Text>
                 </View>
-                
+
                 <View style={styles.actionsCompact}>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.actionButtonCompact}
                     onPress={() => handleMessage(client.id)}
                   >
                     <MessageSquare size={18} color="#0066CC" />
-                    {client.has_new_messages && (
-                      <View style={styles.actionNotificationDot} />
-                    )}
+                    {client.has_new_messages && <View style={styles.actionNotificationDot} />}
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.actionButtonCompact}
                     onPress={() => handleRequests(client.id)}
                   >
                     <FileText size={18} color="#0066CC" />
-                    {client.has_new_requests && (
-                      <View style={styles.actionNotificationDot} />
-                    )}
+                    {client.has_new_requests && <View style={styles.actionNotificationDot} />}
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.actionButtonCompact}
                     onPress={() => handleClientDetails(client.id)}
                   >
@@ -719,7 +842,7 @@ setStats(prevStats => ({
         )}
       </View>
 
-      {/* Nouvelle Demande Section */}
+      {/* Nouvelle Demande */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleContainer}>
@@ -728,7 +851,7 @@ setStats(prevStats => ({
           </View>
         </View>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.newRequestCard}
           onPress={() => router.push('/(boat-manager)/company-request')}
         >
@@ -742,23 +865,23 @@ setStats(prevStats => ({
         </TouchableOpacity>
       </View>
 
-      {/* Mes Entreprises Partenaires Section */}
+      {/* Entreprises partenaires */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleContainer}>
             <Building size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Entreprises Partenaires</Text>
-            {companies.filter(company => company.hasNewRequests).length > 0 && (
+            {companies.filter((c) => c.hasNewRequests).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {companies.filter(company => company.hasNewRequests).length}
+                  {companies.filter((c) => c.hasNewRequests).length}
                 </Text>
               </View>
             )}
           </View>
         </View>
 
-        {/* Company Search */}
+        {/* Recherche entreprises */}
         <View style={styles.searchContainer}>
           <Search size={20} color="#666" />
           <TextInput
@@ -776,64 +899,65 @@ setStats(prevStats => ({
           </View>
         ) : filteredCompanies.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredCompanies.slice(0, 4).map((company) => ( // Limit to 4 companies
-              <TouchableOpacity 
-                key={company.id} 
+            {filteredCompanies.slice(0, 4).map((company) => (
+              <TouchableOpacity
+                key={company.id}
                 style={styles.companyCardCompact}
                 onPress={() => handleCompanyDetails(company)}
               >
-                <Image 
-                  source={{ uri: company.logo }} 
-                  style={styles.companyLogoCompact} 
-                  onError={() => {
-                    // Fallback to default avatar if image fails to load
-                    setCompanies(prev =>
-                      prev.map(c => c.id === company.id ? { ...c, logo: DEFAULT_AVATAR } : c)
-                    );
-                  }}
+                <Image
+                  source={{ uri: company.logo }}
+                  style={styles.companyLogoCompact}
+                  onError={() =>
+                    setCompanies((prev) =>
+                      prev.map((c) =>
+                        c.id === company.id ? { ...c, logo: DEFAULT_AVATAR } : c
+                      )
+                    )
+                  }
                 />
                 <Text style={styles.companyNameCompact}>{company.name}</Text>
-                
-                {company.commonPortName && ( // Display common port name
+
+                {company.commonPortName ? (
                   <View style={styles.companyLocationCompact}>
                     <MapPin size={14} color="#666" />
                     <Text style={styles.locationTextCompact}>{company.commonPortName}</Text>
                   </View>
-                )}
-                
+                ) : null}
+
                 <View style={styles.servicesTagsCompact}>
-                  {company.categories?.slice(0, 2).map((category, index) => ( // Use categories
-                    <View key={index} style={styles.serviceTagCompact}>
+                  {(company.categories || []).slice(0, 2).map((category, index) => (
+                    <View key={`${company.id}-cat-${index}`} style={styles.serviceTagCompact}>
                       <Text style={styles.serviceTagTextCompact}>{category.description1}</Text>
                     </View>
                   ))}
-                  {company.categories && company.categories.length > 2 && ( // Use categories
-                    <View key="more-services" style={styles.serviceTagCompact}>
-                      <Text style={styles.serviceTagTextCompact}>+{company.categories.length - 2}</Text>
+                  {company.categories && company.categories.length > 2 && (
+                    <View key={`${company.id}-more`} style={styles.serviceTagCompact}>
+                      <Text style={styles.serviceTagTextCompact}>
+                        +{company.categories.length - 2}
+                      </Text>
                     </View>
                   )}
                 </View>
-                
+
                 <View style={styles.companyActionsCompact}>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.companyActionCompact}
                     onPress={() => handleCompanyMessage(company.id)}
                   >
                     <MessageSquare size={18} color="#0066CC" />
-                    {company.hasNewRequests && (
-                      <View style={styles.actionNotificationDot} />
-                    )}
+                    {company.hasNewMessages && <View style={styles.actionNotificationDot} />}
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.companyActionCompact}
-                    onPress={() => router.push(`/(boat-manager)/company-request?company=${company.id}`)}
+                    onPress={() =>
+                      router.push(`/(boat-manager)/company-request?company=${company.id}`)
+                    }
                   >
                     <FileText size={18} color="#0066CC" />
-                    {company.hasNewRequests && (
-                      <View style={styles.actionNotificationDot} />
-                    )}
+                    {company.hasNewRequests && <View style={styles.actionNotificationDot} />}
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.companyActionCompact}
                     onPress={() => handleCompanyDetails(company)}
                   >
@@ -850,24 +974,24 @@ setStats(prevStats => ({
         )}
       </View>
 
-      {/* Mes Contacts au siège Section */}
+      {/* Contacts siège */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleContainer}>
             <Briefcase size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Mes Contacts au siège</Text>
-            {headquartersContacts.filter(contact => contact.hasNewMessages).length > 0 && (
+            {headquartersContacts.filter((c) => c.hasNewMessages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {headquartersContacts.filter(contact => contact.hasNewMessages).length}
+                  {headquartersContacts.filter((c) => c.hasNewMessages).length}
                 </Text>
               </View>
             )}
           </View>
-          {filteredContacts.length > 4 && ( // Show "Voir tous" button if more than 4 contacts
-            <TouchableOpacity 
+          {filteredContacts.length > 4 && (
+            <TouchableOpacity
               style={styles.viewAllButton}
-   //           onPress={() => router.push('/(boat-manager)/headquarters-contacts-list')} {/* Navigate to a new page */}
+              onPress={() => router.push('/(boat-manager)/headquarters-contacts-list')}
             >
               <Text style={styles.viewAllText}>Voir tous</Text>
               <ChevronRight size={20} color="#0066CC" />
@@ -875,7 +999,7 @@ setStats(prevStats => ({
           )}
         </View>
 
-        {/* Contact Search */}
+        {/* recherche contacts */}
         <View style={styles.searchContainer}>
           <Search size={20} color="#666" />
           <TextInput
@@ -893,35 +1017,34 @@ setStats(prevStats => ({
           </View>
         ) : filteredContacts.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredContacts.slice(0, 4).map((contact) => ( // Limit to 4 contacts
-              <TouchableOpacity 
-                key={contact.id} 
+            {filteredContacts.slice(0, 4).map((contact) => (
+              <TouchableOpacity
+                key={contact.id}
                 style={styles.contactCardCompact}
                 onPress={() => handleContactMessage(contact.id)}
               >
-                <Image 
-                  source={{ uri: contact.avatar }} 
-                  style={styles.contactAvatarCompact} 
-                  onError={() => {
-                    // Fallback to default avatar if image fails to load
-                    setHeadquartersContacts(prev =>
-                      prev.map(c => c.id === contact.id ? { ...c, avatar: DEFAULT_AVATAR } : c)
-                    );
-                  }}
+                <Image
+                  source={{ uri: contact.avatar }}
+                  style={styles.contactAvatarCompact}
+                  onError={() =>
+                    setHeadquartersContacts((prev) =>
+                      prev.map((c) =>
+                        c.id === contact.id ? { ...c, avatar: DEFAULT_AVATAR } : c
+                      )
+                    )
+                  }
                 />
                 <Text style={styles.contactNameCompact}>{contact.name}</Text>
-                <Text style={styles.contactRoleCompact}>{contact.role || 'Corporate User'}</Text>
-                <Text style={styles.contactDepartmentCompact}>{contact.department}</Text>
-                
-                <TouchableOpacity 
+                <Text style={styles.contactRoleCompact}>{contact.department || 'Corporate'}</Text>
+                <Text style={styles.contactDepartmentCompact}>{contact.e_mail}</Text>
+
+                <TouchableOpacity
                   style={styles.messageButtonCompact}
                   onPress={() => handleContactMessage(contact.id)}
                 >
                   <MessageSquare size={16} color="#0066CC" />
                   <Text style={styles.messageButtonText}>Message</Text>
-                  {contact.hasNewMessages && (
-                    <View style={styles.messageNotificationDot} />
-                  )}
+                  {contact.hasNewMessages && <View style={styles.messageNotificationDot} />}
                 </TouchableOpacity>
               </TouchableOpacity>
             ))}
@@ -933,35 +1056,32 @@ setStats(prevStats => ({
         )}
       </View>
 
-      {/* Les autres Boat Managers Section */}
+      {/* Autres Boat Managers */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleContainer}>
             <Users size={24} color="#0066CC" />
             <Text style={styles.sectionTitle}>Les autres Boat Managers</Text>
-            {otherBoatManagers.filter(manager => manager.hasNewMessages).length > 0 && (
+            {otherBoatManagers.filter((m) => m.hasNewMessages).length > 0 && (
               <View style={styles.notificationBadge}>
                 <Text style={styles.notificationBadgeText}>
-                  {otherBoatManagers.filter(manager => manager.hasNewMessages).length}
+                  {otherBoatManagers.filter((m) => m.hasNewMessages).length}
                 </Text>
               </View>
             )}
           </View>
-          {/* Afficher "Voir tous" si plus de 4 managers */}
-{filteredBoatManagers.length > 4 && (
-  <TouchableOpacity 
-    style={styles.viewAllButton}
-    onPress={() => router.push('/(boat-manager)/other-boat-managers-list')}
-  >
-    {/* Navigate to a new page */}
-    <Text style={styles.viewAllText}>Voir tous</Text>
-    <ChevronRight size={20} color="#0066CC" />
-  </TouchableOpacity>
-)}
-
+          {filteredBoatManagers.length > 4 && (
+            <TouchableOpacity
+              style={styles.viewAllButton}
+              onPress={() => router.push('/(boat-manager)/other-boat-managers-list')}
+            >
+              <Text style={styles.viewAllText}>Voir tous</Text>
+              <ChevronRight size={20} color="#0066CC" />
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Boat Manager Search */}
+        {/* recherche BM */}
         <View style={styles.searchContainer}>
           <Search size={20} color="#666" />
           <TextInput
@@ -979,21 +1099,22 @@ setStats(prevStats => ({
           </View>
         ) : filteredBoatManagers.length > 0 ? (
           <View style={styles.cardGrid}>
-            {filteredBoatManagers.slice(0, 4).map((manager) => ( // Limit to 4 managers
-              <TouchableOpacity 
-                key={manager.id} 
+            {filteredBoatManagers.slice(0, 4).map((manager) => (
+              <TouchableOpacity
+                key={manager.id}
                 style={styles.contactCardCompact}
                 onPress={() => handleBoatManagerMessage(manager.id)}
               >
-                <Image 
-                  source={{ uri: manager.avatar }} 
-                  style={styles.contactAvatarCompact} 
-                  onError={() => {
-                    // Fallback to default avatar if image fails to load
-                    setOtherBoatManagers(prev =>
-                      prev.map(m => m.id === manager.id ? { ...m, avatar: DEFAULT_AVATAR } : m)
-                    );
-                  }}
+                <Image
+                  source={{ uri: manager.avatar }}
+                  style={styles.contactAvatarCompact}
+                  onError={() =>
+                    setOtherBoatManagers((prev) =>
+                      prev.map((m) =>
+                        m.id === manager.id ? { ...m, avatar: DEFAULT_AVATAR } : m
+                      )
+                    )
+                  }
                 />
                 <Text style={styles.contactNameCompact}>{manager.name}</Text>
                 <View style={styles.boatManagerLocationContainer}>
@@ -1001,27 +1122,27 @@ setStats(prevStats => ({
                   <Text style={styles.boatManagerLocationText}>{manager.location}</Text>
                 </View>
                 <View style={styles.boatManagerSpecialtiesContainer}>
-                  {manager.specialties?.slice(0, 2).map((specialty, index) => (
-                    <View key={index} style={styles.boatManagerSpecialtyTag}>
-                      <Text style={styles.boatManagerSpecialtyText}>{specialty}</Text>
+                  {(manager.specialties || []).slice(0, 2).map((s, i) => (
+                    <View key={`${manager.id}-s-${i}`} style={styles.boatManagerSpecialtyTag}>
+                      <Text style={styles.boatManagerSpecialtyText}>{s}</Text>
                     </View>
                   ))}
                   {manager.specialties && manager.specialties.length > 2 && (
-                    <View key="more-specialties" style={styles.boatManagerSpecialtyTag}>
-                      <Text style={styles.boatManagerSpecialtyText}>+{manager.specialties.length - 2}</Text>
+                    <View key={`${manager.id}-s-more`} style={styles.boatManagerSpecialtyTag}>
+                      <Text style={styles.boatManagerSpecialtyText}>
+                        +{manager.specialties.length - 2}
+                      </Text>
                     </View>
                   )}
                 </View>
-                
-                <TouchableOpacity 
+
+                <TouchableOpacity
                   style={styles.messageButtonCompact}
                   onPress={() => handleBoatManagerMessage(manager.id)}
                 >
                   <MessageSquare size={16} color="#0066CC" />
                   <Text style={styles.messageButtonText}>Message</Text>
-                  {manager.hasNewMessages && (
-                    <View style={styles.messageNotificationDot} />
-                  )}
+                  {manager.hasNewMessages && <View style={styles.messageNotificationDot} />}
                 </TouchableOpacity>
               </TouchableOpacity>
             ))}
@@ -1033,7 +1154,7 @@ setStats(prevStats => ({
         )}
       </View>
 
-      {/* Company Details Modal */}
+      {/* Modale détails entreprise */}
       <Modal
         visible={showCompanyDetailsModal}
         transparent
@@ -1044,72 +1165,87 @@ setStats(prevStats => ({
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Détails de l'entreprise</Text>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.closeButton}
                 onPress={() => setShowCompanyDetailsModal(false)}
               >
                 <X size={24} color="#666" />
               </TouchableOpacity>
             </View>
-            
+
             {selectedCompanyDetails && (
               <ScrollView style={styles.modalBody}>
                 <View style={styles.companyDetailsCard}>
-                  <Image 
-                    source={{ uri: selectedCompanyDetails.logo }} 
-                    style={styles.companyDetailsLogo} 
-                    onError={() => {
-                      // Fallback to default avatar if image fails to load
-                      setSelectedCompanyDetails(prev => prev ? { ...prev, logo: DEFAULT_AVATAR } : null);
-                    }}
+                  <Image
+                    source={{ uri: selectedCompanyDetails.logo }}
+                    style={styles.companyDetailsLogo}
+                    onError={() =>
+                      setSelectedCompanyDetails((prev) =>
+                        prev ? { ...prev, logo: DEFAULT_AVATAR } : null
+                      )
+                    }
                   />
-                  <Text style={styles.companyDetailsName}>{selectedCompanyDetails.name}</Text>
-                  
-                  {selectedCompanyDetails.commonPortName && ( // Display common port name
+                  <Text style={styles.companyDetailsName}>
+                    {selectedCompanyDetails.name}
+                  </Text>
+
+                  {selectedCompanyDetails.commonPortName ? (
                     <View style={styles.companyDetailsRow}>
                       <MapPin size={20} color="#666" />
                       <Text style={styles.companyDetailsText}>
                         {selectedCompanyDetails.commonPortName}
                       </Text>
                     </View>
-                  )}
+                  ) : null}
 
-                  {selectedCompanyDetails.fullAddress && ( // Display full address if available
+                  {selectedCompanyDetails.fullAddress ? (
                     <View style={styles.companyDetailsRow}>
                       <MapPin size={20} color="#666" />
                       <Text style={styles.companyDetailsText}>
                         {selectedCompanyDetails.fullAddress}
                       </Text>
                     </View>
-                  )}
-                  
+                  ) : null}
+
                   <View style={styles.companyDetailsRow}>
                     <Mail size={20} color="#666" />
-                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.contactEmail}</Text>
-                  </View>
-                  
-                  <View style={styles.companyDetailsRow}>
-                    <Phone size={20} color="#666" />
-                    <Text style={styles.companyDetailsText}>{selectedCompanyDetails.contactPhone}</Text>
-                  </View>
-                  
-                  <View style={styles.companyDetailsServices}>
-                    <Text style={styles.companyDetailsServicesTitle}>Services proposés :</Text>
-                    <View style={styles.servicesTagsCompact}>
-                      {selectedCompanyDetails.categories?.map((category, index) => ( // Use categories
-                        <View key={index} style={styles.serviceTagCompact}>
-                          <Text style={styles.serviceTagTextCompact}>{category.description1}</Text>
-                        </View>
-                      ))}
-                    </View>
+                    <Text style={styles.companyDetailsText}>
+                      {selectedCompanyDetails.contactEmail}
+                    </Text>
                   </View>
 
-                  {selectedCompanyDetails.ports && selectedCompanyDetails.ports.length > 0 && (
+                  <View style={styles.companyDetailsRow}>
+                    <Phone size={20} color="#666" />
+                    <Text style={styles.companyDetailsText}>
+                      {selectedCompanyDetails.contactPhone}
+                    </Text>
+                  </View>
+
+                  {(selectedCompanyDetails.categories || []).length > 0 && (
                     <View style={styles.companyDetailsServices}>
-                      <Text style={styles.companyDetailsServicesTitle}>Ports d'intervention :</Text>
+                      <Text style={styles.companyDetailsServicesTitle}>
+                        Services proposés :
+                      </Text>
                       <View style={styles.servicesTagsCompact}>
-                        {selectedCompanyDetails.ports.map((port, index) => (
-                          <View key={index} style={styles.serviceTagCompact}>
+                        {(selectedCompanyDetails.categories || []).map((category, index) => (
+                          <View key={`scat-${index}`} style={styles.serviceTagCompact}>
+                            <Text style={styles.serviceTagTextCompact}>
+                              {category.description1}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {(selectedCompanyDetails.ports || []).length > 0 && (
+                    <View style={styles.companyDetailsServices}>
+                      <Text style={styles.companyDetailsServicesTitle}>
+                        Ports d'intervention :
+                      </Text>
+                      <View style={styles.servicesTagsCompact}>
+                        {(selectedCompanyDetails.ports || []).map((port, index) => (
+                          <View key={`sport-${index}`} style={styles.serviceTagCompact}>
                             <Text style={styles.serviceTagTextCompact}>{port}</Text>
                           </View>
                         ))}
@@ -1126,6 +1262,9 @@ setStats(prevStats => ({
   );
 }
 
+// ================================
+// Styles
+// ================================
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1148,7 +1287,8 @@ const styles = StyleSheet.create({
     color: '#666',
     textTransform: 'capitalize',
   },
-  // Dashboard Stats
+
+  // Stats
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1171,12 +1311,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   urgentCard: {
@@ -1212,7 +1348,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
   },
-  // Performance Card
+
+  // Performance
   performanceCard: {
     backgroundColor: 'white',
     margin: 20,
@@ -1226,12 +1363,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   performanceHeader: {
@@ -1268,48 +1401,8 @@ const styles = StyleSheet.create({
     color: '#666',
     marginLeft: 4,
   },
-  performanceStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  performanceStat: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  performanceStatValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#0066CC',
-  },
-  performanceStatLabel: {
-    fontSize: 12,
-    color: '#666',
-  },
-  // New Request Card
-  newRequestCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f0f7ff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  newRequestContent: {
-    flex: 1,
-  },
-  newRequestTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0066CC',
-    marginBottom: 4,
-  },
-  newRequestDescription: {
-    fontSize: 14,
-    color: '#666',
-  },
+
+  // Section
   section: {
     padding: 20,
   },
@@ -1329,11 +1422,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
-  notificationBadgeText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
   viewAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1344,6 +1432,8 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
+
+  // Recherche
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1360,12 +1450,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   searchInput: {
@@ -1373,16 +1459,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1a1a1a',
     ...Platform.select({
-      web: {
-        outlineStyle: 'none',
-      },
+      web: { outlineStyle: 'none' },
     }),
   },
+
+  // Grids
   cardGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
   },
+
+  // Clients
   clientCardCompact: {
     width: '48%',
     backgroundColor: 'white',
@@ -1395,12 +1483,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   clientCardHeader: {
@@ -1471,6 +1555,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'white',
   },
+
+  // Entreprises
   companyCardCompact: {
     width: '48%',
     backgroundColor: 'white',
@@ -1483,12 +1569,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   companyLogoCompact: {
@@ -1543,6 +1625,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f7ff',
     position: 'relative',
   },
+
+  // Contacts / BM cards
   contactCardCompact: {
     width: '48%',
     backgroundColor: 'white',
@@ -1556,12 +1640,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   contactAvatarCompact: {
@@ -1616,143 +1696,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'white',
   },
-  emptyState: {
-    padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyStateText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  loadingState: {
-    padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  clientCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    gap: 16,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
-    }),
-  },
-  clientHeader: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-  clientAvatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-  },
-  clientInfo: {
-    flex: 1,
-    gap: 8,
-  },
-  clientNameRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  clientName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  contactInfo: {
-    gap: 4,
-  },
-  contactRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  contactText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  lastContact: {
-    fontSize: 12,
-    color: '#666',
-    fontStyle: 'italic',
-  },
-  boatsList: {
-    gap: 8,
-  },
-  boatItem: {
-    backgroundColor: '#f0f7ff',
-    padding: 12,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  boatInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  boatName: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#0066CC',
-  },
-  boatType: {
-    fontSize: 14,
-    color: '#666',
-    marginLeft: 'auto',
-  },
-  lastService: {
-    fontSize: 12,
-    color: '#666',
-    marginLeft: 24,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#f0f7ff',
-    borderRadius: 8,
-  },
-  actionButtonText: {
-    fontSize: 14,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  // Boat Manager specific styles
+
+  // Boat Manager extras
   boatManagerLocationContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1779,10 +1724,61 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#0066CC',
   },
-  // Modal Styles
+
+  // New request
+  newRequestCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f0f7ff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  newRequestContent: {
+    flex: 1,
+  },
+  newRequestTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0066CC',
+    marginBottom: 4,
+  },
+  newRequestDescription: {
+    fontSize: 14,
+    color: '#666',
+  },
+
+  // Empty & Loading
+  emptyState: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  loadingState: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+
+  // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1799,28 +1795,23 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.1,
         shadowRadius: 8,
       },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-      },
+      android: { elevation: 4 },
+      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.1)' },
     }),
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
     marginBottom: 16,
-    padding: 16,
+    paddingVertical: 0,
   },
   closeButton: {
     padding: 4,
@@ -1840,12 +1831,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 4,
       },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxBoxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
-      },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
     }),
   },
   companyDetailsLogo: {
