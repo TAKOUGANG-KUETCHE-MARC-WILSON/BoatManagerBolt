@@ -23,6 +23,7 @@
     "@react-navigation/native": "^7.0.14",
     "@stripe/stripe-react-native": "0.45.0",
     "@supabase/supabase-js": "^2.50.3",
+    "base-64": "^1.0.0",
     "base64-arraybuffer": "^1.0.2",
     "bcryptjs": "^3.0.2",
     "buffer": "^6.0.3",

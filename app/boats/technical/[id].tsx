@@ -1,16 +1,79 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal } from 'react-native';
+// app/boats/technical/[id].tsx
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Platform,
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  useWindowDimensions,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Calendar, PenTool as Tool, User, FileText, Plus, Upload, X, Building, Search, ChevronRight } from 'lucide-react-native';
+import {
+  ArrowLeft,
+  Calendar,
+  PenTool as Tool,
+  User,
+  FileText,
+  Upload,
+  X,
+  Building,
+  Search,
+  ChevronRight,
+  Download,
+} from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { Buffer } from 'buffer';
+import { supabase } from '@/src/lib/supabase';
 import CustomDateTimePicker from '@/components/CustomDateTimePicker';
 import { useAuth } from '@/context/AuthContext';
-import { Buffer } from 'buffer';
+
 const BUCKET = 'technical.record.documents';
-// Polyfill (utile sur RN/Expo)
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB (limite soft pour éviter OOM)
+
+// --- Notifications & logs (erreurs masquées côté client) ---
+const GENERIC_ERR = "Une erreur est survenue. Veuillez réessayer.";
+const GENERIC_LOAD_ERR = "Impossible de charger ces informations. Réessayez plus tard.";
+
+const notifyError = (msg?: string) => {
+  const text = msg || GENERIC_ERR;
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(text, m.ToastAndroid.LONG));
+  } else {
+    Alert.alert('Oups', text);
+  }
+};
+
+const notifyInfo = (msg: string) => {
+  if (Platform.OS === 'android') {
+    // @ts-ignore
+    import('react-native').then(m => m.ToastAndroid?.show(msg, m.ToastAndroid.SHORT));
+  } else {
+    Alert.alert('', msg);
+  }
+};
+
+const logError = (scope: string, err: unknown) => {
+  if (__DEV__) console.error(`[${scope}]`, err);
+};
+
+// Polyfill Buffer (utile sur RN/Expo)
 (global as any).Buffer = (global as any).Buffer || Buffer;
+
+// -------- Utils fichiers / storage --------
+
+
 
 
 // Récupère la clé interne du bucket à partir d'une URL publique
@@ -26,44 +89,141 @@ function extractPathFromPublicUrl(publicUrl: string, bucket = BUCKET) {
   }
 }
 
-// Lit une URI locale (content://, file://) en ArrayBuffer pour éviter les Blobs vides
-async function readUriAsArrayBuffer(uri: string, filename: string) {
-  let src = uri;
-  if (src.startsWith('content://')) {
-    const dest = `${FileSystem.cacheDirectory}${Date.now()}-${filename}`;
-    await FileSystem.copyAsync({ from: src, to: dest });
-    src = dest;
-  }
-  // Web: fetch marche bien
-  if (Platform.OS === 'web') {
-    const ab = await (await fetch(src)).arrayBuffer();
-    if (!ab.byteLength) throw new Error('Fichier vide (0 octet).');
-    return ab;
-  }
-  // Mobile: lire en base64 puis convertir
-  const base64 = await FileSystem.readAsStringAsync(src, { encoding: FileSystem.EncodingType.Base64 });
-  const bytes = Buffer.from(base64, 'base64');
-  if (!bytes.byteLength) throw new Error('Fichier vide (0 octet).');
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+// Remplace caractères à risque dans le nom de fichier
+function sanitizeFilename(name?: string) {
+  return (name || 'fichier')
+    .replace(/[\/\\:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
+//const MAX_FILE_SIZE = 25 * 1024 * 1024;
+
+async function safeGetInfo(uri: string): Promise<{ exists: boolean; size?: number }> {
+  try {
+    return await FileSystem.getInfoAsync(uri, { size: true }) as any;
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    // En dev SDK 54, le “deprecated” peut remonter en erreur : on l’ignore.
+    if (msg.includes('deprecated') || msg.includes('expo-file-system')) {
+      return { exists: true } as any;
+    }
+    throw e;
+  }
+}
+
+
+
+
+/**
+ * Force une vraie URI locale file://
+ * - si on reçoit content:// => on copie dans le cache
+ * - fallback: lecture base64 + réécriture si la copie échoue
+ * - vérifie l'existence réelle du fichier copié
+ */
+async function ensureLocalFileUri(originalUri: string, filename?: string): Promise<string> {
+  if (originalUri.startsWith('file://')) {
+    try {
+      const info = await safeGetInfo(originalUri);
+      if (info.exists) return originalUri;
+    } catch {}
+  }
+
+  const safe = sanitizeFilename(filename);
+  const dest = `${FileSystem.cacheDirectory}${Date.now()}-${safe}`;
+
+  if (originalUri.startsWith('content://')) {
+    try {
+      await FileSystem.copyAsync({ from: originalUri, to: dest });
+      const info = await safeGetInfo(dest);
+      if (!info.exists || (typeof info.size === 'number' && info.size === 0)) {
+        throw new Error('copy-empty');
+      }
+      return dest;
+    } catch (e1) {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(originalUri, { encoding: FileSystem.EncodingType.Base64 });
+        await FileSystem.writeAsStringAsync(dest, base64, { encoding: FileSystem.EncodingType.Base64 });
+        const info = await safeGetInfo(dest);
+        if (!info.exists || (typeof info.size === 'number' && info.size === 0)) {
+          throw new Error('write-empty');
+        }
+        return dest;
+      } catch (e2) {
+        logError('ensureLocalFileUri', { e1, e2, originalUri });
+        throw new Error('Impossible d’accéder au fichier sélectionné.');
+      }
+    }
+  }
+
+  return originalUri;
+}
+
+
+// Lit une URI locale (content://, file://) en ArrayBuffer (Android/iOS)
+async function readUriAsArrayBuffer(uri: string) {
+  if (Platform.OS !== 'web') {
+    try {
+      const info = await safeGetInfo(uri);
+      if (!info.exists) {
+        logError('readUriAsArrayBuffer.exists=false', { uri });
+        throw new Error('missing');
+      }
+      if (typeof info.size === 'number') {
+        if (info.size === 0) {
+          logError('readUriAsArrayBuffer.size=0', { uri });
+          throw new Error('empty');
+        }
+        if (info.size > MAX_FILE_SIZE) {
+          logError('readUriAsArrayBuffer.tooBig', { size: info.size, uri });
+          throw new Error('too-big');
+        }
+      }
+    } catch (pre) {
+      // Tolère les “deprecated” en dev : on tente quand même la lecture base64.
+      logError('readUriAsArrayBuffer.precheck', { pre, uri });
+    }
+  }
+
+  try {
+    if (Platform.OS === 'web') {
+      const ab = await (await fetch(uri)).arrayBuffer();
+      if (!ab.byteLength) throw new Error('empty-web');
+      return ab;
+    }
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    const bytes = Buffer.from(base64, 'base64');
+    if (!bytes.byteLength) throw new Error('empty');
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  } catch (e) {
+    logError('readUriAsArrayBuffer', { e, uri });
+    throw new Error('Échec de la lecture du fichier.');
+  }
+}
+
+// -------- Types --------
+
+interface TRDocument {
+  id: string;
+  name: string;
+  type: string;
+  date: string;
+  uri: string;
+}
 
 interface TechnicalRecordForm {
   id?: string;
   title: string;
   description: string;
   date: string;                 // YYYY-MM-DD
-  performedById: number | null; // ✅ nouvel ID users
-  performedByLabel: string;     // "Moi-même" ou nom de société
-  documents: Array<{
-    id: string;
-    name: string;
-    type: string;
-    date: string;
-    uri: string;
-  }>;
+  performedById: number | null; // id dans table users
+  performedByLabel: string;     // "Moi-même" ou nom société
+  documents: TRDocument[];
 }
 
+type NauticalCompany = { id: string; name: string; location?: string };
+
+// -------- Modale sélection société --------
 
 const CompanySelectionModal = ({
   visible,
@@ -88,7 +248,7 @@ const CompanySelectionModal = ({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { maxHeight: '88%' }]}>
+        <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Sélectionner une entreprise du nautisme</Text>
             <TouchableOpacity style={styles.closeButton} onPress={onClose}>
@@ -107,7 +267,11 @@ const CompanySelectionModal = ({
             />
           </View>
 
-          <ScrollView style={styles.modalList} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={styles.modalList}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            keyboardShouldPersistTaps="handled"
+          >
             <TouchableOpacity style={styles.modalItem} onPress={() => onPick({ name: 'Moi-même' })}>
               <View style={styles.modalItemContent}>
                 <User size={20} color="#0066CC" />
@@ -123,7 +287,12 @@ const CompanySelectionModal = ({
               </View>
             ) : filtered.length > 0 ? (
               filtered.map(c => (
-                <TouchableOpacity key={c.id} style={styles.modalItem} onPress={() => onPick({ id: c.id, name: c.name })} activeOpacity={0.7}>
+                <TouchableOpacity
+                  key={c.id}
+                  style={styles.modalItem}
+                  onPress={() => onPick({ id: c.id, name: c.name })}
+                  activeOpacity={0.7}
+                >
                   <View style={styles.modalItemContent}>
                     <Building size={20} color="#0066CC" />
                     <View>
@@ -146,212 +315,243 @@ const CompanySelectionModal = ({
   );
 };
 
+// -------- Responsive helpers --------
 
+function useResponsive() {
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const isTablet = width >= 768;
+  const isSmallPhone = width < 360;
+  const scale = Math.min(Math.max(width / 390, 0.85), 1.2);
+  return { width, height, isLandscape, isTablet, isSmallPhone, scale };
+}
 
-export default function TechnicalRecordScreen() {
-  const toDate = (v?: string) => {
+const toDate = (v?: string) => {
   const d = v ? new Date(v) : new Date();
   return isNaN(d.getTime()) ? new Date() : d;
 };
+
+// ============================= Screen =============================
+
+export default function TechnicalRecordScreen() {
   const { id, boatId } = useLocalSearchParams<{ id: string; boatId: string }>();
   const isNewRecord = id === 'new';
+
+  const { user } = useAuth();
+  const [currentUserRowId, setCurrentUserRowId] = useState<number | null>(null);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
   const [form, setForm] = useState<TechnicalRecordForm>({
-  title: '',
-  description: '',
-  date: new Date().toISOString().split('T')[0],
-  performedById: null,
-  performedByLabel: '',
-  documents: [],
-});
+    title: '',
+    description: '',
+    date: new Date().toISOString().split('T')[0],
+    performedById: null,
+    performedByLabel: 'Moi-même',
+    documents: [],
+  });
 
+  const [errors, setErrors] = useState<{
+    title?: string;
+    description?: string;
+    date?: string;
+    performedBy?: string;
+  }>({});
 
-const { user } = useAuth();
-
-type NauticalCompany = { id: string; name: string; location?: string };
-const [showCompanyModal, setShowCompanyModal] = useState(false);
-const [companies, setCompanies] = useState<NauticalCompany[]>([]);
-const [companiesLoading, setCompaniesLoading] = useState(false);
-const [companyQuery, setCompanyQuery] = useState('');
-
-const [currentUserRowId, setCurrentUserRowId] = useState<number | null>(null);
-
-useEffect(() => {
-  if (!user?.email) return;
-  supabase.from('users').select('id').eq('e_mail', user.email).single()
-    .then(({ data }) => setCurrentUserRowId(data?.id ?? null));
-}, [user?.email]);
-
-// ↓ même fonction que dans l’autre écran
-const fetchNauticalCompaniesForUserPorts = async () => {
-  if (!currentUserRowId) return;               // ✅
-  setCompaniesLoading(true);
-  try {
-    const { data: userPorts, error: portsErr } = await supabase
-      .from('user_ports')
-      .select('port_id')
-      .eq('user_id', currentUserRowId);
-    if (portsErr) throw portsErr;
-
-    const portIds = (userPorts || []).map(p => p.port_id);
-    if (portIds.length === 0) { setCompanies([]); return; }
-
-    const { data: links, error: linksErr } = await supabase
-      .from('user_ports')
-      .select('user_id, port_id')
-      .in('port_id', portIds);
-    if (linksErr) throw linksErr;
-
-    const candidateIds = [...new Set((links || []).map(l => l.user_id))];
-    if (candidateIds.length === 0) { setCompanies([]); return; }
-
-    const { data: companiesData, error: compErr } = await supabase
-      .from('users')
-      .select('id, company_name, user_ports(port_id, ports(name))')
-      .in('id', candidateIds)
-      .eq('profile', 'nautical_company');
-    if (compErr) throw compErr;
-
-    const list = (companiesData || []).map((c: any) => ({
-      id: String(c.id),
-      name: c.company_name,
-      location: (c.user_ports?.[0]?.ports?.name) ?? undefined,
-    }));
-    setCompanies(list);
-  } catch (e) {
-    console.error('Error fetching nautical companies:', e);
-    Alert.alert('Erreur', 'Impossible de charger les entreprises du nautisme de votre port.');
-    setCompanies([]);
-  } finally {
-    setCompaniesLoading(false);
-  }
-};
-
-
-useEffect(() => { if (showCompanyModal) fetchNauticalCompaniesForUserPorts(); }, [showCompanyModal]);
-
-
-  type FormErrors = {
-  title?: string;
-  description?: string;
-  date?: string;
-  performedBy?: string; // libellé d'erreur pour le sélecteur prestataire
-};
-
-const [errors, setErrors] = useState<FormErrors>({});
+  const [showCompanyModal, setShowCompanyModal] = useState(false);
+  const [companies, setCompanies] = useState<NauticalCompany[]>([]);
+  const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [companyQuery, setCompanyQuery] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const { width, height, isLandscape, isTablet, isSmallPhone, scale } = useResponsive();
 
-const handleDateConfirm = (date: Date) => {
-  setForm(prev => ({ ...prev, date: date.toISOString().split('T')[0] }));
-  setDatePickerVisible(false);
-};
+  const r = useMemo(
+    () => ({
+      headerTitle: { fontSize: isTablet ? 22 : 20 },
+      formPadding: { padding: isTablet ? 24 : 16 },
+      label: { fontSize: isTablet ? 18 : 16 },
+      inputWrapper: { height: isTablet ? 56 : isSmallPhone ? 44 : 48 },
+      inputText: { fontSize: 16 * scale },
+      textArea: { fontSize: 16 * scale, minHeight: isTablet ? 140 : 120 },
+      submitText: { fontSize: isTablet ? 18 : 16 },
+      modalContent: {
+        width: Math.min(width * 0.96, isTablet ? 640 : 520),
+        maxHeight: isLandscape ? '88%' : '80%',
+      },
+      modalList: {
+        maxHeight: Math.min(height * (isLandscape ? 0.6 : 0.5), 420),
+      },
+      docName: { fontSize: isTablet ? 15 : 14 },
+      docDate: { fontSize: isTablet ? 13 : 12 },
+    }),
+    [width, height, isLandscape, isTablet, isSmallPhone, scale]
+  );
 
-
+  // Récupère l'id de l'utilisateur courant (table users)
   useEffect(() => {
-    const fetchTechnicalRecord = async () => {
-      if (!boatId) {
-        setFetchError('ID du bateau manquant. Impossible de charger ou d\'ajouter un enregistrement technique.');
-        setLoading(false);
+    if (!user?.email) return;
+    supabase
+      .from('users')
+      .select('id')
+      .eq('e_mail', user.email)
+      .single()
+      .then(({ data, error }) => {
+        if (error) {
+          logError('lookup users.id', error);
+          return;
+        }
+        setCurrentUserRowId(data?.id ?? null);
+      });
+  }, [user?.email]);
+
+  // Quand "Moi-même" est affiché, compléter performedById dès qu'on connaît l'id
+  useEffect(() => {
+    if (form.performedByLabel === 'Moi-même' && !form.performedById && currentUserRowId) {
+      setForm(prev => ({ ...prev, performedById: currentUserRowId }));
+    }
+  }, [currentUserRowId]); // eslint-disable-line
+
+  // Charger sociétés connectées aux ports de l'utilisateur
+  const fetchNauticalCompaniesForUserPorts = useCallback(async () => {
+    if (!currentUserRowId) return;
+    setCompaniesLoading(true);
+    try {
+      const { data: userPorts, error: portsErr } = await supabase
+        .from('user_ports')
+        .select('port_id')
+        .eq('user_id', currentUserRowId);
+      if (portsErr) throw portsErr;
+
+      const portIds = (userPorts || []).map(p => p.port_id);
+      if (portIds.length === 0) {
+        setCompanies([]);
         return;
       }
 
-      if (!isNewRecord && typeof id === 'string') {
-        setLoading(true);
-        setFetchError(null);
-        try {
-          const { data: recordData, error: recordError } = await supabase
-            .from('boat_technical_records')
-            .select('*')
-            .eq('id', id)
-            .eq('boat_id', boatId)
-            .single();
+      const { data: links, error: linksErr } = await supabase
+        .from('user_ports')
+        .select('user_id, port_id')
+        .in('port_id', portIds);
+      if (linksErr) throw linksErr;
 
-          if (recordError) {
-            if (recordError.code === 'PGRST116') { // No rows found
-              setFetchError('Enregistrement technique non trouvé.');
-            } else {
-              console.error('Error fetching technical record:', recordError);
-              setFetchError('Erreur lors du chargement de l\'enregistrement technique.');
-            }
-            setLoading(false);
-            return;
-          }
+      const candidateIds = [...new Set((links || []).map(l => l.user_id))];
+      if (candidateIds.length === 0) {
+        setCompanies([]);
+        return;
+      }
 
-          const { data: documentsData, error: documentsError } = await supabase
-            .from('boat_technical_record_documents')
-            .select('*')
-            .eq('technical_record_id', id);
+      const { data: companiesData, error: compErr } = await supabase
+        .from('users')
+        .select('id, company_name, user_ports(port_id, ports(name))')
+        .in('id', candidateIds)
+        .eq('profile', 'nautical_company');
+      if (compErr) throw compErr;
 
-          if (documentsError) {
-            console.error('Error fetching technical record documents:', documentsError);
-            // Continue even if documents fail to load, main record is more important
-          }
+      const list = (companiesData || []).map((c: any) => ({
+        id: String(c.id),
+        name: c.company_name,
+        location: c.user_ports?.[0]?.ports?.name ?? undefined,
+      }));
+      setCompanies(list);
+    } catch (e) {
+      logError('fetch companies', e);
+      notifyError();
+      setCompanies([]);
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }, [currentUserRowId]);
 
-          setForm({
-  id: recordData.id.toString(),
-  title: recordData.title || '',
-  description: recordData.description || '',
-  date: recordData.date || '',
-  performedById: recordData.performed_by ?? null,            // ✅ nouvel ID
-  performedByLabel: recordData.performed_by_label || '',     // ✅ le libellé
-  documents: (documentsData || []).map(doc => ({
-    id: doc.id.toString(),
-    name: doc.name,
-    type: doc.type,
-    date: doc.date,
-    uri: doc.file_url,
-  })),
-});
-// Fallback si anciens enregistrements sans performed_by_label
-if (!recordData.performed_by_label && recordData.performed_by) {
-  const { data: u } = await supabase
-    .from('users')
-    .select('company_name, first_name, last_name')
-    .eq('id', recordData.performed_by)
-    .single();
+  useEffect(() => {
+    if (showCompanyModal) fetchNauticalCompaniesForUserPorts();
+  }, [showCompanyModal, fetchNauticalCompaniesForUserPorts]);
 
-  const guess =
-    u?.company_name ||
-    [u?.first_name, u?.last_name].filter(Boolean).join(' ') ||
-    'Moi-même';
+  // Charger le dossier technique existant (si édition)
+  useEffect(() => {
+    const load = async () => {
+      if (!boatId) {
+        setFetchError('error');
+        setLoading(false);
+        return;
+      }
+      if (isNewRecord || typeof id !== 'string') {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setFetchError(null);
+      try {
+        const { data: recordData, error: recordError } = await supabase
+          .from('boat_technical_records')
+          .select('*')
+          .eq('id', id)
+          .eq('boat_id', boatId)
+          .single();
 
-  setForm(prev => ({ ...prev, performedByLabel: guess }));
-}
-
-        } catch (e) {
-          console.error('Unexpected error fetching technical record:', e);
-          setFetchError('Une erreur inattendue est survenue.');
-        } finally {
-          setLoading(false);
+        if (recordError || !recordData) {
+          setFetchError('error');
+          return;
         }
-      } else {
+
+        const { data: documentsData } = await supabase
+          .from('boat_technical_record_documents')
+          .select('*')
+          .eq('technical_record_id', id);
+
+        setForm(prev => ({
+          ...prev,
+          id: String(recordData.id),
+          title: recordData.title || '',
+          description: recordData.description || '',
+          date: recordData.date || '',
+          performedById: recordData.performed_by ?? null,
+          performedByLabel: recordData.performed_by_label || prev.performedByLabel || '',
+          documents: (documentsData || []).map((doc: any) => ({
+            id: String(doc.id),
+            name: doc.name,
+            type: doc.type,
+            date: doc.date,
+            uri: doc.file_url,
+          })),
+        }));
+
+        // Fallback anciens enregistrements sans libellé
+        if (!recordData.performed_by_label && recordData.performed_by) {
+          const { data: u } = await supabase
+            .from('users')
+            .select('company_name, first_name, last_name')
+            .eq('id', recordData.performed_by)
+            .single();
+          const guess =
+            u?.company_name ||
+            [u?.first_name, u?.last_name].filter(Boolean).join(' ') ||
+            'Moi-même';
+          setForm(prev => ({ ...prev, performedByLabel: guess }));
+        }
+      } catch (e) {
+        logError('fetchTechnicalRecord', e);
+        setFetchError('error');
+      } finally {
         setLoading(false);
       }
     };
-
-    fetchTechnicalRecord();
+    load();
   }, [id, boatId, isNewRecord]);
 
-  useEffect(() => {
-  if (form.performedByLabel === 'Moi-même' && !form.performedById && currentUserRowId) {
-    setForm(prev => ({ ...prev, performedById: currentUserRowId }));
-  }
-}, [currentUserRowId]); // ✅
-
+  // -------- Validation --------
 
   const validateForm = () => {
-  const newErrors: FormErrors = {};
-  if (!form.title.trim()) newErrors.title = 'Le titre est requis';
-  if (!form.description.trim()) newErrors.description = 'La description est requise';
-  if (!form.date.trim()) newErrors.date = 'La date est requise';
-  if (!form.performedById) newErrors.performedBy = 'Le prestataire est requis';
-  setErrors(newErrors);
-  return Object.keys(newErrors).length === 0;
-};
+    const newErrors: typeof errors = {};
+    if (!form.title.trim()) newErrors.title = 'Le titre est requis';
+    if (!form.description.trim()) newErrors.description = 'La description est requise';
+    if (!form.date.trim()) newErrors.date = 'La date est requise';
+    if (!form.performedById) newErrors.performedBy = 'Le prestataire est requis';
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
+  // -------- Documents --------
 
   const handleAddDocument = async () => {
     try {
@@ -359,175 +559,191 @@ if (!recordData.performed_by_label && recordData.performed_by) {
         type: ['application/pdf', 'image/*'],
         copyToCacheDirectory: true,
       });
+      if (result.canceled || !result.assets?.length) return;
 
-      if (result.canceled || !result.assets || result.assets.length === 0) {
-        return;
-      }
+      const asset = result.assets[0];
+      const localUri = await ensureLocalFileUri(asset.uri, asset.name);
 
-      const newDocument = {
-        id: `doc-${Date.now()}`, // Client-side unique ID
-        name: result.assets[0].name,
-        type: result.assets[0].mimeType || 'application/octet-stream',
+      const newDocument: TRDocument = {
+        id: `local-${Date.now()}`,
+        name: sanitizeFilename(asset.name),
+        type: asset.mimeType || 'application/octet-stream',
         date: new Date().toISOString().split('T')[0],
-        uri: result.assets[0].uri,
+        uri: localUri,
       };
 
-      setForm(prev => ({
-        ...prev,
-        documents: [...(prev.documents || []), newDocument],
-      }));
-    } catch (error) {
-      console.error('Error picking document:', error);
-      Alert.alert('Erreur', 'Une erreur est survenue lors de la sélection du document');
+      setForm(prev => ({ ...prev, documents: [...prev.documents, newDocument] }));
+    } catch (e) {
+      logError('pickDocument', e);
+      notifyError();
     }
   };
 
   const handleRemoveDocument = (documentId: string) => {
     setForm(prev => ({
       ...prev,
-      documents: prev.documents?.filter(doc => doc.id !== documentId) || [],
+      documents: prev.documents.filter(doc => doc.id !== documentId),
     }));
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      return;
+  const handleDownloadDocument = async (document: TRDocument) => {
+    try {
+      if (Platform.OS === 'web') {
+        const win = window.open(document.uri, '_blank');
+        if (!win) throw new Error('Popup bloquée');
+      } else {
+        const filename = document.name || 'document';
+        const target = FileSystem.cacheDirectory + filename;
+        const { uri: downloadedUri } = await FileSystem.downloadAsync(document.uri, target);
+        await Sharing.shareAsync(downloadedUri, {
+          mimeType: document.type,
+          UTI: document.type === 'application/pdf' ? '.pdf' : undefined,
+        });
+      }
+      notifyInfo('Téléchargement prêt');
+    } catch (e) {
+      logError('downloadDocument', e);
+      notifyError();
     }
+  };
 
+  // -------- Submit / Delete --------
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
     if (!boatId) {
-      Alert.alert('Erreur', 'ID du bateau manquant. Impossible d\'ajouter l\'équipement.');
+      notifyError();
       return;
     }
 
     setLoading(true);
     try {
       let technicalRecordId: number;
-      
+
       if (isNewRecord) {
-  const { data, error } = await supabase
-    .from('boat_technical_records')
-    .insert({
-      boat_id: parseInt(boatId),
-      title: form.title,
-      description: form.description,
-      date: form.date,
-      performed_by: form.performedById,           // ✅ ID users
-      performed_by_label: form.performedByLabel,  // ✅ libellé (ex: "Moi-même")
-    })
-    .select('id')
+        const { data, error } = await supabase
+          .from('boat_technical_records')
+          .insert({
+            boat_id: parseInt(boatId),
+            title: form.title,
+            description: form.description,
+            date: form.date,
+            performed_by: form.performedById,
+            performed_by_label: form.performedByLabel,
+          })
+          .select('id')
           .single();
 
-        if (error) {
-          console.error('Error inserting technical record:', error);
-          Alert.alert('Erreur', `Échec de l'ajout de l'intervention: ${error.message}`);
-          setLoading(false);
-          return;
-        }
-        technicalRecordId = data.id;
+        if (error) throw error;
+        technicalRecordId = data!.id;
       } else {
-        technicalRecordId = parseInt(id as string);
-         const { error } = await supabase
-    .from('boat_technical_records')
-    .update({
-      title: form.title,
-      description: form.description,
-      date: form.date,
-      performed_by: form.performedById,           // ✅
-      performed_by_label: form.performedByLabel,  // ✅
-    })
-    .eq('id', technicalRecordId);
+        technicalRecordId = parseInt(id as string, 10);
+        const { error } = await supabase
+          .from('boat_technical_records')
+          .update({
+            title: form.title,
+            description: form.description,
+            date: form.date,
+            performed_by: form.performedById,
+            performed_by_label: form.performedByLabel,
+          })
+          .eq('id', technicalRecordId);
+        if (error) throw error;
+      }
 
-        if (error) {
-          console.error('Error updating technical record:', error);
-          Alert.alert('Erreur', `Échec de la mise à jour de l'intervention: ${error.message}`);
-          setLoading(false);
-          return;
+      // Synchroniser documents (suppr retirés)
+      const { data: existingDocs } = await supabase
+        .from('boat_technical_record_documents')
+        .select('id, file_url')
+        .eq('technical_record_id', technicalRecordId);
+
+      const onlineUris = form.documents.filter(d => d.uri.startsWith('http')).map(d => d.uri);
+      const toDelete = (existingDocs || []).filter(d => !onlineUris.includes(d.file_url));
+
+      for (const doc of toDelete) {
+        const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
+        if (key) {
+          const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
+          if (delErr) logError('storage.remove', delErr);
+        }
+        await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
+      }
+
+      // Upload nouveaux fichiers
+      for (const doc of form.documents) {
+        if (doc.uri.startsWith('http')) continue;
+        const safeName = sanitizeFilename(doc.name);
+
+        let localUri = doc.uri;
+        if (localUri.startsWith('content://')) {
+          try {
+            localUri = await ensureLocalFileUri(localUri, safeName);
+          } catch (e) {
+            logError('ensureLocalFileUri@submit', { e, localUri });
+            notifyError();
+            continue;
+          }
+        }
+
+        // Double check d'existence/taille avant lecture
+        try {
+          const info = await FileSystem.getInfoAsync(localUri, { size: true });
+          if (!info.exists) throw new Error('not-exists');
+          if (typeof info.size === 'number' && info.size > MAX_FILE_SIZE) {
+            throw new Error('too-big');
+          }
+        } catch (chk) {
+          logError('pre-read check', { chk, localUri });
+          notifyError();
+          continue;
+        }
+
+        let arrayBuffer: ArrayBuffer;
+        try {
+          arrayBuffer = await readUriAsArrayBuffer(localUri);
+        } catch (e) {
+          logError('read@submit', { e, localUri });
+          notifyError();
+          continue;
+        }
+
+        const key = `${boatId}/${technicalRecordId}/${Date.now()}_${safeName}`;
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET)
+          .upload(key, arrayBuffer, {
+            contentType: doc.type || 'application/octet-stream',
+            upsert: false,
+          });
+        if (uploadError) {
+          logError('storage.upload', uploadError);
+          notifyError();
+          continue;
+        }
+
+        const fileUrl = supabase.storage.from(BUCKET).getPublicUrl(key).data.publicUrl;
+        const { error: insertErr } = await supabase
+          .from('boat_technical_record_documents')
+          .insert({
+            technical_record_id: technicalRecordId,
+            name: safeName,
+            type: doc.type,
+            date: doc.date,
+            file_url: fileUrl,
+          });
+        if (insertErr) {
+          logError('insert document row', insertErr);
+          notifyError();
         }
       }
 
-      // Handle documents: upload new ones, keep existing ones, delete removed ones
-const { data: existingDocs } = await supabase
-  .from('boat_technical_record_documents')
-  .select('id, file_url')
-  .eq('technical_record_id', technicalRecordId);
-
-// URIs déjà en ligne (dans ton formulaire)
-const uploadedUris = form.documents
-  .filter(d => d.uri.startsWith('http'))
-  .map(d => d.uri);
-
-// À supprimer = ce qui est en base mais n’est plus dans le formulaire
-const documentsToDelete = (existingDocs || []).filter(
-  d => !uploadedUris.includes(d.file_url)
-);
-
-
-for (const doc of documentsToDelete) {
-  const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
-  if (key) {
-    const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
-    if (delErr) console.warn('Storage delete error:', delErr);
-  }
-  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
-}
-
-
-      // Upload new documents and insert/update records
-      for (const doc of form.documents) {
-  if (doc.uri.startsWith('http')) continue; // déjà en ligne
-
-  // IMPORTANT: la "key" ne doit PAS contenir le nom du bucket
-  const key = `${boatId}/${technicalRecordId}/${Date.now()}_${doc.name}`;
-
-  // Lire en ArrayBuffer (fiable sur Android/iOS)
-  const arrayBuffer = await readUriAsArrayBuffer(doc.uri, doc.name);
-  // (facultatif) console.log('byteLength', arrayBuffer.byteLength);
-
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(key, arrayBuffer, {
-      contentType: doc.type || 'application/octet-stream',
-      upsert: false,
-    });
-
-  if (uploadError) {
-    console.error('Error uploading document file:', uploadError);
-    Alert.alert('Erreur', `Échec du téléchargement du document ${doc.name}: ${uploadError.message}`);
-    continue;
-  }
-
-  const fileUrl = supabase.storage.from(BUCKET).getPublicUrl(key).data.publicUrl;
-
-  const { error: docInsertError } = await supabase
-    .from('boat_technical_record_documents')
-    .insert({
-      technical_record_id: technicalRecordId,
-      name: doc.name,
-      type: doc.type,
-      date: doc.date,
-      file_url: fileUrl,
-    });
-
-  if (docInsertError) {
-    console.error('Error inserting document record:', docInsertError);
-    Alert.alert('Erreur', `Échec de l'enregistrement du document ${doc.name}: ${docInsertError.message}`);
-  }
-}
-
-
       Alert.alert(
         'Succès',
-        isNewRecord ? 'L\'intervention a été ajoutée avec succès.' : 'L\'intervention a été mise à jour avec succès.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.push(`/boats/${boatId}`)
-          }
-        ]
+        isNewRecord ? "L'intervention a été ajoutée avec succès." : "L'intervention a été mise à jour avec succès.",
+        [{ text: 'OK', onPress: () => router.push(`/boats/${boatId}`) }]
       );
     } catch (e) {
-      console.error('Unexpected error during submission:', e);
-      Alert.alert('Erreur', 'Une erreur inattendue est survenue.');
+      logError('submitTechnicalRecord', e);
+      notifyError();
     } finally {
       setLoading(false);
     }
@@ -535,64 +751,42 @@ for (const doc of documentsToDelete) {
 
   const handleDelete = async () => {
     Alert.alert(
-      'Supprimer l\'intervention',
+      "Supprimer l'intervention",
       'Êtes-vous sûr de vouloir supprimer cette intervention ? Cette action est irréversible.',
       [
-        {
-          text: 'Annuler',
-          style: 'cancel',
-        },
+        { text: 'Annuler', style: 'cancel' },
         {
           text: 'Supprimer',
           style: 'destructive',
           onPress: async () => {
             setLoading(true);
-            setFetchError(null);
             try {
-              // 1. Delete associated documents from storage and database
-              const { data: documentsData, error: fetchDocsError } = await supabase
+              const { data: documentsData } = await supabase
                 .from('boat_technical_record_documents')
                 .select('id, file_url')
                 .eq('technical_record_id', id);
 
-              if (fetchDocsError) {
-                console.warn('Error fetching documents for deletion:', fetchDocsError);
-              } else if (documentsData) {
-                for (const doc of documentsData) {
-  const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
-  if (key) {
-    const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
-    if (delErr) console.warn('Storage delete error:', delErr);
-  }
-  await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
-}
-
+              for (const doc of documentsData || []) {
+                const key = extractPathFromPublicUrl(doc.file_url, BUCKET);
+                if (key) {
+                  const { error: delErr } = await supabase.storage.from(BUCKET).remove([key]);
+                  if (delErr) logError('storage.remove', delErr);
+                }
+                await supabase.from('boat_technical_record_documents').delete().eq('id', doc.id);
               }
 
-              // 2. Delete the main technical record
               const { error: deleteRecordError } = await supabase
                 .from('boat_technical_records')
                 .delete()
                 .eq('id', id);
+              if (deleteRecordError) throw deleteRecordError;
 
-              if (deleteRecordError) {
-                console.error('Error deleting technical record:', deleteRecordError);
-                Alert.alert('Erreur', `Échec de la suppression de l'intervention: ${deleteRecordError.message}`);
-              } else {
-                Alert.alert(
-                  'Succès',
-                  'L\'intervention a été supprimée avec succès.',
-                  [
-                    {
-                      text: 'OK',
-                      onPress: () => router.push(`/boats/${boatId}`)
-                    }
-                  ]
-                );
-              }
+              Alert.alert('Succès', "L'intervention a été supprimée avec succès.", [
+                { text: 'OK', onPress: () => router.push(`/boats/${boatId}`) },
+              ]);
             } catch (e) {
-              console.error('Unexpected error during deletion:', e);
-              Alert.alert('Erreur', 'Une erreur inattendue est survenue lors de la suppression.');
+              logError('deleteTechnicalRecord', e);
+              notifyError();
             } finally {
               setLoading(false);
             }
@@ -602,269 +796,288 @@ for (const doc of documentsToDelete) {
     );
   };
 
+  // ---------------- RENDER ----------------
+
   if (loading) {
     return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.headerRow}>
+          <TouchableOpacity style={styles.headerLeft} onPress={() => router.back()}>
             <ArrowLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
-          <Text style={styles.title}>
-            {isNewRecord ? 'Nouvelle intervention' : 'Modifier l\'intervention'}
+          <Text style={[styles.headerTitle, r.headerTitle]}>
+            {isNewRecord ? 'Nouvelle intervention' : "Modifier l'intervention"}
           </Text>
         </View>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Chargement...</Text>
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
   if (fetchError) {
     return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.headerRow}>
+          <TouchableOpacity style={styles.headerLeft} onPress={() => router.back()}>
             <ArrowLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
-          <Text style={styles.title}>Erreur</Text>
+          <Text style={[styles.headerTitle, r.headerTitle]}>Erreur</Text>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{fetchError}</Text>
-          <TouchableOpacity 
-            style={styles.errorButton}
-            onPress={() => router.back()}
-          >
+          <Text style={styles.errorText}>{GENERIC_LOAD_ERR}</Text>
+          <TouchableOpacity style={styles.errorButton} onPress={() => router.back()}>
             <Text style={styles.errorButtonText}>Retour</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
-    >
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => router.back()}
-          >
-            <ArrowLeft size={24} color="#1a1a1a" />
-          </TouchableOpacity>
-          <Text style={styles.title}>
-            {isNewRecord ? 'Nouvelle intervention' : 'Modifier l\'intervention'}
-          </Text>
-        </View>
-
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Titre de l'intervention</Text>
-            <View style={[styles.inputWrapper, errors.title && styles.inputWrapperError]}>
-              <Tool size={20} color={errors.title ? '#ff4444' : '#666'} />
-              <TextInput
-                style={styles.input}
-                value={form.title}
-                onChangeText={(text) => {
-                  setForm(prev => ({ ...prev, title: text }));
-                  if (errors.title) setErrors(prev => ({ ...prev, title: undefined }));
-                }}
-                placeholder="ex: Entretien moteur, Remplacement voile"
-              />
-            </View>
-            {errors.title && <Text style={styles.errorText}>{errors.title}</Text>}
+    <SafeAreaView style={styles.safe}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      >
+        <ScrollView style={styles.scrollView} contentContainerStyle={{ paddingBottom: 32 }}>
+          {/* Header centré */}
+          <View style={styles.headerRow}>
+            <TouchableOpacity style={styles.headerLeft} onPress={() => router.back()}>
+              <ArrowLeft size={24} color="#1a1a1a" />
+            </TouchableOpacity>
+            <Text style={[styles.headerTitle, r.headerTitle]}>
+              {isNewRecord ? 'Nouvelle intervention' : "Modifier l'intervention"}
+            </Text>
           </View>
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Description</Text>
-            <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
-              <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
-              <TextInput
-                style={styles.textArea}
-                value={form.description}
-                onChangeText={(text) => {
-                  setForm(prev => ({ ...prev, description: text }));
-                  if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
-                }}
-                placeholder="Description détaillée de l'intervention"
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
+          <View style={[styles.form, r.formPadding]}>
+            {/* Titre */}
+            <View style={styles.inputContainer}>
+              <Text style={[styles.label, r.label]}>Titre de l'intervention</Text>
+              <View style={[styles.inputWrapper, r.inputWrapper, errors.title && styles.inputWrapperError]}>
+                <Tool size={20} color={errors.title ? '#ff4444' : '#666'} />
+                <TextInput
+                  style={[styles.input, r.inputText]}
+                  value={form.title}
+                  onChangeText={(text) => {
+                    setForm(prev => ({ ...prev, title: text }));
+                    if (errors.title) setErrors(prev => ({ ...prev, title: undefined }));
+                  }}
+                  placeholder="ex: Entretien moteur, Remplacement voile"
+                />
+              </View>
+              {errors.title && <Text style={styles.errorText}>{errors.title}</Text>}
             </View>
-            {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
-          </View>
 
-          <View style={styles.inputContainer}>
-  <Text style={styles.label}>Date de l'intervention</Text>
-  <TouchableOpacity
-    style={[styles.inputWrapper, errors.date && styles.inputWrapperError]}
-    onPress={() => setDatePickerVisible(true)}
-  >
-    <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
-    <Text style={styles.input}>{form.date || 'Sélectionner une date'}</Text>
-  </TouchableOpacity>
-  {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
-</View>
+            {/* Description */}
+            <View style={styles.inputContainer}>
+              <Text style={[styles.label, r.label]}>Description</Text>
+              <View style={[styles.textAreaWrapper, errors.description && styles.textAreaWrapperError]}>
+                <FileText size={20} color={errors.description ? '#ff4444' : '#666'} style={styles.textAreaIcon} />
+                <TextInput
+                  style={[styles.textArea, r.textArea]}
+                  value={form.description}
+                  onChangeText={(text) => {
+                    setForm(prev => ({ ...prev, description: text }));
+                    if (errors.description) setErrors(prev => ({ ...prev, description: undefined }));
+                  }}
+                  placeholder="Description détaillée de l'intervention"
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                />
+              </View>
+              {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
+            </View>
 
-<CustomDateTimePicker
-  isVisible={isDatePickerVisible}
-  mode="date"
-  value={toDate(form.date)}
-  onConfirm={handleDateConfirm}
-  onCancel={() => setDatePickerVisible(false)}
-/>
-
-
-          <View style={styles.inputContainer}>
-  <Text style={styles.label}>Réalisée par</Text>
-  <TouchableOpacity
-    style={[styles.inputWrapper, errors.performedBy && styles.inputWrapperError]}
-    onPress={() => setShowCompanyModal(true)}
-    activeOpacity={0.8}
-  >
-    <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
-    <Text
-  style={[styles.input, { textAlignVertical: 'center', paddingTop: 0 }]}
-  numberOfLines={1}
-  ellipsizeMode="tail"
->
-  {form.performedByLabel || 'Sélectionner une entreprise du nautisme'}
-</Text>
-  </TouchableOpacity>
-  {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
-</View>
-
-<CompanySelectionModal
-  visible={showCompanyModal}
-  loading={companiesLoading}
-  companies={companies}
-  query={companyQuery}
-  onChangeQuery={setCompanyQuery}
-  onPick={(choice) => {
-  // Afficher le libellé tout de suite, même si l'ID n'est pas encore dispo
-  const id = choice.id ? Number(choice.id) : (currentUserRowId ?? null);
-  setForm(prev => ({
-    ...prev,
-    performedById: id,                 // peut être null si "Moi-même" mais non résolu
-    performedByLabel: choice.name,     // affichage immédiat
-  }));
-  setErrors(prev => ({ ...prev, performedBy: undefined }));
-  setShowCompanyModal(false);
-}}
-  onClose={() => setShowCompanyModal(false)}
-/>
-
-
-          <View style={styles.documentsSection}>
-            <View style={styles.documentsSectionHeader}>
-              <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+            {/* Date */}
+            <View style={styles.inputContainer}>
+              <Text style={[styles.label, r.label]}>Date de l'intervention</Text>
               <TouchableOpacity
-                style={styles.addDocumentButton}
-                onPress={handleAddDocument}
+                style={[styles.inputWrapper, r.inputWrapper, errors.date && styles.inputWrapperError]}
+                onPress={() => setDatePickerVisible(true)}
               >
-                <Upload size={20} color="#0066CC" />
-                <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+                <Calendar size={20} color={errors.date ? '#ff4444' : '#666'} />
+                <Text style={[styles.input, r.inputText]}>
+                  {form.date || 'Sélectionner une date'}
+                </Text>
               </TouchableOpacity>
+              {errors.date && <Text style={styles.errorText}>{errors.date}</Text>}
             </View>
 
-            {form.documents && form.documents.length > 0 ? (
-              <View style={styles.documentsList}>
-                {form.documents.map((document) => (
-                  <View key={document.id} style={styles.documentItem}>
-                    <View style={styles.documentInfo}>
-                      <FileText size={20} color="#0066CC" />
-                      <View style={styles.documentDetails}>
-                        <Text style={styles.documentName}>{document.name}</Text>
-                        <Text style={styles.documentDate}>{document.date}</Text>
+            <CustomDateTimePicker
+              isVisible={isDatePickerVisible}
+              mode="date"
+              value={toDate(form.date)}
+              onConfirm={(d) => {
+                setForm(prev => ({ ...prev, date: d.toISOString().split('T')[0] }));
+                setDatePickerVisible(false);
+              }}
+              onCancel={() => setDatePickerVisible(false)}
+            />
+
+            {/* Prestataire */}
+            <View style={styles.inputContainer}>
+              <Text style={[styles.label, r.label]}>Réalisée par</Text>
+              <TouchableOpacity
+                style={[styles.inputWrapper, r.inputWrapper, errors.performedBy && styles.inputWrapperError]}
+                onPress={() => setShowCompanyModal(true)}
+                activeOpacity={0.8}
+              >
+                <User size={20} color={errors.performedBy ? '#ff4444' : '#666'} />
+                <Text
+                  style={[styles.input, r.inputText, { textAlignVertical: 'center', paddingTop: 0 }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {form.performedByLabel || 'Sélectionner une entreprise du nautisme'}
+                </Text>
+              </TouchableOpacity>
+              {errors.performedBy && <Text style={styles.errorText}>{errors.performedBy}</Text>}
+            </View>
+
+            <CompanySelectionModal
+              visible={showCompanyModal}
+              loading={companiesLoading}
+              companies={companies}
+              query={companyQuery}
+              onChangeQuery={setCompanyQuery}
+              onPick={(choice) => {
+                const idNum = choice.id ? Number(choice.id) : (currentUserRowId ?? null);
+                setForm(prev => ({
+                  ...prev,
+                  performedById: idNum,
+                  performedByLabel: choice.name,
+                }));
+                setErrors(prev => ({ ...prev, performedBy: undefined }));
+                setShowCompanyModal(false);
+              }}
+              onClose={() => setShowCompanyModal(false)}
+            />
+
+            {/* Documents */}
+            <View style={styles.documentsSection}>
+              <View style={styles.documentsSectionHeader}>
+                <Text style={styles.documentsSectionTitle}>Documents associés</Text>
+                <TouchableOpacity style={styles.addDocumentButton} onPress={handleAddDocument}>
+                  <Upload size={20} color="#0066CC" />
+                  <Text style={styles.addDocumentButtonText}>Ajouter</Text>
+                </TouchableOpacity>
+              </View>
+
+              {form.documents.length > 0 ? (
+                <View style={styles.documentsList}>
+                  {form.documents.map((document) => (
+                    <View key={document.id} style={styles.documentItem}>
+                      <View style={styles.documentInfo}>
+                        <FileText size={20} color="#0066CC" />
+                        <View style={styles.documentDetails}>
+                          <Text style={[styles.documentName, r.docName]} numberOfLines={1} ellipsizeMode="tail">
+                            {document.name}
+                          </Text>
+                          <Text style={[styles.documentDate, r.docDate]}>{document.date}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.documentActions}>
+                        {document.uri.startsWith('http') && (
+                          <TouchableOpacity
+                            style={styles.downloadDocumentButton}
+                            onPress={() => handleDownloadDocument(document)}
+                          >
+                            <Download size={20} color="#0066CC" />
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                          style={styles.removeDocumentButton}
+                          onPress={() => handleRemoveDocument(document.id)}
+                        >
+                          <X size={16} color="#ff4444" />
+                        </TouchableOpacity>
                       </View>
                     </View>
-                    <TouchableOpacity
-                      style={styles.removeDocumentButton}
-                      onPress={() => handleRemoveDocument(document.id)}
-                    >
-                      <X size={16} color="#ff4444" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.noDocuments}>
-                <Text style={styles.noDocumentsText}>Aucun document associé</Text>
-              </View>
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.noDocuments}>
+                  <Text style={styles.noDocumentsText}>Aucun document associé</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Actions */}
+            <TouchableOpacity
+              style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+              onPress={handleSubmit}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <Text style={[styles.submitButtonText, r.submitText]}>
+                  {isNewRecord ? "Ajouter l'intervention" : 'Enregistrer les modifications'}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {!isNewRecord && (
+              <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
+                <Text style={[styles.deleteButtonText, r.submitText]}>Supprimer l'intervention</Text>
+              </TouchableOpacity>
             )}
           </View>
-
-          <TouchableOpacity
-            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
-            onPress={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="white" size="small" />
-            ) : (
-              <Text style={styles.submitButtonText}>
-                {isNewRecord ? 'Ajouter l\'intervention' : 'Enregistrer les modifications'}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          {!isNewRecord && (
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={handleDelete}
-            >
-              <Text style={styles.deleteButtonText}>Supprimer l'intervention</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
+// ============================= Styles =============================
+
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  scrollView: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
+  scrollView: { flex: 1 },
+
+  // Header vraiment centré
+  headerRow: {
+    height: 56,
+    justifyContent: 'center',
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
-  backButton: {
-    padding: 8,
-    marginRight: 16,
+  headerLeft: {
+    position: 'absolute',
+    left: 12,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  title: {
+  headerTitle: {
+    position: 'absolute',
+    left: 72,
+    right: 72,
+    textAlign: 'center',
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
+
   form: {
     padding: 16,
     gap: 20,
   },
-  inputContainer: {
-    gap: 4,
-  },
+  inputContainer: { gap: 4 },
   label: {
     fontSize: 16,
     fontWeight: '500',
@@ -891,11 +1104,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1a1a1a',
     height: '100%',
-    ...Platform.select({
-      web: {
-        outlineStyle: 'none',
-      },
-    }),
+    ...Platform.select({ web: { outlineStyle: 'none' } }),
   },
   textAreaWrapper: {
     backgroundColor: 'white',
@@ -921,11 +1130,10 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     textAlignVertical: 'top',
   },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 12,
-    marginLeft: 4,
-  },
+
+  errorText: { color: '#ff4444', fontSize: 12, marginLeft: 4 },
+
+  // Documents
   documentsSection: {
     backgroundColor: 'white',
     borderRadius: 12,
@@ -944,20 +1152,9 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#1a1a1a',
   },
-  addDocumentButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    padding: 8,
-  },
-  addDocumentButtonText: {
-    fontSize: 14,
-    color: '#0066CC',
-    fontWeight: '500',
-  },
-  documentsList: {
-    gap: 12,
-  },
+  addDocumentButton: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 8 },
+  addDocumentButtonText: { fontSize: 14, color: '#0066CC', fontWeight: '500' },
+  documentsList: { gap: 12 },
   documentItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -966,40 +1163,23 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
   },
-  documentInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  documentDetails: {
-    gap: 2,
-  },
-  documentName: {
-    fontSize: 14,
-    color: '#1a1a1a',
-    fontWeight: '500',
-  },
-  documentDate: {
-    fontSize: 12,
-    color: '#666',
-  },
-  removeDocumentButton: {
-    padding: 4,
-  },
-  removeDocumentButtonText: {
-    fontSize: 14,
-    color: '#ff4444',
-  },
+  documentInfo: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  documentDetails: { gap: 2, flex: 1 },
+  documentName: { fontSize: 14, color: '#1a1a1a', fontWeight: '500', flexShrink: 1, marginRight: 8 },
+  documentDate: { fontSize: 12, color: '#666' },
+  documentActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  downloadDocumentButton: { padding: 4 },
+  removeDocumentButton: { padding: 4 },
+
   noDocuments: {
     padding: 12,
     backgroundColor: '#f8fafc',
     borderRadius: 8,
     alignItems: 'center',
   },
-  noDocumentsText: {
-    fontSize: 14,
-    color: '#666',
-  },
+  noDocumentsText: { fontSize: 14, color: '#666' },
+
+  // Boutons
   submitButton: {
     backgroundColor: '#0066CC',
     padding: 16,
@@ -1012,14 +1192,8 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
-  submitButtonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
-  submitButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  submitButtonDisabled: { backgroundColor: '#94a3b8' },
+  submitButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
   deleteButton: {
     backgroundColor: '#fff5f5',
     padding: 16,
@@ -1027,66 +1201,52 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
-  deleteButtonText: {
-    color: '#ff4444',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  // ⬇️ AJOUTER DANS const styles = StyleSheet.create({ ... })
-  // --- états chargement / erreur ---
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  loadingText: {
-    color: '#666',
-  },
-  errorContainer: {
-    padding: 24,
-    alignItems: 'center',
-    gap: 12,
-  },
+  deleteButtonText: { color: '#ff4444', fontSize: 16, fontWeight: '600' },
+
+  // États chargement / erreur
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  loadingText: { color: '#666', fontSize: 16 },
+  errorContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 16 },
+  errorText: { fontSize: 16, color: '#ff4444', textAlign: 'center' },
   errorButton: {
     backgroundColor: '#0066CC',
     paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 24,
     borderRadius: 10,
-    marginTop: 8,
   },
-  errorButtonText: {
-    color: 'white',
-    fontWeight: '600',
-  },
+  errorButtonText: { color: 'white', fontWeight: '600' },
 
-  // --- styles de la modale société (identiques à l’autre écran) ---
+  // Modale
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 16,
+    width: '96%',
+    maxWidth: 640,
+    maxHeight: '88%',
     overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 4 },
+      web: { boxShadow: '0 6px 18px rgba(0,0,0,0.12)' },
+    }),
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
+  modalTitle: { fontSize: 18, fontWeight: '600', color: '#1a1a1a' },
   closeButton: { padding: 4 },
-
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1101,15 +1261,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#eef2f7',
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1a1a1a',
-    padding: 0,
-  },
-
+  searchInput: { flex: 1, fontSize: 16, color: '#1a1a1a', padding: 0 },
   modalList: { maxHeight: 480 },
-
   modalItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1120,29 +1273,9 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
     backgroundColor: 'white',
   },
-  modalItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  modalItemText: {
-    fontSize: 16,
-    color: '#1a1a1a',
-    fontWeight: '500',
-  },
-  modalItemSubtext: {
-    fontSize: 13,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  emptyModalState: {
-    padding: 32,
-    alignItems: 'center',
-  },
-  emptyModalText: {
-    fontSize: 15,
-    color: '#666',
-    textAlign: 'center',
-  },
-
+  modalItemContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modalItemText: { fontSize: 16, color: '#1a1a1a', fontWeight: '500' },
+  modalItemSubtext: { fontSize: 13, color: '#64748b', marginTop: 2 },
+  emptyModalState: { padding: 32, alignItems: 'center' },
+  emptyModalText: { fontSize: 15, color: '#666', textAlign: 'center' },
 });

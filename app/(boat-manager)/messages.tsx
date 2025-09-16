@@ -13,7 +13,7 @@ import {
   Modal,
   ActivityIndicator,
   TouchableWithoutFeedback,
-  Linking,              // ✅ pour ouvrir les URLs
+  Linking,
 } from 'react-native';
 import {
   Send,
@@ -121,7 +121,7 @@ const NewConversationModal = ({
   getContactTypeIcon,
   getContactTypeLabel,
   getContactTypeColor,
-}) => {
+}: any) => {
   const filteredContacts = allUsers.filter((contact: Contact) => {
     if (contact.id === user?.id) return false;
     const q = (contactSearchQuery || '').toLowerCase();
@@ -309,6 +309,7 @@ export default function MessagesScreen() {
   const currentUserId = Number(user?.id);
   const insets = useSafeAreaInsets();
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [inputBarHeight, setInputBarHeight] = useState(0); // 👈 hauteur de la barre d'input
 
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -688,7 +689,6 @@ export default function MessagesScreen() {
         filteredChats.map(chat => {
           const lastMessage = chat.lastMessage;
 
-          // ✅ trouver l'autre participant (pas l'utilisateur courant)
           const displayParticipant = chat.isGroup
             ? null
             : chat.participants.find(p => p.id !== Number(user?.id));
@@ -742,7 +742,6 @@ export default function MessagesScreen() {
   const ChatView = () => {
     if (!activeChat) return null;
 
-    // ✅ header participant correct
     const headerDisplayParticipant = activeChat.isGroup
       ? activeChat.participants.find(p => p.id !== Number(user?.id)) || activeChat.participants[0]
       : activeChat.participants.find(p => p.id !== Number(user?.id));
@@ -753,8 +752,8 @@ export default function MessagesScreen() {
     return (
       <KeyboardAvoidingView
         style={styles.chatView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
+        behavior={Platform.select({ ios: 'padding', android: 'padding' })}        // 👈 Android en padding
+        keyboardVerticalOffset={insets.top + headerHeight}                        // 👈 offset = header + insets
       >
         <View style={styles.chatHeader} onLayout={e => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
@@ -774,7 +773,10 @@ export default function MessagesScreen() {
           <ScrollView
             ref={scrollViewRef}
             style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[
+              styles.messagesContent,
+              { paddingBottom: inputBarHeight + insets.bottom + 8 },          // 👈 réserve l'espace pour l'input
+            ]}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
@@ -795,12 +797,10 @@ export default function MessagesScreen() {
                     )}
 
                     {msg.image ? (
-                      // ✅ tap sur l'image => ouverture/ téléchargement
                       <TouchableOpacity onPress={() => openUrl(msg.image)}>
                         <Image source={{ uri: msg.image }} style={styles.messageImage} />
                       </TouchableOpacity>
                     ) : msg.file ? (
-                      // ✅ tap sur le fichier => ouverture/ téléchargement (PDF, etc.)
                       <TouchableOpacity onPress={() => openUrl(msg.file!.uri)}>
                         <View style={styles.messageFileContainer}>
                           <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
@@ -825,7 +825,10 @@ export default function MessagesScreen() {
           </ScrollView>
         )}
 
-        <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
+        <View
+          style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}
+          onLayout={e => setInputBarHeight(e.nativeEvent.layout.height)}           // 👈 mesure la barre d'input
+        >
           <ChatInput
             handleSend={handleSend}
             showAttachmentOptions={showAttachmentOptions}
@@ -1033,4 +1036,7 @@ const styles = StyleSheet.create({
       web: { boxShadow: '0 2px 4px rgba(0,102,204,0.2)' },
     }),
   },
+
+  emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center' },
+  emptyStateText: { fontSize: 16, color: '#666', textAlign: 'center', lineHeight: 24 },
 });
