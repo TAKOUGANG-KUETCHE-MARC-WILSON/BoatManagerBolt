@@ -29,7 +29,7 @@ const logError = (scope: string, err: unknown) => {
 
 import { useState, useEffect, memo, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, ActivityIndicator } from 'react-native';
-import { router } from 'expo-router';
+import { router, Redirect, Stack } from 'expo-router';
 import { Phone, Mail, Calendar, Shield, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, Star, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -37,8 +37,6 @@ import { Buffer } from 'buffer';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
 import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
-
-import { Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
@@ -354,7 +352,7 @@ export default function ProfileScreen() {
   // Redirection si pas connecté (pas de return avant les hooks)
   useEffect(() => {
     if (!user?.id) {
-      router.replace('/login'); // ton écran est app/login.tsx
+      router.replace('/(tabs)/welcome-unauthenticated'); // ton écran est app/login.tsx
     }
   }, [user]);
 

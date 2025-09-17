@@ -348,8 +348,8 @@ if (fileUri.startsWith('content://')) {
 }
 
 // 2) Lire en base64 puis convertir en octets
-const base64 = await FileSystem.readAsStringAsync(fileUri, {
-  encoding: FileSystem.EncodingType.Base64,
+const base64 = await FileSystem.readAsStringAsync(readableUri, {
+  encoding: 'base64',
 });
 const bytes = Buffer.from(base64, 'base64'); // Uint8Array
 if (bytes.byteLength === 0) {

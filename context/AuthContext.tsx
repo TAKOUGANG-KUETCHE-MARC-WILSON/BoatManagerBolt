@@ -4,7 +4,7 @@ import { Alert, Platform } from 'react-native';
 import { supabase } from '@/src/lib/supabase';
 import bcrypt from 'bcryptjs';
 import * as SecureStore from 'expo-secure-store';
-import * as Random from 'expo-random';
+import * as Crypto  from 'expo-crypto';
 import 'react-native-url-polyfill/auto';
 
 
@@ -102,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Configure bcrypt with a cryptographically secure random number generator
 bcrypt.setRandomFallback((len: number) => {
-  const bytes = Random.getRandomBytes(len);
+  const bytes = Crypto.getRandomBytes(len);
   return Array.from(bytes);
 });
 

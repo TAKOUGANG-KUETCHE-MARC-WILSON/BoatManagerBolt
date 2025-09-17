@@ -1,7 +1,6 @@
 // app/(tabs)/messages.tsx
+import * as WebBrowser from 'expo-web-browser';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { Linking } from 'react-native';
 import {
   View,
   Text,
@@ -17,12 +16,11 @@ import {
   TouchableWithoutFeedback,
   Alert,
   ToastAndroid,
+  Linking,
 } from 'react-native';
 import {
   Search,
   ChevronLeft,
-  Phone,
-  Video,
   Building,
   Plus,
   X,
@@ -33,7 +31,7 @@ import {
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
@@ -41,7 +39,12 @@ import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
 
-// ---------- Notifs + logs (erreurs masquées côté client) ----------
+// ---------- Config Storage ----------
+const ATTACHMENTS_BUCKET = 'chat.attachments';
+const ATTACHMENTS_BUCKET_IS_PUBLIC = true; // si false => on utilisera signed URL
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 jours
+
+// ---------- Notifs + logs ----------
 const notifyError = (msg: string) => {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
   else Alert.alert('Oups', msg);
@@ -60,12 +63,32 @@ const maskAndNotify = (scope: string, err: unknown, userMsg = 'Une erreur est su
 // ---------- Avatars / fichiers ----------
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
-const isImageUrl = (url?: string) => !!url && /\.(png|jpe?g|gif|webp|bmp)$/i.test((url.split('?')[0] || ''));
+
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic', '.heif'];
+const isImageUrl = (url?: string) => {
+  if (!url) return false;
+  const q = (url.split('?')[0] || '').toLowerCase();
+  return IMAGE_EXTS.some(ext => q.endsWith(ext));
+};
+
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return DEFAULT_AVATAR;
   if (isHttpUrl(value)) return value;
   const { data } = await supabase.storage.from('avatars').createSignedUrl(value, 60 * 60);
   return data?.signedUrl || DEFAULT_AVATAR;
+};
+
+const guessMimeFromName = (name?: string) => {
+  if (!name) return undefined;
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.heif')) return 'image/heif';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  return undefined;
 };
 
 // ---------- Types ----------
@@ -94,6 +117,7 @@ interface Chat {
   name?: string;
   unreadCount?: number;
   lastMessage?: Message;
+  messages?: Message[];
 }
 
 // ---------- Modal création conversation ----------
@@ -285,21 +309,6 @@ export default function MessagesScreen() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
 
-  // ✅ Ouvrir une URL (image/PDF/autre)
-  const openUrl = useCallback(async (url: string) => {
-    try {
-      const supported = await Linking.canOpenURL(url);
-      if (!supported) {
-        notifyError("Impossible d'ouvrir ce lien.");
-        return;
-      }
-      await Linking.openURL(url);
-    } catch (e) {
-      devError('openUrl', e);
-      notifyError("Ouverture du fichier impossible.");
-    }
-  }, []);
-
   // --------- Helpers icônes / labels contact type ----------
   const getContactTypeIcon = (t: Contact['type']) => {
     switch (t) {
@@ -457,7 +466,7 @@ export default function MessagesScreen() {
 
         const convs = memberRows?.map(r => r.conversations).filter(Boolean) || [];
 
-        // Pour chaque conv: participants + dernier message (en //)
+        // Pour chaque conv: participants + dernier message
         const hydrated: Chat[] = await Promise.all(convs.map(async (conv: any) => {
           const [participantsRes, lastMsgRes] = await Promise.all([
             supabase
@@ -606,6 +615,55 @@ export default function MessagesScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [activeChat?.id]);
 
+  // --- Helpers lecture & upload ---
+  const ensureReadableUri = async (uri: string) => {
+    if (uri.startsWith('file://')) return uri;
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.exists && info.isDirectory === false) return uri;
+    } catch {}
+    const cachePath = FileSystem.cacheDirectory + `upload-${Date.now()}`;
+    await FileSystem.copyAsync({ from: uri, to: cachePath });
+    return cachePath;
+  };
+
+  const guessExt = (name?: string, type?: string) => {
+    if (name && /\.[A-Za-z0-9]+$/.test(name)) return '';
+    if (!type) return '';
+    if (type.includes('jpeg')) return '.jpg';
+    if (type.includes('png')) return '.png';
+    if (type.includes('pdf')) return '.pdf';
+    return '';
+  };
+
+  const uploadFileToSupabase = async (fileUri: string, fileName?: string, mimeType?: string) => {
+    const safeName = fileName || 'file';
+    const ext = guessExt(safeName, mimeType);
+    const pathInBucket = `chat_attachments/${user?.id}/${Date.now()}-${safeName}${ext}`;
+
+    const readableUri = await ensureReadableUri(fileUri);
+    const base64 = await FileSystem.readAsStringAsync(readableUri, { encoding: 'base64' });
+    const arrayBuffer = decodeBase64(base64);
+
+    const { data, error } = await supabase.storage
+      .from(ATTACHMENTS_BUCKET)
+      .upload(pathInBucket, arrayBuffer, {
+        contentType: mimeType || guessMimeFromName(safeName + ext) || 'application/octet-stream',
+        upsert: false,
+      });
+    if (error) throw error;
+
+    if (ATTACHMENTS_BUCKET_IS_PUBLIC) {
+      const { data: pub } = supabase.storage.from(ATTACHMENTS_BUCKET).getPublicUrl(data.path);
+      return pub.publicUrl;
+    } else {
+      const { data: signed } = await supabase.storage
+        .from(ATTACHMENTS_BUCKET)
+        .createSignedUrl(data.path, SIGNED_URL_TTL_SECONDS);
+      return signed.signedUrl;
+    }
+  };
+
   // --------- Envoi / upload ----------
   const handleSend = useCallback(async (messageContent: string) => {
     if (!activeChat || !currentUserId) return;
@@ -625,104 +683,37 @@ export default function MessagesScreen() {
     }
   }, [activeChat, currentUserId]);
 
-  const ensureExt = (name: string, mime?: string) => {
-    const hasExt = /\.[A-Za-z0-9]+$/.test(name || '');
-    if (hasExt) return name;
-    if (!mime) return `${name || 'file'}.bin`;
-    if (mime.includes('jpeg')) return `${name || 'image'}.jpg`;
-    if (mime.includes('png'))  return `${name || 'image'}.png`;
-    if (mime.includes('pdf'))  return `${name || 'document'}.pdf`;
-    return `${name || 'file'}.bin`;
-  };
-
-  // 🔧 Upload robuste (ArrayBuffer – pas de Blob)
-  const uploadFileToSupabase = async (
-    fileUri: string,
-    fileName: string,
-    mimeType: string
-  ) => {
-    const safeName = ensureExt(fileName || 'file', mimeType);
-    const filePath = `chat_attachments/${user?.id}/${Date.now()}-${safeName}`;
-
-    try {
-      let workingUri = fileUri;
-      let workingMime = mimeType;
-
-      // 1) Si image → resize/compresse
-      if (mimeType?.startsWith('image/')) {
-        const toJpeg = !mimeType.includes('png');
-        const manipulated = await ImageManipulator.manipulateAsync(
-          fileUri,
-          [{ resize: { width: 1600 } }],
-          {
-            compress: 0.85,
-            format: toJpeg ? ImageManipulator.SaveFormat.JPEG : ImageManipulator.SaveFormat.PNG,
-          }
-        );
-        workingUri = manipulated.uri;
-        workingMime = toJpeg ? 'image/jpeg' : 'image/png';
-      }
-
-      // 2) Lire en base64 → ArrayBuffer
-      const base64 = await FileSystem.readAsStringAsync(workingUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const bytes = decodeBase64(base64); // ArrayBuffer
-
-      if (!bytes || (bytes as ArrayBuffer).byteLength === 0) {
-        throw new Error('Le fichier à téléverser est vide (0 octet).');
-      }
-
-      // 3) Upload direct de l'ArrayBuffer (pas de Blob)
-      const { data, error } = await supabase.storage
-        .from('chat.attachments')
-        .upload(filePath, bytes, {
-          contentType: workingMime || 'application/octet-stream',
-          upsert: false,
-        });
-
-      if (error) throw error;
-
-      // 4) URL publique (si bucket public)
-      const { data: pub } = supabase.storage.from('chat.attachments').getPublicUrl(data.path);
-
-      return {
-        url: pub.publicUrl,
-        path: data.path,
-        size: (bytes as ArrayBuffer).byteLength,
-        mime: workingMime,
-        name: safeName,
-      };
-    } catch (e) {
-      devError('uploadFileToSupabase', e);
-      throw e;
-    }
-  };
-
   const handleChooseImage = useCallback(async () => {
-    try {
-      if (!mediaPermission?.granted) {
-        const p = await requestMediaPermission();
-        if (!p.granted) { notifyError('Autorisez l’accès à la médiathèque.'); return; }
+    if (!mediaPermission?.granted) {
+      const permission = await requestMediaPermission();
+      if (!permission.granted) {
+        notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
+        return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 1,
-      });
-      if (!result.canceled && result.assets?.length) {
-        const asset = result.assets[0];
-        const mime = asset.mimeType || 'image/jpeg';
-        const name = asset.fileName || 'image.jpg';
-        const uploaded = await uploadFileToSupabase(asset.uri, name, mime);
-        await handleSend(uploaded.url);
-      }
-    } catch (e) {
-      maskAndNotify('handleChooseImage', e, 'Téléversement image impossible.');
-    } finally {
-      setShowAttachmentOptions(false);
     }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets?.length) {
+      const asset = result.assets[0];
+      const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
+      const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
+
+      try {
+        const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
+        await handleSend(publicUrl);
+      } catch (e) {
+        devError('upload image', e);
+        notifyError('Téléversement impossible. Réessayez.');
+      }
+    }
+
+    setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, handleSend]);
 
   const handleChooseDocument = useCallback(async () => {
@@ -730,8 +721,8 @@ export default function MessagesScreen() {
       const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
       if (!result.canceled && result.assets?.length) {
         const f = result.assets[0];
-        const uploaded = await uploadFileToSupabase(f.uri, f.name, f.mimeType || 'application/octet-stream');
-        await handleSend(uploaded.url);
+        const url = await uploadFileToSupabase(f.uri, f.name, f.mimeType || 'application/octet-stream');
+        await handleSend(url);
       }
     } catch (e) {
       maskAndNotify('handleChooseDocument', e, 'Téléversement du document impossible.');
@@ -832,11 +823,17 @@ export default function MessagesScreen() {
 
   const ChatView = () => {
     if (!activeChat) return null;
-    const other = activeChat.isGroup
-      ? activeChat.participants.find(p => p.id !== currentUserId) || activeChat.participants[0]
-      : activeChat.participants.find(p => p.id !== currentUserId);
-    const headerName = activeChat.isGroup ? String(activeChat.name || 'Groupe') : String(other?.name || '');
-    const headerAvatar = activeChat.isGroup ? DEFAULT_AVATAR : (other?.avatar || DEFAULT_AVATAR);
+
+    let headerDisplayParticipant: Contact | undefined;
+    if (!activeChat.isGroup) {
+      headerDisplayParticipant = activeChat.participants.find((p) => p.id !== Number(user?.id));
+    } else {
+      headerDisplayParticipant =
+        activeChat.participants.find((p) => p.id !== Number(user?.id)) || activeChat.participants[0];
+    }
+
+    const headerName = activeChat.isGroup ? activeChat.name || 'Groupe' : headerDisplayParticipant?.name;
+    const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
 
     return (
       <KeyboardAvoidingView
@@ -844,16 +841,15 @@ export default function MessagesScreen() {
         behavior={Platform.select({ ios: 'padding', android: 'height' })}
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
       >
-        <View style={styles.chatHeader} onLayout={e => setHeaderHeight(e.nativeEvent.layout.height)}>
+        <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
             <ChevronLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
           <Image source={{ uri: headerAvatar }} style={styles.headerAvatar} />
-          <View style={styles.headerInfo}><Text style={styles.headerName}>{headerName}</Text></View>
-          <View style={styles.headerActions}>
-            {/* <TouchableOpacity style={styles.headerAction}><Phone size={24} color="#0066CC" /></TouchableOpacity>
-            <TouchableOpacity style={styles.headerAction}><Video size={24} color="#0066CC" /></TouchableOpacity> */}
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerName}>{headerName}</Text>
           </View>
+          <View style={styles.headerActions} />
         </View>
 
         {isLoadingMessages ? (
@@ -870,38 +866,64 @@ export default function MessagesScreen() {
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
           >
-            {messages.map((msg, i) => {
-              const isOwn = msg.senderId === currentUserId;
-              const sender = activeChat.participants.find(p => p.id === msg.senderId);
-              const showDate = i === 0 || formatDate(messages[i - 1].timestamp) !== formatDate(msg.timestamp);
+            {messages.map((msg, index) => {
+              const isOwnMessage = msg.senderId === currentUserId;
+              const sender = activeChat.participants.find((p) => p.id === msg.senderId);
+              const showDate =
+                index === 0 || formatDate(messages[index - 1].timestamp) !== formatDate(msg.timestamp);
+
               return (
                 <View key={msg.id}>
                   {showDate && (
-                    <View style={styles.dateHeader}><Text style={styles.dateText}>{formatDate(msg.timestamp)}</Text></View>
+                    <View style={styles.dateHeader}>
+                      <Text style={styles.dateText}>{formatDate(msg.timestamp)}</Text>
+                    </View>
                   )}
-                  <View style={[styles.messageContainer, isOwn ? styles.ownMessage : styles.otherMessage]}>
-                    {activeChat.isGroup && !isOwn && (
-                      <Text style={styles.messageSender}>{String(sender?.name || '')}</Text>
+
+                  <View
+                    style={[styles.messageContainer, isOwnMessage ? styles.ownMessage : styles.otherMessage]}
+                  >
+                    {activeChat.isGroup && !isOwnMessage && (
+                      <Text style={styles.messageSender}>{sender?.name}</Text>
                     )}
+
                     {msg.image ? (
-                      <TouchableOpacity onPress={() => openUrl(msg.image!)}>
-                        <Image source={{ uri: msg.image }} style={styles.messageImage} />
-                      </TouchableOpacity>
+                      <Image source={{ uri: msg.image }} style={styles.messageImage} />
                     ) : msg.file ? (
-                      <TouchableOpacity onPress={() => openUrl(msg.file!.uri)}>
-                        <View style={styles.messageFileContainer}>
-                          <FileText size={24} color={isOwn ? 'white' : '#1a1a1a'} />
-                          <Text style={[styles.messageFileName, isOwn ? styles.ownMessageText : styles.otherMessageText]}>
-                            {msg.file.name}
-                          </Text>
-                        </View>
+                      <TouchableOpacity
+                        style={styles.messageFileContainer}
+                        onPress={async () => {
+                          try {
+                            await WebBrowser.openBrowserAsync(msg.file!.uri);
+                          } catch {
+                            Linking.openURL(msg.file!.uri);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                        <Text
+                          style={[
+                            styles.messageFileName,
+                            isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                          ]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {msg.file.name}
+                        </Text>
                       </TouchableOpacity>
                     ) : (
-                      <Text style={[styles.messageText, isOwn ? styles.ownMessageText : styles.otherMessageText]}>
+                      <Text
+                        style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}
+                      >
                         {msg.content}
                       </Text>
                     )}
-                    <Text style={[styles.messageTime, isOwn ? styles.ownMessageTime : styles.otherMessageTime]}>
+
+                    <Text
+                      style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}
+                    >
                       {formatTime(msg.timestamp)}
                     </Text>
                   </View>
@@ -1015,14 +1037,14 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 16, color: '#1a1a1a', ...Platform.select({ web: { outlineStyle: 'none' } }) },
 
-  // newConversationButton: {
-  //   width: 48, height: 48, borderRadius: 24, backgroundColor: '#0066CC', justifyContent: 'center', alignItems: 'center',
-  //   ...Platform.select({
-  //     ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
-  //     android: { elevation: 2 },
-  //     web: { boxShadow: '0 2px 4px rgba(0,102,204,0.2)' },
-  //   }),
-  // },
+  newConversationButton: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: '#0066CC', justifyContent: 'center', alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,102,204,0.2)' },
+    }),
+  },
 
   avatarContainer: { position: 'relative' },
   avatar: { width: 56, height: 56, borderRadius: 28 },
@@ -1083,7 +1105,7 @@ const styles = StyleSheet.create({
   otherMessageText: { color: '#1a1a1a' },
   messageImage: { width: 200, height: 150, borderRadius: 8 },
   messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8 },
-  messageFileName: { fontSize: 14, fontWeight: '500' },
+  messageFileName: { fontSize: 14, fontWeight: '500', flexShrink: 1 },
   messageTime: { fontSize: 12, alignSelf: 'flex-end' },
   ownMessageTime: { color: 'rgba(255,255,255,0.8)' },
   otherMessageTime: { color: '#666' },
@@ -1128,7 +1150,7 @@ const styles = StyleSheet.create({
   contactItemAvatar: { width: 48, height: 48, borderRadius: 24 },
   contactItemInfo: { flex: 1 },
   contactItemName: { fontSize: 16, fontWeight: '500', color: '#1a1a1a', marginBottom: 4 },
-  contactItemTypeContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  contactItemTypeContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   contactItemType: { fontSize: 12, fontWeight: '500' },
   contactItemDetails: { fontSize: 12, color: '#666' },
   contactItemCheckbox: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#e2e8f0', justifyContent: 'center', alignItems: 'center' },

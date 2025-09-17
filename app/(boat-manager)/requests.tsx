@@ -159,7 +159,7 @@ export default function RequestsScreen() {
   const fetchRequests = useCallback(async () => {
     setLoading(true);
     if (!user?.id) {
-      devAlert('Erreur', 'Utilisateur non authentifié.');
+      devAlert('Connexion requise', 'Veuillez vous connecter pour voir vos demandes.');
       setLoading(false);
       return;
     }

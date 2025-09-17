@@ -1,4 +1,5 @@
 // app/(boat-manager)/messages.tsx
+import * as WebBrowser from 'expo-web-browser';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
@@ -13,26 +14,20 @@ import {
   Modal,
   ActivityIndicator,
   TouchableWithoutFeedback,
+  Alert,
+  ToastAndroid,
   Linking,
 } from 'react-native';
 import {
-  Send,
   Search,
   ChevronLeft,
-  Phone,
-  Mail,
-  Bot as Boat,
   User,
   Building,
   Plus,
   X,
   Check,
   MessageSquare,
-  Video,
-  Paperclip,
-  Camera,
-  Image as ImageIcon,
-  FileText
+  FileText,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -41,12 +36,15 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 
-// -- utils locaux pour logs/notifications propres --
-import { Alert, ToastAndroid } from 'react-native';
+// ---------- Config Storage ----------
+const ATTACHMENTS_BUCKET = 'chat.attachments';
+const ATTACHMENTS_BUCKET_IS_PUBLIC = true; // si false => on utilisera signed URL
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 jours
 
+// ---------- Notifs + logs ----------
 const notifyError = (msg: string) => {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
   else Alert.alert('Oups', msg);
@@ -58,21 +56,35 @@ const notifyInfo = (msg: string) => {
 const log = (...args: any[]) => { if (__DEV__) console.log(...args); };
 const logError = (scope: string, err: unknown) => { if (__DEV__) console.error(`[${scope}]`, err); };
 
-// --- Helper function for avatar URLs ---
+// --- Avatars / fichiers ---
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
 
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic', '.heif'];
+const isImageUrl = (url?: string) => {
+  if (!url) return false;
+  const q = (url.split('?')[0] || '').toLowerCase();
+  return IMAGE_EXTS.some(ext => q.endsWith(ext));
+};
+
 const getSignedAvatarUrl = async (value?: string) => {
-  if (!value) return '';
+  if (!value) return DEFAULT_AVATAR;
   if (isHttpUrl(value)) return value;
+  const { data } = await supabase.storage.from('avatars').createSignedUrl(value, 60 * 60);
+  return data?.signedUrl || DEFAULT_AVATAR;
+};
 
-  const { data, error } = await supabase
-    .storage
-    .from('avatars')
-    .createSignedUrl(value, 60 * 60);
-
-  if (error || !data?.signedUrl) return '';
-  return data.signedUrl;
+const guessMimeFromName = (name?: string) => {
+  if (!name) return undefined;
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.heif')) return 'image/heif';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  return undefined;
 };
 
 // --- Types ---
@@ -123,7 +135,7 @@ const NewConversationModal = ({
   getContactTypeColor,
 }: any) => {
   const filteredContacts = allUsers.filter((contact: Contact) => {
-    if (contact.id === user?.id) return false;
+    if (contact.id === Number(user?.id)) return false;
     const q = (contactSearchQuery || '').toLowerCase();
     const matchesSearch =
       contact.name.toLowerCase().includes(q) ||
@@ -309,7 +321,6 @@ export default function MessagesScreen() {
   const currentUserId = Number(user?.id);
   const insets = useSafeAreaInsets();
   const [headerHeight, setHeaderHeight] = useState(0);
-  const [inputBarHeight, setInputBarHeight] = useState(0); // 👈 hauteur de la barre d'input
 
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -356,7 +367,7 @@ export default function MessagesScreen() {
 
       try {
         const { data: usersData, error: usersError } = await supabase
-          .rpc('get_contacts_for_boat_manager', { manager_id: user.id });
+          .rpc('get_contacts_for_boat_manager', { manager_id: Number(user.id) });
         if (usersError) {
           logError('get_contacts_for_boat_manager', usersError);
           notifyError("Impossible de charger la liste des contacts.");
@@ -364,7 +375,7 @@ export default function MessagesScreen() {
         }
 
         const usersList: Contact[] = await Promise.all(
-          usersData.map(async (u: any) => {
+          (usersData || []).map(async (u: any) => {
             const signedAvatar = await getSignedAvatarUrl(u.avatar);
             return {
               id: Number(u.id),
@@ -390,14 +401,14 @@ export default function MessagesScreen() {
         }
 
         const fetchedChats: Chat[] = [];
-        for (const memberConv of memberConversations) {
+        for (const memberConv of memberConversations || []) {
           const conv = memberConv.conversations;
           if (!conv) continue;
 
           const { data: participantsData, error: participantsError } = await supabase
             .from('conversation_members')
             .select('user_id, users(id, first_name, last_name, avatar, e_mail, phone, profile)')
-            .eq('conversation_id', conv.id);
+            .eq('conversation_id', Number(conv.id));
 
           if (participantsError) {
             logError('participants', participantsError);
@@ -405,23 +416,20 @@ export default function MessagesScreen() {
           }
 
           const participants: Contact[] = await Promise.all(
-            (participantsData || []).map(async (p: any) => {
-              const signedAvatar = await getSignedAvatarUrl(p.users.avatar);
-              return {
-                id: Number(p.users.id),
-                name: `${p.users.first_name} ${p.users.last_name}`,
-                avatar: signedAvatar || DEFAULT_AVATAR,
-                type: p.users.profile,
-                email: p.users.e_mail,
-                phone: p.users.phone,
-              } as Contact;
-            })
+            (participantsData || []).map(async (p: any) => ({
+              id: Number(p.users.id),
+              name: `${p.users.first_name} ${p.users.last_name}`,
+              avatar: await getSignedAvatarUrl(p.users.avatar),
+              type: p.users.profile,
+              email: p.users.e_mail,
+              phone: p.users.phone,
+            }))
           );
 
           const { data: lastMessageData, error: lastMessageError } = await supabase
             .from('messages')
             .select('*')
-            .eq('conversation_id', conv.id)
+            .eq('conversation_id', Number(conv.id))
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -435,12 +443,8 @@ export default function MessagesScreen() {
                 id: Number(lastMessageData.id),
                 senderId: Number(lastMessageData.sender_id),
                 content: lastMessageData.content ?? undefined,
-                image: lastMessageData.file_url &&
-                  (/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(lastMessageData.file_url))
-                  ? lastMessageData.file_url
-                  : undefined,
-                file: lastMessageData.file_url &&
-                  !(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(lastMessageData.file_url))
+                image: isImageUrl(lastMessageData.file_url) ? lastMessageData.file_url : undefined,
+                file: lastMessageData.file_url && !isImageUrl(lastMessageData.file_url)
                   ? {
                       name: lastMessageData.file_url.split('/').pop() || 'file',
                       uri: lastMessageData.file_url,
@@ -470,6 +474,7 @@ export default function MessagesScreen() {
         }
       } catch (e) {
         logError('fetchInitialData', e);
+        notifyError("Impossible de charger les conversations pour le moment.");
       } finally {
         setIsLoadingChats(false);
       }
@@ -504,8 +509,8 @@ export default function MessagesScreen() {
           id: Number(msg.id),
           senderId: Number(msg.sender_id),
           content: msg.content ?? undefined,
-          image: msg.file_url && (/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(msg.file_url)) ? msg.file_url : undefined,
-          file: msg.file_url && !(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(msg.file_url))
+          image: isImageUrl(msg.file_url) ? msg.file_url : undefined,
+          file: msg.file_url && !isImageUrl(msg.file_url)
             ? { name: msg.file_url.split('/').pop() || 'file', uri: msg.file_url, type: 'application/octet-stream' }
             : undefined,
           timestamp: new Date(msg.created_at),
@@ -529,15 +534,15 @@ export default function MessagesScreen() {
       .channel(`conversation-${activeChat.id}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${activeChat.id}` },
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${Number(activeChat.id)}` },
         (payload) => {
           const n = payload.new as any;
           const newMsg: Message = {
             id: Number(n.id),
             senderId: Number(n.sender_id),
             content: n.content ?? undefined,
-            image: n.file_url && (/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(n.file_url)) ? n.file_url : undefined,
-            file: n.file_url && !(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(n.file_url))
+            image: isImageUrl(n.file_url) ? n.file_url : undefined,
+            file: n.file_url && !isImageUrl(n.file_url)
               ? { name: n.file_url.split('/').pop() || 'file', uri: n.file_url, type: 'application/octet-stream' }
               : undefined,
             timestamp: new Date(n.created_at),
@@ -576,30 +581,58 @@ export default function MessagesScreen() {
     }
   }, [activeChat, user]);
 
-  // Upload vers Supabase Storage
-  const uploadFileToSupabase = async (fileUri: string, fileName: string, mimeType: string) => {
-    const safeName = fileName || 'file';
-    const hasExt = /\.[A-Za-z0-9]+$/.test(safeName);
-    const guessedExt =
-      hasExt ? '' :
-      mimeType?.includes('jpeg') ? '.jpg' :
-      mimeType?.includes('png')  ? '.png' :
-      mimeType?.includes('pdf')  ? '.pdf' : '';
-    const filePath = `chat_attachments/${user?.id}/${Date.now()}-${safeName}${guessedExt}`;
+  // --- Helpers lecture fichier & upload ---
+  const ensureReadableUri = async (uri: string) => {
+    if (uri.startsWith('file://')) return uri;
 
-    const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.Base64 });
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.exists && info.isDirectory === false) {
+        return uri;
+      }
+    } catch {}
+
+    const cachePath = FileSystem.cacheDirectory + `upload-${Date.now()}`;
+    await FileSystem.copyAsync({ from: uri, to: cachePath });
+    return cachePath;
+  };
+
+  const guessExt = (name?: string, type?: string) => {
+    if (name && /\.[A-Za-z0-9]+$/.test(name)) return '';
+    if (!type) return '';
+    if (type.includes('jpeg')) return '.jpg';
+    if (type.includes('png')) return '.png';
+    if (type.includes('pdf')) return '.pdf';
+    return '';
+  };
+
+  const uploadFileToSupabase = async (fileUri: string, fileName?: string, mimeType?: string) => {
+    const safeName = fileName || 'file';
+    const ext = guessExt(safeName, mimeType);
+    const pathInBucket = `chat_attachments/${Date.now()}-${safeName}${ext}`;
+
+    const readableUri = await ensureReadableUri(fileUri);
+    const base64 = await FileSystem.readAsStringAsync(readableUri, { encoding: 'base64' });
     const arrayBuffer = decodeBase64(base64);
 
     const { data, error } = await supabase.storage
-      .from('chat.attachments')
-      .upload(filePath, arrayBuffer, {
-        contentType: mimeType || 'application/octet-stream',
+      .from(ATTACHMENTS_BUCKET)
+      .upload(pathInBucket, arrayBuffer, {
+        contentType: mimeType || guessMimeFromName(safeName + ext) || 'application/octet-stream',
         upsert: false,
       });
 
     if (error) throw error;
 
-    return supabase.storage.from('chat.attachments').getPublicUrl(data.path).data.publicUrl;
+    if (ATTACHMENTS_BUCKET_IS_PUBLIC) {
+      const { data: pub } = supabase.storage.from(ATTACHMENTS_BUCKET).getPublicUrl(data.path);
+      return pub.publicUrl;
+    } else {
+      const { data: signed } = await supabase.storage
+        .from(ATTACHMENTS_BUCKET)
+        .createSignedUrl(data.path, SIGNED_URL_TTL_SECONDS);
+      return signed.signedUrl;
+    }
   };
 
   // Choisir image
@@ -612,8 +645,16 @@ export default function MessagesScreen() {
       }
     }
 
+    // Fallback cross-version
+    const pickerAny = ImagePicker as any;
+    const mediaTypes =
+      pickerAny?.MediaType?.image ??
+      pickerAny?.MediaType?.images ??
+      pickerAny?.MediaTypeOptions?.Images ??
+      ImagePicker.MediaTypeOptions.Images;
+
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
@@ -621,11 +662,18 @@ export default function MessagesScreen() {
 
     if (!result.canceled && result.assets?.length) {
       const asset = result.assets[0];
-      const mime = asset.mimeType || 'image/jpeg';
-      const name = asset.fileName || 'image.jpg';
-      const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
-      await handleSend(publicUrl);
+      const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
+      const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
+
+      try {
+        const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
+        await handleSend(publicUrl);
+      } catch (e) {
+        logError('upload image', e);
+        notifyError('Téléversement impossible. Réessayez.');
+      }
     }
+
     setShowAttachmentOptions(false);
   }, [mediaPermission, requestMediaPermission, handleSend]);
 
@@ -742,26 +790,32 @@ export default function MessagesScreen() {
   const ChatView = () => {
     if (!activeChat) return null;
 
-    const headerDisplayParticipant = activeChat.isGroup
-      ? activeChat.participants.find(p => p.id !== Number(user?.id)) || activeChat.participants[0]
-      : activeChat.participants.find(p => p.id !== Number(user?.id));
+    let headerDisplayParticipant: Contact | undefined;
+    if (!activeChat.isGroup) {
+      headerDisplayParticipant = activeChat.participants.find((p) => p.id !== Number(user?.id));
+    } else {
+      headerDisplayParticipant =
+        activeChat.participants.find((p) => p.id !== Number(user?.id)) || activeChat.participants[0];
+    }
 
-    const headerName = activeChat.isGroup ? (activeChat.name || 'Groupe') : (headerDisplayParticipant?.name || '');
-    const headerAvatar = activeChat.isGroup ? DEFAULT_AVATAR : (headerDisplayParticipant?.avatar || DEFAULT_AVATAR);
+    const headerName = activeChat.isGroup ? activeChat.name || 'Groupe' : headerDisplayParticipant?.name;
+    const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
 
     return (
       <KeyboardAvoidingView
         style={styles.chatView}
-        behavior={Platform.select({ ios: 'padding', android: 'padding' })}        // 👈 Android en padding
-        keyboardVerticalOffset={insets.top + headerHeight}                        // 👈 offset = header + insets
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
       >
-        <View style={styles.chatHeader} onLayout={e => setHeaderHeight(e.nativeEvent.layout.height)}>
+        <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
             <ChevronLeft size={24} color="#1a1a1a" />
           </TouchableOpacity>
           <Image source={{ uri: headerAvatar }} style={styles.headerAvatar} />
-          <View style={styles.headerInfo}><Text style={styles.headerName}>{headerName}</Text></View>
-          <View style={styles.headerActions}>{/* actions optionnelles */}</View>
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerName}>{headerName}</Text>
+          </View>
+          <View style={styles.headerActions} />
         </View>
 
         {isLoadingMessages ? (
@@ -773,49 +827,69 @@ export default function MessagesScreen() {
           <ScrollView
             ref={scrollViewRef}
             style={styles.messagesList}
-            contentContainerStyle={[
-              styles.messagesContent,
-              { paddingBottom: inputBarHeight + insets.bottom + 8 },          // 👈 réserve l'espace pour l'input
-            ]}
+            contentContainerStyle={styles.messagesContent}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
           >
             {messages.map((msg, index) => {
-              const isOwnMessage = msg.senderId === Number(user?.id);
-              const sender = activeChat.participants.find(p => p.id === msg.senderId);
-              const showDate = index === 0 || formatDate(messages[index - 1].timestamp) !== formatDate(msg.timestamp);
+              const isOwnMessage = msg.senderId === currentUserId;
+              const sender = activeChat.participants.find((p) => p.id === msg.senderId);
+              const showDate =
+                index === 0 || formatDate(messages[index - 1].timestamp) !== formatDate(msg.timestamp);
 
               return (
                 <View key={msg.id}>
                   {showDate && (
-                    <View style={styles.dateHeader}><Text style={styles.dateText}>{formatDate(msg.timestamp)}</Text></View>
+                    <View style={styles.dateHeader}>
+                      <Text style={styles.dateText}>{formatDate(msg.timestamp)}</Text>
+                    </View>
                   )}
-                  <View style={[styles.messageContainer, isOwnMessage ? styles.ownMessage : styles.otherMessage]}>
+
+                  <View
+                    style={[styles.messageContainer, isOwnMessage ? styles.ownMessage : styles.otherMessage]}
+                  >
                     {activeChat.isGroup && !isOwnMessage && (
                       <Text style={styles.messageSender}>{sender?.name}</Text>
                     )}
 
                     {msg.image ? (
-                      <TouchableOpacity onPress={() => openUrl(msg.image)}>
-                        <Image source={{ uri: msg.image }} style={styles.messageImage} />
-                      </TouchableOpacity>
+                      <Image source={{ uri: msg.image }} style={styles.messageImage} />
                     ) : msg.file ? (
-                      <TouchableOpacity onPress={() => openUrl(msg.file!.uri)}>
-                        <View style={styles.messageFileContainer}>
-                          <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
-                          <Text style={[styles.messageFileName, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
-                            {msg.file.name}
-                          </Text>
-                        </View>
+                      <TouchableOpacity
+                        style={styles.messageFileContainer}
+                        onPress={async () => {
+                          try {
+                            await WebBrowser.openBrowserAsync(msg.file!.uri);
+                          } catch {
+                            Linking.openURL(msg.file!.uri);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                        <Text
+                          style={[
+                            styles.messageFileName,
+                            isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                          ]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {msg.file.name}
+                        </Text>
                       </TouchableOpacity>
                     ) : (
-                      <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
+                      <Text
+                        style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}
+                      >
                         {msg.content}
                       </Text>
                     )}
 
-                    <Text style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}>
+                    <Text
+                      style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}
+                    >
                       {formatTime(msg.timestamp)}
                     </Text>
                   </View>
@@ -825,10 +899,7 @@ export default function MessagesScreen() {
           </ScrollView>
         )}
 
-        <View
-          style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}
-          onLayout={e => setInputBarHeight(e.nativeEvent.layout.height)}           // 👈 mesure la barre d'input
-        >
+        <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
           <ChatInput
             handleSend={handleSend}
             showAttachmentOptions={showAttachmentOptions}
@@ -887,9 +958,9 @@ export default function MessagesScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#fff' },
   container: { flex: 1, backgroundColor: '#f8fafc' },
   chatList: { flex: 1 },
+
   headerContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, gap: 12 },
   searchContainer: {
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white',
@@ -901,6 +972,16 @@ const styles = StyleSheet.create({
     }),
   },
   searchInput: { flex: 1, fontSize: 16, color: '#1a1a1a', ...Platform.select({ web: { outlineStyle: 'none' } }) },
+
+  newConversationButton: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: '#0066CC', justifyContent: 'center', alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,102,204,0.2)' },
+    }),
+  },
+
   avatarContainer: { position: 'relative' },
   avatar: { width: 56, height: 56, borderRadius: 28 },
   onlineIndicator: {
@@ -933,6 +1014,7 @@ const styles = StyleSheet.create({
   },
   unreadCount: { color: 'white', fontSize: 12, fontWeight: '700' },
 
+  // Chat view
   chatView: { flex: 1, backgroundColor: '#f0f7ff' },
   chatHeader: {
     flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: 'white',
@@ -946,29 +1028,26 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', gap: 16 },
   headerAction: { padding: 8 },
 
+  // Messages
   messagesList: { flex: 1 },
   messagesContent: { padding: 16, gap: 8 },
   dateHeader: { alignItems: 'center', marginVertical: 8 },
   dateText: { fontSize: 12, color: '#666', backgroundColor: '#f8fafc', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
-
   messageContainer: { maxWidth: '80%', padding: 12, borderRadius: 12, gap: 4 },
   ownMessage: { alignSelf: 'flex-end', backgroundColor: '#0066CC', borderBottomRightRadius: 4 },
   otherMessage: { alignSelf: 'flex-start', backgroundColor: 'white', borderBottomLeftRadius: 4 },
-
   messageSender: { fontSize: 12, fontWeight: '500', color: '#0066CC', marginBottom: 2 },
   messageText: { fontSize: 16, lineHeight: 22 },
   ownMessageText: { color: 'white' },
   otherMessageText: { color: '#1a1a1a' },
-
   messageImage: { width: 200, height: 150, borderRadius: 8 },
-
   messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8 },
-  messageFileName: { fontSize: 14, fontWeight: '500' },
-
+  messageFileName: { fontSize: 14, fontWeight: '500', flexShrink: 1 },
   messageTime: { fontSize: 12, alignSelf: 'flex-end' },
   ownMessageTime: { color: 'rgba(255,255,255,0.8)' },
   otherMessageTime: { color: '#666' },
 
+  // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: {
     backgroundColor: 'white', borderRadius: 16, width: '90%', maxWidth: 500, maxHeight: '90%',
@@ -1025,18 +1104,10 @@ const styles = StyleSheet.create({
   },
   createConversationButtonDisabled: { backgroundColor: '#94a3b8' },
   createConversationButtonText: { fontSize: 16, fontWeight: '600', color: 'white' },
+
+  // Loading / empty
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
-
-  newConversationButton: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#0066CC', justifyContent: 'center', alignItems: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#0066CC', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
-      android: { elevation: 2 },
-      web: { boxShadow: '0 2px 4px rgba(0,102,204,0.2)' },
-    }),
-  },
-
   emptyState: { padding: 20, alignItems: 'center', justifyContent: 'center' },
   emptyStateText: { fontSize: 16, color: '#666', textAlign: 'center', lineHeight: 24 },
 });

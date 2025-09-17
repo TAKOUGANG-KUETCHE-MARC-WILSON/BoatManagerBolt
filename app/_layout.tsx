@@ -1,47 +1,43 @@
+// 👉 Ces deux imports d'amorçage doivent être tout en haut :
+import 'react-native-get-random-values';
+import 'react-native-reanimated';
+
 declare const global: any;
+
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context'; // ✅ à importer
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/context/AuthContext';
 import { LogBox, Platform } from 'react-native';
 
 export default function RootLayout() {
   useFrameworkReady();
-  
-// ⚠️ en PROD seulement : on coupe les warnings/overlays et on redirige les logs
+
+  // ⚠️ PROD uniquement : on coupe les warnings/overlays et on redirige les logs
   useEffect(() => {
     if (__DEV__) return;
 
-
-     LogBox.ignoreLogs([
-    'Text strings must be rendered within a <Text> component',
-  ]);
-
-    // 1) Couper les warnings “YellowBox/LogBox”
+    LogBox.ignoreLogs([
+      'Text strings must be rendered within a <Text> component',
+    ]);
     LogBox.ignoreAllLogs(true);
 
-    // 2) Rediriger console.error / console.warn (ex: vers Sentry ou ton API)
     const origError = console.error;
     const origWarn  = console.warn;
-    console.error = (...args) => {
-      // TODO: envoyer args vers ton service de logs
-      // Sentry.captureException(new Error(String(args?.[0] ?? 'console.error')));
-      // fetch('/logs', { ... })
-      return; // rien n’apparaît côté UI
+
+    console.error = (..._args) => {
+      // TODO: envoyer vers un service de logs (Sentry, API, etc.)
+      return;
     };
-    console.warn = (...args) => {
-      // TODO: idem si tu veux suivre les warnings
+    console.warn = (..._args) => {
       return;
     };
 
-    // 3) Capturer les exceptions fatales JS (pas d’overlay côté client)
     const prevGlobalHandler = (global as any).ErrorUtils?.getGlobalHandler?.();
     (global as any).ErrorUtils?.setGlobalHandler?.((error: any, isFatal?: boolean) => {
-      // TODO: envoyer error/isFatal à tes logs
-      // Sentry.captureException(error);
-      // fetch('/logs', { ... })
+      // TODO: capture error/isFatal → logs externes
       // Ne pas throw → pas de RedBox côté client en prod
     });
 
@@ -54,16 +50,16 @@ export default function RootLayout() {
     };
   }, []);
 
-
   return (
-    
-    <SafeAreaProvider> {/* ✅ wrapper pour encoche/caméra */}
+    <SafeAreaProvider>
       <AuthProvider>
         <Stack
           screenOptions={{
             headerShown: false,
             headerBackTitleVisible: false,
-            contentStyle: { backgroundColor: '#fff' }, 
+            contentStyle: { backgroundColor: '#fff' },
+
+           
           }}
         >
           <Stack.Screen name="(tabs)" />
@@ -73,15 +69,20 @@ export default function RootLayout() {
           <Stack.Screen name="services" />
           <Stack.Screen name="+not-found" />
         </Stack>
-        <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
+
+        {/* 👇 StatusBar globale, toujours visible */}
+        <StatusBar
+          hidden={false}
+          style="dark"                          // mets "light" si ton header/fond est foncé
+          translucent={false}
+          backgroundColor="#ffffff"             // Android
+        />
       </AuthProvider>
     </SafeAreaProvider>
   );
 }
 
-
-
+// Fallback très simple si un rendu plante sous ce layout
 export function ErrorBoundary() {
-  // écran très simple et propre côté client si un rendu plante
-  return null; // ou un composant maison <CleanFallback />
+  return null; // ou un composant custom <CleanFallback />
 }
