@@ -36,7 +36,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 
 // --------------------

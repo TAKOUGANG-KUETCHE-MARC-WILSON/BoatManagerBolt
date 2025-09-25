@@ -1,6 +1,7 @@
 // app/(tabs)/messages.tsx
 import * as WebBrowser from 'expo-web-browser';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
   View,
   Text,
@@ -17,13 +18,17 @@ import {
   Alert,
   ToastAndroid,
   Linking,
+  AppState,
 } from 'react-native';
+
+import { bootOnLoginOrReopen } from '@/src/notifications/boot';
+import { refreshAppBadge } from '@/src/lib/notifications';
 import {
   Search,
   ChevronLeft,
   Building,
-  Plus,
   X,
+  CheckCheck, // ✅ double coche
   Check,
   MessageSquare,
   FileText,
@@ -31,18 +36,17 @@ import {
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
 
 // ---------- Config Storage ----------
 const ATTACHMENTS_BUCKET = 'chat.attachments';
-const ATTACHMENTS_BUCKET_IS_PUBLIC = true; // si false => on utilisera signed URL
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 jours
+const ATTACHMENTS_BUCKET_IS_PUBLIC = true;
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7;
 
 // ---------- Notifs + logs ----------
 const notifyError = (msg: string) => {
@@ -53,8 +57,17 @@ const notifyInfo = (msg: string) => {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT);
   else Alert.alert('', msg);
 };
-const devLog = (...args: any[]) => { if (__DEV__) console.log(...args); };
-const devError = (scope: string, err: unknown) => { if (__DEV__) console.error(`[${scope}]`, err); };
+const devError = (scope: string, err: unknown) => {
+  if (!__DEV__) return;
+  const msg =
+    err && typeof err === 'object'
+      ? ((err as any).message ??
+         (err as any).details ??
+         (err as any).hint ??
+         JSON.stringify(err))
+      : String(err);
+  console.log(`[${scope}] ${msg}`);
+};
 const maskAndNotify = (scope: string, err: unknown, userMsg = 'Une erreur est survenue.') => {
   devError(scope, err);
   notifyError(userMsg);
@@ -63,21 +76,18 @@ const maskAndNotify = (scope: string, err: unknown, userMsg = 'Une erreur est su
 // ---------- Avatars / fichiers ----------
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
-
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic', '.heif'];
 const isImageUrl = (url?: string) => {
   if (!url) return false;
   const q = (url.split('?')[0] || '').toLowerCase();
   return IMAGE_EXTS.some(ext => q.endsWith(ext));
 };
-
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return DEFAULT_AVATAR;
   if (isHttpUrl(value)) return value;
   const { data } = await supabase.storage.from('avatars').createSignedUrl(value, 60 * 60);
   return data?.signedUrl || DEFAULT_AVATAR;
 };
-
 const guessMimeFromName = (name?: string) => {
   if (!name) return undefined;
   const lower = name.toLowerCase();
@@ -99,6 +109,7 @@ interface Message {
   image?: string;
   file?: { name: string; uri: string; type: string };
   timestamp: Date;
+  readByAll?: boolean; // ✅ reçu de lecture (bleu si true)
 }
 interface Contact {
   id: number;
@@ -115,7 +126,7 @@ interface Chat {
   participants: Contact[];
   isGroup: boolean;
   name?: string;
-  unreadCount?: number;
+  unreadCount?: number; // ✅ badge "non lus"
   lastMessage?: Message;
   messages?: Message[];
 }
@@ -282,6 +293,23 @@ const NewConversationModal = ({
   );
 };
 
+const AuthOverlay = () => (
+  <View style={overlayStyles.overlayContainer}>
+    <View style={overlayStyles.authCard}>
+      <Text style={overlayStyles.authTitle}>Connexion requise</Text>
+      <Text style={overlayStyles.authSubtitle}>
+        Pour suivre et envoyer vos messages, connectez-vous à votre compte.
+      </Text>
+      <TouchableOpacity
+        style={overlayStyles.authButton}
+        onPress={() => router.replace('/welcome-unauthenticated')}
+      >
+        <Text style={overlayStyles.authButtonText}>Se connecter</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+);
+
 // ---------- Écran principal ----------
 export default function MessagesScreen() {
   const { conversationId, client: initialClientId } = useLocalSearchParams<{ conversationId?: string; client?: string }>();
@@ -331,107 +359,115 @@ export default function MessagesScreen() {
       : t === 'corporate' ? '#F59E0B' : '#666';
 
   // --------- Création / recherche d'une 1–1 via param `client` ----------
-  const findOrCreateConversationWithClient = useCallback(async (targetClientId: number): Promise<Chat | null> => {
-    if (!user?.id) return null;
-    try {
-      // 1) toutes les conversations du user
-      const { data: memberRows, error: convErr } = await supabase
-        .from('conversation_members')
-        .select('conversation_id')
-        .eq('user_id', Number(user.id));
-      if (convErr) throw convErr;
+  const findOrCreateConversationWithClient = useCallback(
+    async (targetClientId: number): Promise<Chat | null> => {
+      if (!user?.id) return null;
 
-      // cherche une 1–1 existante
-      let foundId: number | null = null;
-      for (const row of memberRows || []) {
-        const convId = Number(row.conversation_id);
-        const { data: members, error: mErr } = await supabase
-          .from('conversation_members')
-          .select('user_id')
-          .eq('conversation_id', convId);
-        if (mErr) continue;
-        const ids = (members || []).map(m => Number(m.user_id)).sort();
-        const expected = [Number(user.id), targetClientId].sort();
-        if (ids.length === 2 && ids[0] === expected[0] && ids[1] === expected[1]) { foundId = convId; break; }
-      }
-
-      // 2) si trouvée → hydrate
-      const hydrateConv = async (id: number): Promise<Chat> => {
-        const { data: conv, error } = await supabase
-          .from('conversations')
-          .select('id, title, is_group, conversation_members(user_id, users(id, first_name, last_name, avatar, e_mail, phone, profile))')
-          .eq('id', id)
-          .single();
-        if (error || !conv) throw error;
-
-        const participants: Contact[] = await Promise.all(
-          (conv.conversation_members || []).map(async (p: any) => ({
-            id: Number(p.users.id),
-            name: `${p.users.first_name} ${p.users.last_name}`,
-            avatar: await getSignedAvatarUrl(p.users.avatar),
-            type: p.users.profile,
-            email: p.users.e_mail,
-            phone: p.users.phone,
-          }))
-        );
-
-        return { id: Number(conv.id), name: conv.title, isGroup: conv.is_group, participants, unreadCount: 0 };
-      };
-
-      if (foundId) return hydrateConv(foundId);
-
-      // 3) sinon créer
       setIsCreatingConversation(true);
-      const { data: newConv, error: cErr } = await supabase
-        .from('conversations')
-        .insert({ is_group: false, title: null })
-        .select('id, title, is_group')
-        .single();
-      if (cErr) throw cErr;
+      try {
+        const { data: memberRows, error: convErr } = await supabase
+          .from('conversation_members')
+          .select('conversation_id')
+          .eq('user_id', Number(user.id));
+        if (convErr) throw convErr;
 
-      const { error: memErr } = await supabase
-        .from('conversation_members')
-        .insert([
-          { conversation_id: Number(newConv.id), user_id: Number(user.id) },
-          { conversation_id: Number(newConv.id), user_id: targetClientId },
-        ]);
-      if (memErr) throw memErr;
+        let foundId: number | null = null;
+        for (const row of memberRows || []) {
+          const convId = Number(row.conversation_id);
+          const { data: members, error: mErr } = await supabase
+            .from('conversation_members')
+            .select('user_id')
+            .eq('conversation_id', convId);
+          if (mErr) continue;
+          const ids = (members || []).map(m => Number(m.user_id)).sort();
+          const expected = [Number(user.id), targetClientId].sort();
+          if (ids.length === 2 && ids[0] === expected[0] && ids[1] === expected[1]) { foundId = convId; break; }
+        }
 
-      // participants
-      const { data: target, error: tErr } = await supabase
-        .from('users')
-        .select('id, first_name, last_name, avatar, e_mail, phone, profile')
-        .eq('id', targetClientId)
-        .single();
-      if (tErr) throw tErr;
+        const hydrateConv = async (id: number): Promise<Chat> => {
+          const { data: conv, error } = await supabase
+            .from('conversations')
+            .select('id, title, is_group, conversation_members(user_id, users(id, first_name, last_name, avatar, e_mail, phone, profile))')
+            .eq('id', id)
+            .single();
+          if (error || !conv) throw error;
 
-      const targetContact: Contact = {
-        id: Number(target.id),
-        name: `${target.first_name} ${target.last_name}`,
-        avatar: await getSignedAvatarUrl(target.avatar),
-        type: target.profile,
-        email: target.e_mail,
-        phone: target.phone,
+          const participants: Contact[] = await Promise.all(
+            (conv.conversation_members || []).map(async (p: any) => ({
+              id: Number(p.users.id),
+              name: `${p.users.first_name} ${p.users.last_name}`,
+              avatar: await getSignedAvatarUrl(p.users.avatar),
+              type: p.users.profile,
+              email: p.users.e_mail,
+              phone: p.users.phone,
+            }))
+          );
+
+          return { id: Number(conv.id), name: conv.title, isGroup: conv.is_group, participants, unreadCount: 0 };
+        };
+
+        if (foundId) return await hydrateConv(foundId);
+
+        const { data: convId, error: rpcErr } = await supabase.rpc(
+          'create_conversation_with_members',
+          { p_title: null, p_is_group: false, p_member_ids: [targetClientId] }
+        );
+        if (rpcErr) throw rpcErr;
+
+        return await hydrateConv(Number(convId));
+      } catch (e) {
+        maskAndNotify('findOrCreateConversationWithClient', e, 'Impossible de démarrer la conversation.');
+        return null;
+      } finally {
+        setIsCreatingConversation(false);
+      }
+    },
+    [user]
+  );
+
+  useEffect(() => {
+  if (!user?.id || chats.length === 0) return;
+
+  const knownIds = new Set(chats.map(c => c.id));
+
+  const channel = supabase
+    .channel(`messages-global-${user.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'messages',
+    }, (payload) => {
+      const n = payload.new as any;
+      const convId = Number(n.conversation_id);
+      if (!knownIds.has(convId)) return; // ignorer les convs qu’on n’affiche pas
+
+      const msg = {
+        id: Number(n.id),
+        senderId: Number(n.sender_id),
+        content: n.content ?? undefined,
+        image: n.file_url && /\.(jpg|jpeg|png|gif|webp|bmp|tiff|heic|heif)(\?|$)/i.test(n.file_url) ? n.file_url : undefined,
+        file: n.file_url && !/\.(jpg|jpeg|png|gif|webp|bmp|tiff|heic|heif)(\?|$)/i.test(n.file_url)
+          ? { name: n.file_url.split('/').pop() || 'document', uri: n.file_url, type: 'application/octet-stream' }
+          : undefined,
+        timestamp: new Date(n.created_at),
       };
-      const me: Contact = {
-        id: Number(user.id),
-        name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Moi',
-        avatar: user.avatar || DEFAULT_AVATAR,
-        type: (user.role as Contact['type']) || 'boat_manager',
-        email: user.email || '',
-        phone: user.phone || '',
-      };
 
-      return { id: Number(newConv.id), name: newConv.title, isGroup: newConv.is_group, participants: [me, targetContact], unreadCount: 0 };
-    } catch (e) {
-      maskAndNotify('findOrCreateConversationWithClient', e, 'Impossible de démarrer la conversation.');
-      return null;
-    } finally {
-      setIsCreatingConversation(false);
-    }
-  }, [user]);
+      // 1) Met à jour le "dernier message" + réordonne
+      setChats(prev => {
+        const next = prev.map(c => c.id === convId ? { ...c, lastMessage: msg } : c);
+        return [...next].sort((a, b) => (b.lastMessage?.timestamp?.getTime?.() ?? 0) - (a.lastMessage?.timestamp?.getTime?.() ?? 0));
+      });
 
-  // --------- Récup init : contacts + conversations ----------
+      // 2) Si la conv n’est pas ouverte, le compteur passera via user_conversation_unreads (déjà écouté)
+      //    donc pas besoin d’incrémenter ici (évite les doubles compteurs).
+    })
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
+}, [user?.id, chats]);
+
+
+  // --------- Récup init : contacts + conversations + non-lus ----------
   useEffect(() => {
     let alive = true;
     const run = async () => {
@@ -509,20 +545,34 @@ export default function MessagesScreen() {
         }));
 
         if (!alive) return;
-        setChats(hydrated);
+
+        // 🔢 Récupère les non-lus pour l’utilisateur courant
+        const ids = hydrated.map(c => c.id);
+        let unreadMap = new Map<number, number>();
+        if (ids.length) {
+          const { data: unreads } = await supabase
+            .from('user_conversation_unreads')
+            .select('conversation_id, unread_count')
+            .eq('user_id', Number(user.id))
+            .in('conversation_id', ids);
+          unreadMap = new Map((unreads || []).map((r: any) => [Number(r.conversation_id), Number(r.unread_count || 0)]));
+        }
+
+        const withCounts = hydrated.map(c => ({ ...c, unreadCount: unreadMap.get(c.id) ?? 0 }));
+        setChats(sortChatsByLastActivity(withCounts));
 
         // Navigation initiale
         if (conversationId) {
-          const byId = hydrated.find(c => String(c.id) === String(conversationId));
+          const byId = withCounts.find(c => String(c.id) === String(conversationId));
           if (byId) setActiveChat(byId);
         } else if (initialClientId) {
           const targetId = Number(initialClientId);
-          const existing = hydrated.find(c => !c.isGroup && c.participants.some(p => p.id === targetId));
+          const existing = withCounts.find(c => !c.isGroup && c.participants.some(p => p.id === targetId));
           if (existing) setActiveChat(existing);
           else {
             const created = await findOrCreateConversationWithClient(targetId);
             if (created && alive) {
-              setChats(prev => [created, ...prev]);
+              setChats(prev => sortChatsByLastActivity([{ ...created, unreadCount: 0 }, ...prev]));
               setActiveChat(created);
               notifyInfo('Conversation créée.');
             }
@@ -553,7 +603,7 @@ export default function MessagesScreen() {
         if (error) throw error;
 
         if (!alive) return;
-        setMessages((data || []).map((m: any) => ({
+        const baseMsgs = (data || []).map((m: any) => ({
           id: Number(m.id),
           senderId: Number(m.sender_id),
           content: m.content ?? undefined,
@@ -562,15 +612,35 @@ export default function MessagesScreen() {
             ? { name: m.file_url.split('/').pop() || 'document', uri: m.file_url, type: 'application/octet-stream' }
             : undefined,
           timestamp: new Date(m.created_at),
-        })));
+        })) as Message[];
 
-        // marque comme lu (si champ présent dans conversation_members)
+        // ✅ Statut "lu par tous"
+        try {
+          const ids = baseMsgs.map(m => m.id);
+          if (ids.length) {
+            const { data: recs } = await supabase
+              .from('message_read_receipts_v')
+              .select('message_id, read_by_all')
+              .in('message_id', ids);
+            const byId = new Map((recs || []).map((r: any) => [Number(r.message_id), !!r.read_by_all]));
+            baseMsgs.forEach(m => { m.readByAll = byId.get(m.id); });
+          }
+        } catch (e) {
+          devError('fetch receipts', e);
+        }
+
+        setMessages(baseMsgs);
+
+        // ✅ marque comme lu (et badge app)
         if (user?.id) {
           await supabase
             .from('conversation_members')
             .update({ last_read_at: new Date().toISOString() })
             .eq('conversation_id', Number(activeChat.id))
             .eq('user_id', Number(user.id));
+          await refreshAppBadge(Number(user.id));
+          // local: remet le compteur de cette conv à 0
+          setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, unreadCount: 0 } : c));
         }
       } catch (e) {
         maskAndNotify('fetchMessages', e, 'Impossible de charger les messages.');
@@ -586,34 +656,120 @@ export default function MessagesScreen() {
     return () => { alive = false; };
   }, [activeChat, user?.id]);
 
-  // --------- Realtime nouveaux messages ----------
+  // --------- Realtime nouveaux messages (de cette conversation) ----------
   useEffect(() => {
     if (!activeChat?.id) return;
     const channel = supabase
       .channel(`conversation-${activeChat.id}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: `conversation_id=eq.${Number(activeChat.id)}`,
-      }, (payload) => {
-        const n = payload.new as any;
-        const newMsg: Message = {
-          id: Number(n.id),
-          senderId: Number(n.sender_id),
-          content: n.content ?? undefined,
-          image: isImageUrl(n.file_url) ? n.file_url : undefined,
-          file: n.file_url && !isImageUrl(n.file_url)
-            ? { name: n.file_url.split('/').pop() || 'document', uri: n.file_url, type: 'application/octet-stream' }
-            : undefined,
-          timestamp: new Date(n.created_at),
-        };
-        setMessages(prev => [...prev, newMsg]);
-        setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
-      })
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${Number(activeChat.id)}`,
+        },
+        (payload) => {
+          const n = payload.new as any;
+          const newMsg: Message = {
+            id: Number(n.id),
+            senderId: Number(n.sender_id),
+            content: n.content ?? undefined,
+            image: isImageUrl(n.file_url) ? n.file_url : undefined,
+            file: n.file_url && !isImageUrl(n.file_url)
+              ? { name: n.file_url.split('/').pop() || 'document', uri: n.file_url, type: 'application/octet-stream' }
+              : undefined,
+            timestamp: new Date(n.created_at),
+          };
+          setMessages(prev => [...prev, newMsg]);
+          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
+        }
+      )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [activeChat?.id]);
+
+  // --------- Realtime reçus de lecture (mise à jour de last_read_at) ----------
+  useEffect(() => {
+    if (!activeChat?.id) return;
+    const channel = supabase
+      .channel(`conv-read-${activeChat.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversation_members',
+          filter: `conversation_id=eq.${Number(activeChat.id)}`
+        },
+        async () => {
+          try {
+            const ids = messages.map(m => m.id);
+            if (!ids.length) return;
+            const { data: recs } = await supabase
+              .from('message_read_receipts_v')
+              .select('message_id, read_by_all')
+              .in('message_id', ids);
+            const byId = new Map((recs || []).map((r: any) => [Number(r.message_id), !!r.read_by_all]));
+            setMessages(prev => prev.map(m => ({ ...m, readByAll: byId.get(m.id) ?? m.readByAll })));
+          } catch (e) {
+            devError('realtime receipts', e);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [activeChat?.id, messages]);
+
+  // --------- Realtime non-lus (écoute la table user_conversation_unreads pour CE user) ----------
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`unreads-${user.id}`)
+      .on('postgres_changes', {
+        event: '*', // INSERT/UPDATE/DELETE
+        schema: 'public',
+        table: 'user_conversation_unreads',
+        filter: `user_id=eq.${Number(user.id)}`
+      }, (payload) => {
+        const row = (payload.new || payload.old) as any;
+        const convId = Number(row?.conversation_id);
+        const count = Number((payload.new as any)?.unread_count ?? 0);
+
+        if (!convId) return;
+
+        setChats(prev => {
+          // si la conv n’est pas encore connue, on ignore
+          if (!prev.some(c => c.id === convId)) return prev;
+          // si la conv est ouverte et le message vient d’arriver, elle sera à 0 via markAsRead, sinon on applique le compteur serveur
+          return prev.map(c => c.id === convId ? { ...c, unreadCount: count } : c);
+        });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
+
+  // --- Boot notifications & badge sur login / retour app ---
+  useEffect(() => {
+    if (!user?.id) return;
+    let cleanup: (() => void) | undefined;
+
+    (async () => {
+      cleanup = await bootOnLoginOrReopen(Number(user.id));
+    })();
+
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') bootOnLoginOrReopen(Number(user.id));
+    });
+
+    return () => {
+      sub.remove();
+      cleanup?.();
+    };
+  }, [user?.id]);
 
   // --- Helpers lecture & upload ---
   const ensureReadableUri = async (uri: string) => {
@@ -747,6 +903,8 @@ export default function MessagesScreen() {
         .update({ last_read_at: new Date().toISOString() })
         .eq('conversation_id', Number(chat.id))
         .eq('user_id', Number(user.id));
+
+      await refreshAppBadge(Number(user.id));
       setChats(prev => prev.map(c => c.id === chat.id ? { ...c, unreadCount: 0 } : c));
     } catch (e) {
       devError('markAsRead', e);
@@ -755,6 +913,24 @@ export default function MessagesScreen() {
 
   const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  
+  // --- utils tri / maj last message / compteur
+  const sortChatsByLastActivity = (list: Chat[]) =>
+    [...list].sort((a, b) => {
+      const ta = a.lastMessage?.timestamp?.getTime?.() ?? 0;
+      const tb = b.lastMessage?.timestamp?.getTime?.() ?? 0;
+      return tb - ta; // recent -> top
+    });
+
+  const bumpChatLastMessage = (list: Chat[], convId: number, msg: Message) => {
+    const next = list.map(c => c.id === convId ? { ...c, lastMessage: msg } : c);
+    return sortChatsByLastActivity(next);
+  };
+
+  const bumpUnreadCount = (list: Chat[], convId: number, delta = 1) => {
+    const next = list.map(c => c.id === convId ? { ...c, unreadCount: Math.max(0, (c.unreadCount ?? 0) + delta) } : c);
+    return sortChatsByLastActivity(next);
+  }
 
   const ChatList = () => (
     <ScrollView style={styles.chatList}>
@@ -768,9 +944,6 @@ export default function MessagesScreen() {
             onChangeText={setSearchQuery}
           />
         </View>
-        <TouchableOpacity style={styles.newConversationButton} onPress={() => setShowNewConversationModal(true)}>
-          <Plus size={24} color="white" />
-        </TouchableOpacity>
       </View>
 
       {isLoadingChats ? (
@@ -921,11 +1094,17 @@ export default function MessagesScreen() {
                       </Text>
                     )}
 
-                    <Text
-                      style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}
-                    >
-                      {formatTime(msg.timestamp)}
-                    </Text>
+                    {/* Heure + reçus */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}>
+                        {formatTime(msg.timestamp)}
+                      </Text>
+                     {isOwnMessage && (
+  msg.readByAll
+    ? <CheckCheck size={16} color="#3b82f6" style={{ marginLeft: 6 }} />
+    : <Check size={16} color={Platform.OS === 'web' ? '#666' : 'rgba(255,255,255,0.8)'} style={{ marginLeft: 6 }} />
+)}
+                    </View>
                   </View>
                 </View>
               );
@@ -966,45 +1145,57 @@ export default function MessagesScreen() {
         selectedContactType={selectedContactType}
         setSelectedContactType={setSelectedContactType}
         handleCreateConversation={async () => {
-          if (!selectedContacts.length) return;
+          if (!user?.id || !selectedContacts.length) return;
           setIsCreatingConversation(true);
           try {
-            const { data: newConv, error: convError } = await supabase
+            const { data: convId, error: rpcErr } = await supabase.rpc(
+              'create_conversation_with_members',
+              {
+                p_title:
+                  selectedContacts.length > 1
+                    ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
+                    : null,
+                p_is_group: selectedContacts.length > 1,
+                p_member_ids: selectedContacts.map(c => Number(c.id)),
+              }
+            );
+            if (rpcErr) throw rpcErr;
+
+            const { data: conv, error: convErr } = await supabase
               .from('conversations')
-              .insert({
-                title: selectedContacts.length > 1 ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}` : null,
-                is_group: selectedContacts.length > 1,
-              })
-              .select('id, title, is_group')
+              .select('id, title, is_group, conversation_members(user_id, users(id, first_name, last_name, avatar, e_mail, phone, profile))')
+              .eq('id', Number(convId))
               .single();
-            if (convError) throw convError;
+            if (convErr || !conv) throw convErr;
 
-            const rows = selectedContacts.map(c => ({ conversation_id: Number(newConv.id), user_id: Number(c.id) }));
-            if (user?.id) rows.push({ conversation_id: Number(newConv.id), user_id: Number(user.id) });
-            const { error: memErr } = await supabase.from('conversation_members').insert(rows);
-            if (memErr) throw memErr;
+            const participants: Contact[] = await Promise.all(
+              (conv.conversation_members || []).map(async (p: any) => ({
+                id: Number(p.users.id),
+                name: `${p.users.first_name} ${p.users.last_name}`,
+                avatar: await getSignedAvatarUrl(p.users.avatar),
+                type: p.users.profile,
+                email: p.users.e_mail,
+                phone: p.users.phone,
+              }))
+            );
 
-            const me: Contact = {
-              id: Number(user?.id),
-              name: `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || 'Moi',
-              avatar: user?.avatar || DEFAULT_AVATAR,
-              type: (user?.role as Contact['type']) || 'boat_manager',
-              email: user?.email || '',
-              phone: user?.phone || '',
-            };
             const newChat: Chat = {
-              id: Number(newConv.id),
-              name: newConv.title || '',
-              isGroup: newConv.is_group,
-              participants: [me, ...selectedContacts],
+              id: Number(conv.id),
+              name: conv.title,
+              isGroup: conv.is_group,
+              participants,
               unreadCount: 0,
             };
+
             setChats(prev => [newChat, ...prev]);
             setActiveChat(newChat);
+
             setShowNewConversationModal(false);
             setContactSearchQuery('');
             setSelectedContacts([]);
             setSelectedContactType('all');
+
+            await refreshAppBadge(Number(user.id));
             notifyInfo('Conversation créée.');
           } catch (e) {
             maskAndNotify('createConversation', e, 'Création de la conversation impossible.');
@@ -1017,9 +1208,60 @@ export default function MessagesScreen() {
         getContactTypeLabel={getContactTypeLabel}
         getContactTypeColor={getContactTypeColor}
       />
+      {!user?.id && <AuthOverlay />}
     </View>
   );
 }
+
+const overlayStyles = StyleSheet.create({
+  overlayContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  authCard: {
+    width: '90%',
+    maxWidth: 420,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 },
+      android: { elevation: 8 },
+      web: { boxShadow: '0 8px 20px rgba(0,0,0,0.2)' },
+    }),
+  },
+  authTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  authSubtitle: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 24,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  authButton: {
+    backgroundColor: '#0066CC',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    width: '100%',
+  },
+  authButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
 
 // ---------- Styles ----------
 const styles = StyleSheet.create({

@@ -12,6 +12,21 @@ import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/context/AuthContext';
 import { LogBox, Platform } from 'react-native';
 
+if (__DEV__) {
+  const origError = console.error;
+  console.error = (...args: any[]) => {
+    const safe = args.map((a) =>
+      a instanceof Error
+        ? (a.message ?? String(a)) // ne pas logguer l'objet Error brut
+        : (a && typeof a === 'object' && ('message' in a || 'details' in a || 'hint' in a))
+          ? (a.message ?? a.details ?? a.hint ?? JSON.stringify(a))
+          : a
+    );
+    origError(...safe);
+  };
+}
+
+
 export default function RootLayout() {
   useFrameworkReady();
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, Modal } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { Mail, User, ArrowLeft, Anchor, MapPin, Lock, Plus, X } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
@@ -139,26 +140,35 @@ export default function SignupScreen() {
   contentContainerStyle={styles.contentContainer}
   keyboardShouldPersistTaps="handled"
   showsVerticalScrollIndicator={false}
+  contentInsetAdjustmentBehavior="never"
 >
         <ImageBackground
-          source={{ uri: 'https://images.unsplash.com/photo-1528154291023-a6525fabe5b4?q=80&w=1964&auto=format&fit=crop' }}
-          style={styles.heroBackground}
-        >
-          <View style={styles.overlay} />
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => {
-              clearPendingServiceRequest();
-              router.back();
-            }}
-          >
-            <ArrowLeft size={24} color="white" />
-          </TouchableOpacity>
-          <View style={styles.heroContent}>
-            <Anchor size={40} color="white" style={styles.heroIcon} />
-            <Text style={styles.heroTitle}>Your Boat Manager</Text>
-          </View>
-        </ImageBackground>
+  source={{ uri: 'https://images.unsplash.com/photo-1528154291023-a6525fabe5b4?q=80&w=1964&auto=format&fit=crop' }}
+  style={[styles.heroBackground, { paddingTop: insets.top }]}  // 👈 espace sous la status bar
+>
+  {/* StatusBar claire, translucide, fond transparent */}
+  <StatusBar translucent backgroundColor="transparent" style="light" />
+
+  <View style={styles.overlay} />
+
+  {/* Bouton retour toujours sous la barre système */}
+  <TouchableOpacity
+    style={[styles.backButton, { top: insets.top + 8 }]} // 👈 position absolue avec marge safe-area
+    onPress={() => {
+      clearPendingServiceRequest();
+      router.back();
+    }}
+    hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+  >
+    <ArrowLeft size={24} color="white" />
+  </TouchableOpacity>
+
+  <View style={styles.heroContent}>
+    <Anchor size={40} color="white" style={styles.heroIcon} />
+    <Text style={styles.heroTitle}>Your Boat Manager</Text>
+  </View>
+</ImageBackground>
+
 
         <View style={styles.formContainer}>
           <View style={styles.formHeader}>
@@ -381,8 +391,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
   },
   backButton: {
-    padding: 16,
-    zIndex: 1,
+    position: 'absolute',
+    left: 8,
+    // top est injecté depuis le JSX avec insets.top + 8
+    padding: 10,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.35)', // lisible sur photo
+    zIndex: 2,
   },
   heroContent: {
     padding: 24,

@@ -4,84 +4,102 @@ import { Platform } from 'react-native';
 import { Chrome as Home, MessageSquare, User, FileText } from 'lucide-react-native';
 import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback , useRef} from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppState } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { bootOnLoginOrReopen } from '@/src/notifications/boot';
 import { supabase } from '@/src/lib/supabase';
 
 export default function TabLayout() {
   const { user } = useAuth();
+  const appState = useRef(AppState.currentState);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadRequests, setUnreadRequests] = useState(0);
 
   const fetchUnreadCounts = useCallback(async () => {
-    // pas d’utilisateur -> on remet à zéro silencieusement
-    if (!user?.id) {
-      setUnreadMessages(0);
-      setUnreadRequests(0);
-      return;
-    }
+  if (!user?.id) {
+    setUnreadMessages(0);
+    setUnreadRequests(0);
+    await Notifications.setBadgeCountAsync(0);
+    return;
+  }
 
+  let totalMessages = 0;
+  let totalRequests = 0;
+
+  // --- Messages non lus (via RPC)
+  try {
+    const { data, error } = await supabase
+      .rpc('get_total_unread_messages', { p_user_id: user.id });
+    totalMessages = error ? 0 : (data ?? 0);
+    setUnreadMessages(totalMessages);
+  } catch {
+    totalMessages = 0;
+    setUnreadMessages(0);
+  }
+
+  // --- Demandes « nouvelles » / à suivre
+  try {
+    const { count, error } = await supabase
+      .from('service_request')
+      .select('id', { count: 'exact', head: true })
+      .eq('id_client', user.id)
+      .in('statut', ['submitted', 'quote_sent']);
+    totalRequests = error ? 0 : (count || 0);
+    setUnreadRequests(totalRequests);
+  } catch {
+    totalRequests = 0;
+    setUnreadRequests(0);
+  }
+
+  // --- Badge d’app = messages + demandes
+  await Notifications.setBadgeCountAsync(totalMessages + totalRequests);
+}, [user?.id]);
+
+
+
+ useEffect(() => {
+    let unsubscribeRealtime: (() => void) | null = null;
     let mounted = true;
 
-    // --- Messages non lus ---
-    try {
-      const { data: memberConversations, error: memberError } = await supabase
-        .from('conversation_members')
-        .select('conversation_id,last_read_at')
-        .eq('user_id', user.id);
+    const wire = async () => {
+      if (!user?.id) return;
+      // 1) boot + abonnement realtime sur messages
+      unsubscribeRealtime = await bootOnLoginOrReopen(user.id, async () => {
+        // Quand un message arrive en live → recalcule les badges d’onglet
+        if (!mounted) return;
+        await fetchUnreadCounts(); // ta fonction existante pour badges des tabs
+      });
 
-      if (memberError || !memberConversations?.length) {
-        if (__DEV__) console.warn('[tabs] unread messages: no conversations or query failed');
-        if (mounted) setUnreadMessages(0);
-      } else {
-        // Compter sans transférer les lignes
-        const counts = await Promise.all(
-          memberConversations.map(async (member) => {
-            const { count, error } = await supabase
-              .from('messages')
-              .select('id', { count: 'exact', head: true })
-              .eq('conversation_id', member.conversation_id)
-              .gt('created_at', member.last_read_at || '1970-01-01T00:00:00Z')
-              .neq('sender_id', user.id);
-            if (error) {
-              if (__DEV__) console.warn('[tabs] unread messages: count failed for a conversation');
-              return 0;
-            }
-            return count || 0;
-          })
-        );
+    };
 
-        const total = counts.reduce((a, b) => a + b, 0);
-        if (mounted) setUnreadMessages(total);
+    wire();
+
+    // 3) Sur re-ouverture app → re-boot + refresh
+    const sub = AppState.addEventListener('change', async (next) => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
+        await bootOnLoginOrReopen(user?.id || undefined, async () => {
+          await fetchUnreadCounts();
+        });
+        await fetchUnreadCounts();
       }
-    } catch {
-      if (__DEV__) console.warn('[tabs] unread messages: unexpected error');
-      if (mounted) setUnreadMessages(0);
-    }
-
-    // --- Demandes « nouvelles » / à suivre ---
-    try {
-      const { count, error } = await supabase
-        .from('service_request')
-        .select('id', { count: 'exact', head: true })
-        .eq('id_client', user.id)
-        .in('statut', ['submitted', 'quote_sent']);
-
-      if (error) {
-        if (__DEV__) console.warn('[tabs] unread requests: count failed');
-        if (mounted) setUnreadRequests(0);
-      } else if (mounted) {
-        setUnreadRequests(count || 0);
-      }
-    } catch {
-      if (__DEV__) console.warn('[tabs] unread requests: unexpected error');
-      if (mounted) setUnreadRequests(0);
-    }
+      appState.current = next;
+    });
 
     return () => {
       mounted = false;
+      sub.remove();
+      if (unsubscribeRealtime) unsubscribeRealtime();
     };
-  }, [user?.id]);
+  }, [user?.id, fetchUnreadCounts]);
+
+
+  useEffect(() => {
+  if (!user?.id) {
+    Notifications.setBadgeCountAsync(0);
+  }
+}, [user?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +162,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
         }}
       />
+      
       <Tabs.Screen
         name="welcome-unauthenticated" // Nom du fichier welcome-unauthenticated.tsx
         options={{

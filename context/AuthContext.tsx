@@ -8,17 +8,22 @@ import * as Crypto  from 'expo-crypto';
 import 'react-native-url-polyfill/auto';
 
 
+
+
 interface ServiceRequest {
   type: string;
   data: any;
 }
+
 
 interface Port {
   id: string;
   name: string;
 }
 
+
 export type UserRole = 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate';
+
 
 interface BaseUser {
   id: string;
@@ -30,6 +35,7 @@ interface BaseUser {
   createdAt?: string; // Add createdAt here
 }
 
+
 interface PleasureBoater extends BaseUser {
   role: 'pleasure_boater';
   ports: Array<{
@@ -39,11 +45,13 @@ interface PleasureBoater extends BaseUser {
   phone?: string; // Ajout de la propriété phone ici
 }
 
+
 interface BoatManagerUser extends BaseUser {
   role: 'boat_manager';
   phone?: string;
   categories: Array<{ id: number; description1: string; }>; // Added for BoatManagerUser
 }
+
 
 interface NauticalCompany extends BaseUser {
   role: 'nautical_company';
@@ -61,6 +69,7 @@ interface NauticalCompany extends BaseUser {
   };
 }
 
+
 interface CorporateUser extends BaseUser {
   role: 'corporate';
   permissions: {
@@ -71,12 +80,14 @@ interface CorporateUser extends BaseUser {
   };
 }
 
+
 export type User = PleasureBoater | BoatManagerUser | NauticalCompany | CorporateUser;
+
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
-  loading: boolean; 
+  loading: boolean;
   pendingServiceRequest: ServiceRequest | null;
   ports: Port[];
   login: (email: string, password: string, portId?: string) => Promise<void>;
@@ -88,9 +99,12 @@ interface AuthContextType {
   logout: () => void;
   setPendingServiceRequest: (request: ServiceRequest | null) => void;
   clearPendingServiceRequest: () => void;
+  refreshUser: () => Promise<void>; // AJOUTÉ : Fonction pour rafraîchir les données de l'utilisateur
 }
 
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -100,11 +114,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [availablePorts, setAvailablePorts] = useState<Port[]>([]);
 
 
+
+
   // Configure bcrypt with a cryptographically secure random number generator
 bcrypt.setRandomFallback((len: number) => {
   const bytes = Crypto.getRandomBytes(len);
   return Array.from(bytes);
 });
+
+
+
 
 
 
@@ -118,7 +137,9 @@ bcrypt.setRandomFallback((len: number) => {
       }
     };
 
+
     fetchPorts();
+
 
     const loadAndSetSession = async () => {
   try {
@@ -129,8 +150,10 @@ bcrypt.setRandomFallback((len: number) => {
       userId = await SecureStore.getItemAsync('user_id');
     }
 
+
     if (userId) {
       const userProfile = await getAndSetUserProfile(userId);
+
 
       // ✅ Redirection automatique si on retrouve un utilisateur
       if (userProfile) {
@@ -143,7 +166,9 @@ bcrypt.setRandomFallback((len: number) => {
   }
 };
 
+
     loadAndSetSession().finally(() => setLoading(false));
+
 
     // Listen for auth state changes from Supabase
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -159,10 +184,12 @@ bcrypt.setRandomFallback((len: number) => {
       }
     });
 
+
     return () => {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
 
   const getAndSetUserProfile = async (authUserId: string) => {
     const { data, error } = await supabase
@@ -171,12 +198,14 @@ bcrypt.setRandomFallback((len: number) => {
       .eq('id', authUserId)
       .maybeSingle();
 
+
     if (error) {
       console.error('Error fetching user profile:', error);
       setIsAuthenticated(false);
       setUser(null);
       return null;
     }
+
 
     if (data) {
       const userPorts = await Promise.all(
@@ -187,6 +216,7 @@ bcrypt.setRandomFallback((len: number) => {
             .eq('port_id', up.port_id)
             .limit(1);
 
+
           let boatManagerId = '';
           if (!bmUserPortsError && bmUserPorts.length > 0) {
             const { data: bmProfile, error: bmProfileError } = await supabase
@@ -195,10 +225,12 @@ bcrypt.setRandomFallback((len: number) => {
               .eq('id', bmUserPorts[0].user_id)
               .single();
 
+
             if (!bmProfileError && bmProfile.profile === 'boat_manager') {
               boatManagerId = bmUserPorts[0].user_id.toString();
             }
           }
+
 
           return {
             portId: up.port_id.toString(),
@@ -206,6 +238,7 @@ bcrypt.setRandomFallback((len: number) => {
           };
         })
       );
+
 
       const commonUserData = {
         id: data.id.toString(),
@@ -221,6 +254,7 @@ bcrypt.setRandomFallback((len: number) => {
         bio: data.bio,
         certification: data.certification,
       };
+
 
       let userProfile: User;
       switch (data.profile) {
@@ -286,12 +320,14 @@ bcrypt.setRandomFallback((len: number) => {
           return null;
       }
 
+
       setIsAuthenticated(true);
       setUser(userProfile);
       return userProfile;
     }
     return null;
   };
+
 
   const saveSession = async (userId: string) => {
     try {
@@ -305,6 +341,7 @@ bcrypt.setRandomFallback((len: number) => {
     }
   };
 
+
   const clearSession = async () => {
     try {
       if (Platform.OS === 'web') {
@@ -317,28 +354,35 @@ bcrypt.setRandomFallback((len: number) => {
     }
   };
 
+
   const login = async (email: string, password: string, portId?: string, shouldRedirect: boolean = true) => {
     const { data: users, error: userError } = await supabase
       .from('users')
       .select('id, e_mail, password, profile, last_login') // Inclure last_login
       .eq('e_mail', email);
 
+
     if (userError || !users || users.length === 0) {
       throw new Error('Email ou mot de passe incorrect.');
     }
 
+
     const userInDb = users[0];
 
+
     const passwordMatch = await bcrypt.compare(password, userInDb.password);
+
 
     if (!passwordMatch) {
       throw new Error('Email ou mot de passe incorrect.');
     }
 
+
     // --- Logique de mise à jour du statut basée sur last_login ---
     const now = new Date();
     const threeMonthsAgo = new Date();
     threeMonthsAgo.setMonth(now.getMonth() - 3);
+
 
     let newStatus = 'active';
     if (userInDb.last_login) {
@@ -348,18 +392,22 @@ bcrypt.setRandomFallback((len: number) => {
       }
     }
 
+
     const { error: updateError } = await supabase
       .from('users')
       .update({ last_login: now.toISOString(), status: newStatus })
       .eq('id', userInDb.id);
+
 
     if (updateError) {
       console.error('Erreur lors de la mise à jour de last_login et status:', updateError);
     }
     // --- Fin de la logique de mise à jour du statut ---
 
+
     await saveSession(userInDb.id.toString());
     const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+
 
     if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
       const parsedPortId = parseInt(portId);
@@ -372,14 +420,17 @@ bcrypt.setRandomFallback((len: number) => {
           .eq('user_id', userProfile.id)
           .eq('port_id', parsedPortId);
 
+
         if (existingPortError) {
           console.error('Error checking existing port assignment during login:', existingPortError);
         }
+
 
         if (!existingPortAssignment || existingPortAssignment.length === 0) {
           const { error: insertPortError } = await supabase
             .from('user_ports')
             .insert({ user_id: userProfile.id, port_id: parsedPortId });
+
 
           if (insertPortError) {
             console.error('Error inserting user port during login:', insertPortError);
@@ -392,6 +443,7 @@ bcrypt.setRandomFallback((len: number) => {
   }
   };
 
+
   const signup = async (
   firstName: string,
   lastName: string,
@@ -403,10 +455,12 @@ bcrypt.setRandomFallback((len: number) => {
     'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1';
   const hashedPassword = await bcrypt.hash(password, 10);
 
+
   const { data: existingUsers, error: existingUserError } = await supabase
     .from('users')
     .select('id')
     .eq('e_mail', email);
+
 
   if (existingUserError) {
     throw new Error("Erreur lors de la vérification de l'utilisateur existant.");
@@ -414,6 +468,7 @@ bcrypt.setRandomFallback((len: number) => {
   if (existingUsers && existingUsers.length > 0) {
     throw new Error('Un compte avec cet email existe déjà.');
   }
+
 
   const { data: newUser, error: userInsertError } = await supabase
     .from('users')
@@ -431,27 +486,33 @@ bcrypt.setRandomFallback((len: number) => {
     .select('id')
     .single();
 
+
   if (userInsertError) {
     console.error('Error inserting user profile:', userInsertError);
     throw new Error('Échec de la création du profil utilisateur.');
   }
+
 
   const userPortInserts = selectedPorts.map((p) => ({
     user_id: newUser.id,
     port_id: parseInt(p.portId),
   }));
 
+
   const { error: userPortsInsertError } = await supabase
     .from('user_ports')
     .insert(userPortInserts);
+
 
   if (userPortsInsertError) {
     console.error('Error inserting user ports:', userPortsInsertError);
     throw new Error("Échec de l'affectation des ports à l'utilisateur.");
   }
 
+
   await saveSession(newUser.id.toString());
   const userProfile = await getAndSetUserProfile(newUser.id.toString());
+
 
   if (userProfile) {
     const welcomePorts = await Promise.all(
@@ -463,10 +524,12 @@ bcrypt.setRandomFallback((len: number) => {
           email: string;
         }[] = [];
 
+
         const { data: userPorts, error: userPortsError } = await supabase
           .from('user_ports')
           .select('user_id')
           .eq('port_id', parseInt(p.portId));
+
 
         if (!userPortsError && userPorts && userPorts.length > 0) {
           const userIds = userPorts.map((up) => up.user_id);
@@ -475,6 +538,7 @@ bcrypt.setRandomFallback((len: number) => {
             .select('first_name, last_name, e_mail, phone')
             .in('id', userIds)
             .eq('profile', 'boat_manager');
+
 
           if (!bmError && boatManagersData && boatManagersData.length > 0) {
             boatManagers = boatManagersData.map((bm) => ({
@@ -485,12 +549,14 @@ bcrypt.setRandomFallback((len: number) => {
           }
         }
 
+
         return {
           portName: portInfo?.name || 'Port inconnu',
           boatManagers,
         };
       })
     );
+
 
     // Affichage dans showWelcomeMessage
     const showWelcomeMessage = async (
@@ -501,6 +567,7 @@ bcrypt.setRandomFallback((len: number) => {
     ) => {
       let message = `Bienvenue sur Your Boat Manager !\n\n`;
       message += `Des Boat Managers vous ont été affectés :\n\n`;
+
 
       ports.forEach((detail, index) => {
         message += `${index + 1}. ${detail.portName}\n`;
@@ -513,10 +580,12 @@ bcrypt.setRandomFallback((len: number) => {
         }
       });
 
+
       message += `\nPour profiter pleinement de nos services, nous vous invitons à :\n`;
       message += `1. Compléter votre profil\n`;
       message += `2. Ajouter vos bateaux\n\n`;
       message += `Souhaitez-vous ajouter votre bateau maintenant ?`;
+
 
       if (Platform.OS === 'web') {
         if (window.confirm(message)) {
@@ -546,10 +615,14 @@ bcrypt.setRandomFallback((len: number) => {
       }
     };
 
+
     await showWelcomeMessage(welcomePorts);
     redirectUser(userProfile.role);
   }
 };
+
+
+
 
 
 
@@ -561,6 +634,7 @@ bcrypt.setRandomFallback((len: number) => {
     throw new Error('La connexion sociale n\'est pas prise en charge avec l\'authentification personnalisée sans backend.');
   };
 
+
   const loginAsBoatManager = async (email: string, password: string) => {
   await login(email, password);
   const storedUserId = await SecureStore.getItemAsync('user_id');
@@ -571,6 +645,7 @@ bcrypt.setRandomFallback((len: number) => {
   }
 };
 
+
 const loginAsNauticalCompany = async (email: string, password: string) => {
   await login(email, password);
   const storedUserId = await SecureStore.getItemAsync('user_id');
@@ -580,6 +655,7 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
     throw new Error('Accès refusé : Ce compte n\'est pas une Entreprise du nautisme.');
   }
 };
+
 
 const loginAsCorporate = async (email: string, password: string) => {
   await login(email, password);
@@ -592,12 +668,15 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
 };
 
 
+
+
   const logout = async () => {
     await clearSession();
     setIsAuthenticated(false);
     setUser(null);
     router.replace('/login');
   };
+
 
   const redirectUser = (role: UserRole) => {
     switch (role) {
@@ -621,9 +700,13 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
 
 
 
+
+
+
   const clearPendingServiceRequest = () => {
     setPendingServiceRequest(null);
   };
+
 
   return (
     <AuthContext.Provider
@@ -642,11 +725,17 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
         logout,
         setPendingServiceRequest,
         clearPendingServiceRequest,
+        refreshUser: async () => { // AJOUTÉ : Implémentation de refreshUser
+          if (user?.id) {
+            await getAndSetUserProfile(user.id);
+          }
+        },
       }}>
       {children}
     </AuthContext.Provider>
   );
 }
+
 
 export function useAuth() {
   const context = useContext(AuthContext);
@@ -656,9 +745,11 @@ export function useAuth() {
   return context;
 }
 
+
 export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
   return function AuthCheckedComponent(props: any) {
     const { isAuthenticated, setPendingServiceRequest, user } = useAuth();
+
 
     const sendServiceRequestEmail = async ({ requestType, requestData, user }: {
       requestType: string;
@@ -669,29 +760,36 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         throw new Error('Utilisateur non autorisé');
       }
 
+
       const { data: userPortsData, error: userPortsError } = await supabase
         .from('user_ports')
         .select('port_id')
         .eq('user_id', user.id);
+
 
       if (userPortsError) {
         console.error('Error fetching user ports for email:', userPortsError);
         return;
       }
 
+
       const portIds = userPortsData.map(up => up.port_id);
+
 
       const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
         .from('user_ports')
         .select('user_id')
         .in('port_id', portIds);
 
+
       if (bmPortAssignmentsError) {
         console.error('Error fetching boat manager port assignments:', bmPortAssignmentsError);
         return;
       }
 
+
       const bmUserIds = [...new Set(bmPortAssignments.map(bmup => bmup.user_id))];
+
 
       const { data: boatManagersData, error: bmError } = await supabase
         .from('users')
@@ -699,10 +797,12 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         .in('id', bmUserIds)
         .eq('profile', 'boat_manager');
 
+
       if (bmError) {
         console.error('Error fetching boat managers for email:', bmError);
         return;
       }
+
 
       for (const bm of boatManagersData) {
         const emailContent = {
@@ -710,11 +810,11 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
           subject: `Nouvelle demande de service - ${requestType}`,
           body: `
             Nouvelle demande de service reçue :
-            
+           
             Type de service : ${requestType}
             Client : ${user.firstName} ${user.lastName}
             Email : ${user.email}
-            
+           
             Détails de la demande :
             ${Object.entries(requestData)
               .map(([key, value]) => `${key}: ${value}`)
@@ -724,6 +824,7 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         console.log(`Sending email notification to ${bm.first_name} ${bm.last_name}:`, emailContent);
       }
     };
+
 
     const handleSubmit = async (formData: any) => {
       if (!isAuthenticated) {
@@ -735,6 +836,7 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         return;
       }
 
+
       try {
         await sendServiceRequestEmail({
           requestType: props.title,
@@ -742,7 +844,9 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
           user,
         });
 
+
         props.onSubmit?.(formData);
+
 
         Alert.alert('Succès', 'Votre demande de service a été envoyée.');
         router.push('/(tabs)/requests');
@@ -752,6 +856,10 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
       }
     };
 
+
     return <WrappedComponent {...props} onSubmit={handleSubmit} />;
   };
 }
+
+
+

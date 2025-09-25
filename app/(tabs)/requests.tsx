@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
 
 // Types de statuts pour les différents rôles
-type RequestStatus = 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
+type RequestStatus = 'submitted' | 'accepted'| 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
 type UrgencyLevel = 'normal' | 'urgent';
 type SortKey = 'date' | 'type' | 'client'; // Simplifié pour le plaisancier
 
@@ -73,7 +73,7 @@ const AuthOverlay = () => (
       </Text>
       <TouchableOpacity
         style={overlayStyles.authButton}
-        onPress={() => router.replace('/(tabs)/welcome-unauthenticated')}
+        onPress={() => router.replace('/login')}
       >
         <Text style={overlayStyles.authButtonText}>Se connecter</Text>
       </TouchableOpacity>
@@ -231,7 +231,8 @@ export default function RequestsScreen() {
       total: requests.length,
       submitted: requests.filter(r => r.status === 'submitted').length,
       inProgress: requests.filter(r => r.status === 'in_progress').length,
-      forwarded: requests.filter(r => r.status === 'forwarded').length,
+      // MODIFICATION: Inclure 'accepted' dans 'forwarded'
+      forwarded: requests.filter(r => ['forwarded', 'accepted'].includes(r.status)).length,
       quoteSent: requests.filter(r => r.status === 'quote_sent').length,
       quoteAccepted: requests.filter(r => r.status === 'quote_accepted').length,
       scheduled: requests.filter(r => r.status === 'scheduled').length,

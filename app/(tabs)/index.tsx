@@ -314,9 +314,19 @@ export default function HomeScreen() {
   useEffect(() => {
   let alive = true; // ← évite setState après unmount
 
-  const fetchInitialData = async () => {
-    if (!user?.id) return;
+   // 🔑 Si plus d'utilisateur -> on vide TOUT l'état lié au user
+  if (!user?.id) {
+    setAssociatedBoatManagers([]);
+    setUserBoats([]);
+    setSelectedTemporaryPort(null);
+    setTemporaryBoatManagers([]);
+    setSelectedTemporaryPortId(null);
+    return () => { alive = false; };
+  }
 
+
+  const fetchInitialData = async () => {
+    
     // 1) ports de l’utilisateur
     const userPorts = await withTimeout(
       safeQuery(() =>
@@ -410,7 +420,7 @@ export default function HomeScreen() {
 
   fetchInitialData().catch(devError);
   return () => { alive = false; };
-}, [user]); // Added allPorts to dependencies
+}, [user?.id]); // Added allPorts to dependencies
 
   useEffect(() => {
   let alive = true;
@@ -827,7 +837,7 @@ const TemporaryPortSection = () => {
 
 
   return (
-    <ScrollView style={styles.container}>
+   <ScrollView key={user?.id ?? 'guest'} style={styles.container}>
       <ImageBackground
         source={{ uri: 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop' }}
         style={styles.heroBackground}>
@@ -857,7 +867,7 @@ const TemporaryPortSection = () => {
         </View>
         
         {/* Vos Boat Managers Section (MODIFIED) */}
-        {associatedBoatManagers.length > 0 && (
+      {!!user && associatedBoatManagers.length > 0 && (
           <View style={styles.boatManagerSection}>
             <Text style={styles.boatManagerTitle}>Vos Boat Managers</Text>
             {associatedBoatManagers.map((bm) => (
