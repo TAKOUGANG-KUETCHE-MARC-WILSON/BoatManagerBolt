@@ -1,12 +1,17 @@
 // app/(tabs)/index.tsx
 
-import { useState, useEffect } from 'react';
+
+import { useState, useEffect, useCallback } from 'react'; // AJOUTÉ useCallback
 import { View, Text, StyleSheet, ImageBackground, ScrollView, TouchableOpacity, Platform, Animated, Image, Modal, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Wrench, MessagesSquare, Handshake as HandshakeIcon, Tag, ShoppingBag as Cart, PenTool as Tool, Hammer, Settings, Gauge, Key, Shield, FileText, ChevronDown, Phone, Mail, Star, MapPin, X, ArrowLeft, Anchor, MessageSquare, ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import TemporaryPortModal from '../../components/TemporaryPortModal'; // <-- Importation du nouveau composant
+import { useFocusEffect } from '@react-navigation/native'; // AJOUTÉ useFocusEffect
+
+
+
 
 interface ServiceCategory {
   id: number; // Added for Supabase mapping
@@ -22,10 +27,12 @@ interface ServiceCategory {
   }>;
 }
 
+
 interface Port {
   id: string;
   name: string;
 }
+
 
 interface BoatDetails {
   id: string;
@@ -34,6 +41,7 @@ interface BoatDetails {
   image: string; // Added for boat image URL
   portName: string; // Added for boat's port name
 }
+
 
 interface BoatManagerDetails {
   id: string;
@@ -44,18 +52,22 @@ interface BoatManagerDetails {
   rating?: number;
   reviewCount?: number;
   location?: string; // This will now come from ports.name
-  bio?: string; 
+  bio?: string;
 }
+
 
 const AVATAR_BUCKET = 'avatars';
 const BOAT_BUCKET = 'boat.images';
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 
+
 const DEFAULT_BOAT_IMAGE =
   'https://images.unsplash.com/photo-1505852679233-d9fd70aff56d?q=80&w=1600&auto=format&fit=crop';
 
+
 const devLog   = (...a: any[]) => { if (__DEV__) console.log(...a); };
 const devError = (...a: any[]) => { if (__DEV__) console.error(...a); };
+
 
 /** Wrap générique : n'émet jamais d'exception, renvoie un fallback si erreur */
 async function safeQuery<T>(
@@ -72,6 +84,7 @@ async function safeQuery<T>(
   }
 }
 
+
 /** Timeout doux pour éviter les promesses qui pendent */
 function withTimeout<T>(p: Promise<T>, ms = 10_000): Promise<T> {
   return Promise.race([
@@ -81,8 +94,11 @@ function withTimeout<T>(p: Promise<T>, ms = 10_000): Promise<T> {
 }
 
 
+
+
 const isHttpUrl = (v?: string) =>
   !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
 
 // Extrait { bucket, path } d'une URL Supabase (public ou sign), sinon renvoie null
 function extractBucketAndPathFromSupabaseUrl(url: string) {
@@ -91,6 +107,9 @@ function extractBucketAndPathFromSupabaseUrl(url: string) {
   const [, bucket, path] = m;
   return { bucket, path };
 }
+
+
+
 
 
 
@@ -103,18 +122,21 @@ function inferBucketFromPath(path: string) {
 async function getAvatarUrl(value?: string | null): Promise<string> {
   if (!value || !`${value}`.trim()) return DEFAULT_AVATAR;
 
+
   const raw = `${value}`.trim();
+
 
   // 1) Si c'est déjà une URL http(s)
   if (isHttpUrl(raw)) {
     const bp = extractBucketAndPathFromSupabaseUrl(raw);
     if (!bp) return raw; // URL externe → on laisse tel quel
     const signed = await safeQuery(
-      () => supabase.storage.from(bp.bucket).createSignedUrl(bp.path, 60 * 60),
+      () => supabase.storage.from(bp.bucket).createSignedUrl(bp.path, 60 * 60 * 24 * 7),
       { signedUrl: '' } as any
     );
     return signed?.signedUrl || DEFAULT_AVATAR;
   }
+
 
   // 2) Chemin brut "bucket/chemin/dans/bucket"
   const path = raw.replace(/^\/+/, '');
@@ -123,12 +145,15 @@ async function getAvatarUrl(value?: string | null): Promise<string> {
     ? path.slice(bucket.length + 1)
     : path;
 
+
   const signed = await safeQuery(
-    () => supabase.storage.from(bucket).createSignedUrl(relative, 60 * 60),
+    () => supabase.storage.from(bucket).createSignedUrl(relative, 60 * 60 * 24 * 7),
     { signedUrl: '' } as any
   );
   return signed?.signedUrl || DEFAULT_AVATAR;
 }
+
+
 
 
 const serviceCategories: ServiceCategory[] = [
@@ -138,30 +163,30 @@ const serviceCategories: ServiceCategory[] = [
     icon: Wrench,
     color: '#0EA5E9',
     services: [
-      { 
+      {
         id: 101, // Corresponds to 'Entretien' service in Supabase
-        name: 'Entretien', 
+        name: 'Entretien',
         icon: Settings,
         route: '/services/maintenance',
         description: 'Entretien régulier et préventif'
       },
-      { 
+      {
         id: 102, // Corresponds to 'Amélioration' service in Supabase
-        name: 'Amélioration', 
+        name: 'Amélioration',
         icon: Hammer,
         route: '/services/improvement',
         description: 'Optimisez votre bateau'
       },
-      { 
+      {
         id: 103, // Corresponds to 'Réparation / Panne' service in Supabase
-        name: 'Réparation / Panne', 
+        name: 'Réparation / Panne',
         icon: Wrench,
         route: '/services/repair',
         description: 'Remise en état'
       },
-      { 
+      {
         id: 104, // Corresponds to 'Contrôle' service in Supabase
-        name: 'Contrôle', 
+        name: 'Contrôle',
         icon: Gauge,
         route: '/services/control',
         description: 'Inspections de votre bateau'
@@ -174,23 +199,23 @@ const serviceCategories: ServiceCategory[] = [
     icon: MessagesSquare,
     color: '#10B981',
     services: [
-      { 
+      {
         id: 201, // Corresponds to 'Gestion des accès' service in Supabase
         name: 'Gestion des accès', // Renamed from 'Accès à mon bateau'
         icon: Key,
         route: '/services/access',
         description: 'Gestion des accès'
       },
-      { 
+      {
         id: 202, // Corresponds to 'Sécurité' service in Supabase
-        name: 'Sécurité', 
+        name: 'Sécurité',
         icon: Shield,
         route: '/services/security',
         description: 'Protection et surveillance'
       },
-      { 
+      {
         id: 203, // Corresponds to 'Représentation' service in Supabase
-        name: 'Représentation', 
+        name: 'Représentation',
         icon: FileText,
         route: '/services/administrative',
         description: 'Délégation de vos intérêts'
@@ -210,16 +235,16 @@ const serviceCategories: ServiceCategory[] = [
     icon: HandshakeIcon,
     color: '#4F46E5',
     services: [
-      { 
+      {
         id: 301, // Corresponds to 'Je vends mon bateau' service in Supabase
-        name: 'Je vends mon bateau', 
+        name: 'Je vends mon bateau',
         icon: Tag,
         route: '/services/sell',
         description: 'Mettez votre bateau en vente'
       },
-      { 
+      {
         id: 302, // Corresponds to 'Je cherche un bateau' service in Supabase
-        name: 'Je cherche un bateau', 
+        name: 'Je cherche un bateau',
         icon: Cart,
         route: '/services/buy', // <-- Modifié pour pointer directement vers buy.tsx
         description: 'Trouvez le bateau idéal'
@@ -228,9 +253,11 @@ const serviceCategories: ServiceCategory[] = [
   },
 ];
 
+
 function ServiceCategoryCard({ category, onServicePress }: { category: ServiceCategory, onServicePress: (category: ServiceCategory, service: ServiceCategory['services'][0]) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [rotateAnimation] = useState(new Animated.Value(0));
+
 
   const toggleExpand = () => {
     setIsExpanded(!isExpanded);
@@ -240,18 +267,21 @@ function ServiceCategoryCard({ category, onServicePress }: { category: ServiceCa
     }).start();
   };
 
+
   const rotateInterpolate = rotateAnimation.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '180deg'],
   });
 
+
   const animatedStyle = {
     transform: [{ rotate: rotateInterpolate }],
   };
 
+
   return (
     <View style={styles.categoryCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={[styles.categoryHeader, { backgroundColor: `${category.color}15` }]}
         onPress={toggleExpand}
         activeOpacity={0.7}
@@ -266,7 +296,7 @@ function ServiceCategoryCard({ category, onServicePress }: { category: ServiceCa
           <ChevronDown size={24} color={category.color} />
         </Animated.View>
       </TouchableOpacity>
-      
+     
       {isExpanded && (
         <View style={styles.servicesList}>
           {category.services.map((service, index) => (
@@ -291,19 +321,21 @@ function ServiceCategoryCard({ category, onServicePress }: { category: ServiceCa
   );
 }
 
+
 export default function HomeScreen() {
   const { user } = useAuth();
   const [associatedBoatManagers, setAssociatedBoatManagers] = useState<BoatManagerDetails[]>([]);
   const [selectedTemporaryPort, setSelectedTemporaryPort] = useState<Port | null>(null);
   const [temporaryBoatManagers, setTemporaryBoatManagers] = useState<BoatManagerDetails[]>([]); // Changed to array
-  
+ 
   // Temporary port selection
   const [showTemporaryPortModal, setShowTemporaryPortModal] = useState(false);
   const [temporaryPortSearch, setTemporaryPortSearch] = useState('');
   const [selectedTemporaryPortId, setSelectedTemporaryPortId] = useState<string | null>(null);
-  
+ 
   const [allPorts, setAllPorts] = useState<Port[]>([]); // All ports for the modal
   const [userHomePortId, setUserHomePortId] = useState<string | null>(null); // To store the user's home port ID
+
 
   // New states for boat selection
   const [userBoats, setUserBoats] = useState<BoatDetails[]>([]);
@@ -311,119 +343,136 @@ export default function HomeScreen() {
   const [selectedServiceForRequest, setSelectedServiceForRequest] = useState<{ category: ServiceCategory, service: ServiceCategory['services'][0] } | null>(null);
 
 
-  useEffect(() => {
-  let alive = true; // ← évite setState après unmount
-
-   // 🔑 Si plus d'utilisateur -> on vide TOUT l'état lié au user
-  if (!user?.id) {
-    setAssociatedBoatManagers([]);
-    setUserBoats([]);
-    setSelectedTemporaryPort(null);
-    setTemporaryBoatManagers([]);
-    setSelectedTemporaryPortId(null);
-    return () => { alive = false; };
-  }
 
 
-  const fetchInitialData = async () => {
-    
-    // 1) ports de l’utilisateur
-    const userPorts = await withTimeout(
-      safeQuery(() =>
-        supabase.from('user_ports').select('port_id').eq('user_id', user.id),
-        [] as Array<{ port_id: number }>
-      )
-    ).catch(() => [] as Array<{ port_id: number }>);
-    const portIds = userPorts.map(p => p.port_id);
+  // MODIFICATION ICI : Remplacer useEffect par useFocusEffect
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true; // ← évite setState après unmount
 
-    // 2) tous les ports (pour la modale)
-    const portsData = await withTimeout(
-      safeQuery(() => supabase.from('ports').select('id, name'), [] as Array<{ id: number; name: string }>)
-    ).catch(() => [] as Array<{ id: number; name: string }>);
 
-    if (!alive) return;
-    const portsList = portsData.map(p => ({ id: String(p.id), name: p.name }));
-    setAllPorts(portsList);
-    const portsById = new Map(portsList.map(p => [p.id, p.name]));
+      // 🔑 Si plus d'utilisateur -> on vide TOUT l'état lié au user
+      if (!user?.id) {
+        setAssociatedBoatManagers([]);
+        setUserBoats([]);
+        setSelectedTemporaryPort(null);
+        setTemporaryBoatManagers([]);
+        setSelectedTemporaryPortId(null);
+        return () => { alive = false; };
+      }
 
-    // 3) BMs associés aux ports
-    if (portIds.length) {
-      const bmPortAssignments = await withTimeout(
-        safeQuery(() =>
-          supabase.from('user_ports').select('user_id, port_id').in('port_id', portIds),
-          [] as Array<{ user_id: string | number; port_id: number }>
-        )
-      ).catch(() => [] as Array<{ user_id: string | number; port_id: number }>);
 
-      const bmIds = [...new Set(bmPortAssignments.map(bm => bm.user_id))];
-      if (bmIds.length) {
-        const bmsData = await withTimeout(
+      const fetchInitialData = async () => {
+       
+        // 1) ports de l’utilisateur
+        const userPorts = await withTimeout(
+          safeQuery(() =>
+            supabase.from('user_ports').select('port_id').eq('user_id', user.id),
+            [] as Array<{ port_id: number }>
+          )
+        ).catch(() => [] as Array<{ port_id: number }>);
+        const portIds = userPorts.map(p => p.port_id);
+
+
+        // 2) tous les ports (pour la modale)
+        const portsData = await withTimeout(
+          safeQuery(() => supabase.from('ports').select('id, name'), [] as Array<{ id: number; name: string }>)
+        ).catch(() => [] as Array<{ id: number; name: string }>);
+
+
+        if (!alive) return;
+        const portsList = portsData.map(p => ({ id: String(p.id), name: p.name }));
+        setAllPorts(portsList);
+        const portsById = new Map(portsList.map(p => [p.id, p.name]));
+
+
+        // 3) BMs associés aux ports
+        if (portIds.length) {
+          const bmPortAssignments = await withTimeout(
+            safeQuery(() =>
+              supabase.from('user_ports').select('user_id, port_id').in('port_id', portIds),
+              [] as Array<{ user_id: string | number; port_id: number }>
+            )
+          ).catch(() => [] as Array<{ user_id: string | number; port_id: number }>);
+
+
+          const bmIds = [...new Set(bmPortAssignments.map(bm => bm.user_id))];
+          if (bmIds.length) {
+            const bmsData = await withTimeout(
+              safeQuery(() =>
+                supabase
+                  .from('users')
+                  .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
+                  .in('id', bmIds)
+                  .eq('profile', 'boat_manager'),
+                [] as any[]
+              )
+            ).catch(() => [] as any[]);
+
+
+            const formattedBms = await Promise.all(
+              bmsData.map(async (bm) => {
+                const assignedPortId = bmPortAssignments.find(x => x.user_id === bm.id)?.port_id?.toString();
+                const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
+                const avatarUrl = await getAvatarUrl(bm.avatar);
+                return {
+                  id: String(bm.id),
+                  name: `${bm.first_name} ${bm.last_name}`,
+                  email: bm.e_mail,
+                  phone: bm.phone,
+                  avatar: avatarUrl || DEFAULT_AVATAR,
+                  location: bmPortName,
+                  rating: bm.rating,
+                  reviewCount: bm.review_count,
+                  bio: bm.bio || 'Boat Manager à votre écoute',
+                } as BoatManagerDetails;
+              })
+            );
+            if (!alive) return;
+            setAssociatedBoatManagers(formattedBms);
+          }
+        } else { // Si plus de ports, vider la liste des BMs associés
+          setAssociatedBoatManagers([]);
+        }
+
+
+        // 4) Bateaux utilisateur
+        const boatsData = await withTimeout(
           safeQuery(() =>
             supabase
-              .from('users')
-              .select('id, first_name, last_name, e_mail, phone, avatar, rating, review_count, bio')
-              .in('id', bmIds)
-              .eq('profile', 'boat_manager'),
+              .from('boat')
+              .select('id, name, type, image, id_port, ports(name)')
+              .eq('id_user', user.id),
             [] as any[]
           )
         ).catch(() => [] as any[]);
 
-        const formattedBms = await Promise.all(
-          bmsData.map(async (bm) => {
-            const assignedPortId = bmPortAssignments.find(x => x.user_id === bm.id)?.port_id?.toString();
-            const bmPortName = assignedPortId ? (portsById.get(assignedPortId) ?? 'N/A') : 'N/A';
-            const avatarUrl = await getAvatarUrl(bm.avatar);
+
+        const formattedBoats = await Promise.all(
+          boatsData.map(async (boat: any) => {
+            const img = await getAvatarUrl(boat.image);
             return {
-              id: String(bm.id),
-              name: `${bm.first_name} ${bm.last_name}`,
-              email: bm.e_mail,
-              phone: bm.phone,
-              avatar: avatarUrl || DEFAULT_AVATAR,
-              location: bmPortName,
-              rating: bm.rating,
-              reviewCount: bm.review_count,
-              bio: bm.bio || 'Boat Manager à votre écoute',
-            } as BoatManagerDetails;
+              id: String(boat.id),
+              name: boat.name,
+              type: boat.type,
+              image: img || DEFAULT_BOAT_IMAGE,
+              portName: boat.ports?.name || 'Port non spécifié',
+            } as BoatDetails;
           })
         );
         if (!alive) return;
-        setAssociatedBoatManagers(formattedBms);
-      }
-    }
+        setUserBoats(formattedBoats);
+      };
 
-    // 4) Bateaux utilisateur
-    const boatsData = await withTimeout(
-      safeQuery(() =>
-        supabase
-          .from('boat')
-          .select('id, name, type, image, id_port, ports(name)')
-          .eq('id_user', user.id),
-        [] as any[]
-      )
-    ).catch(() => [] as any[]);
 
-    const formattedBoats = await Promise.all(
-      boatsData.map(async (boat: any) => {
-        const img = await getAvatarUrl(boat.image);
-        return {
-          id: String(boat.id),
-          name: boat.name,
-          type: boat.type,
-          image: img || DEFAULT_BOAT_IMAGE,
-          portName: boat.ports?.name || 'Port non spécifié',
-        } as BoatDetails;
-      })
-    );
-    if (!alive) return;
-    setUserBoats(formattedBoats);
-  };
+      fetchInitialData().catch(devError);
+      return () => { alive = false; };
+    }, [user])); // user est maintenant une dépendance de useCallback
 
-  fetchInitialData().catch(devError);
-  return () => { alive = false; };
-}, [user?.id]); // Added allPorts to dependencies
 
   useEffect(() => {
   let alive = true;
+
 
   (async () => {
     if (!selectedTemporaryPortId) {
@@ -432,6 +481,7 @@ export default function HomeScreen() {
       return;
     }
 
+
     const port = allPorts.find(p => p.id === selectedTemporaryPortId);
     if (!port) {
       setSelectedTemporaryPort(null);
@@ -439,6 +489,7 @@ export default function HomeScreen() {
       return;
     }
     setSelectedTemporaryPort(port);
+
 
     const bmPortAssignments = await withTimeout(
       safeQuery(
@@ -451,8 +502,10 @@ export default function HomeScreen() {
       )
     ).catch(() => [] as Array<{ user_id: string | number; ports?: { name?: string } }>);
 
+
     const bmIds = [...new Set(bmPortAssignments.map(r => r.user_id))];
     if (!bmIds.length) { setTemporaryBoatManagers([]); return; }
+
 
     const bmsData = await withTimeout(
       safeQuery(
@@ -465,6 +518,7 @@ export default function HomeScreen() {
         [] as any[]
       )
     ).catch(() => [] as any[]);
+
 
     const formatted = await Promise.all(
       bmsData.map(async (bm: any) => {
@@ -484,12 +538,16 @@ export default function HomeScreen() {
       })
     );
 
+
     if (!alive) return;
     setTemporaryBoatManagers(formatted);
   })().catch(devError);
 
+
   return () => { alive = false; };
 }, [selectedTemporaryPortId, allPorts]);
+
+
 
 
   // Filter ports based on search query for the modal
@@ -497,12 +555,14 @@ export default function HomeScreen() {
   (port.name ?? '').toLowerCase().includes((temporaryPortSearch ?? '').toLowerCase())
 );
 
+
   const handleSelectTemporaryPort = async (port: Port) => {
     // Vérifie si le port sélectionné est le port d'attache principal de l'utilisateur
     if (port.id === userHomePortId) {
       Alert.alert("Port déjà rattaché", "Vous êtes déjà rattaché à ce port d'attache principal.");
       return;
     }
+
 
     // Vérifie si le client est déjà en escale sur ce port (user_ports)
     const { data: existingPort, error } = await supabase
@@ -512,14 +572,17 @@ export default function HomeScreen() {
       .eq('port_id', parseInt(port.id)) // Convertir en int pour la comparaison
       .maybeSingle();
 
+
     if (error) {
       devError('Erreur vérification escale :', error);
     }
+
 
     if (existingPort) {
       Alert.alert("Port déjà sélectionné", "Vous êtes déjà en escale sur ce port.");
       return;
     }
+
 
     // Si tout est OK, on sélectionne
     setSelectedTemporaryPortId(port.id);
@@ -527,14 +590,17 @@ export default function HomeScreen() {
     setTemporaryPortSearch('');
   };
 
+
   const handleClearTemporaryPort = () => {
     setSelectedTemporaryPortId(null);
     setSelectedTemporaryPort(null);
     setTemporaryBoatManagers([]);
   };
 
+
   const handleContactBoatManager = async (bmId: string) => {
   if (!user?.id) return;
+
 
   try {
     // 1. Vérifier si une conversation existe déjà (avec exactement ces 2 membres)
@@ -543,15 +609,19 @@ export default function HomeScreen() {
       .select('conversation_id')
       .eq('user_id', user.id);
 
+
     if (convError) {
       devError('Erreur recherche conversation existante:', convError);
       return;
     }
 
+
     let conversationId: number | null = null;
+
 
     if (existingConversations?.length) {
       const convIds = existingConversations.map(c => c.conversation_id);
+
 
       // Vérifie si le BM est aussi dans l'une de ces conversations
       const { data: bmMemberships, error: bmError } = await supabase
@@ -560,10 +630,12 @@ export default function HomeScreen() {
         .eq('user_id', bmId)
         .in('conversation_id', convIds);
 
+
       if (!bmError && bmMemberships?.length) {
         conversationId = bmMemberships[0].conversation_id;
       }
     }
+
 
     // 2. Si pas de conversation existante → en créer une
     if (!conversationId) {
@@ -574,12 +646,15 @@ export default function HomeScreen() {
         .select('id')
         .single();
 
+
       if (newConvError || !newConv) {
         devError('Erreur création conversation:', newConvError);
         return;
       }
 
+
       conversationId = newConv.id;
+
 
       // Ajouter les 2 membres
       const { error: membersError } = await supabase
@@ -589,11 +664,13 @@ export default function HomeScreen() {
           { conversation_id: conversationId, user_id: bmId }
         ]);
 
+
       if (membersError) {
         devError('Erreur ajout membres conversation:', membersError);
         return;
       }
     }
+
 
     // 3. Redirection vers la conversation
     const targetPath = '/(tabs)/messages';
@@ -604,10 +681,14 @@ export default function HomeScreen() {
       params: targetParams
     });
 
+
   } catch (e) {
     devError('Erreur handleContactBoatManager:', e);
   }
 }
+
+
+
 
 
 
@@ -620,17 +701,18 @@ const TemporaryPortSection = () => {
     return null;
   }
 
+
   return (
     <View style={styles.temporaryPortSection}>
       <View style={styles.temporaryPortHeader}>
         <MapPin size={24} color="#0066CC" />
         <Text style={styles.temporaryPortTitle}>Vous êtes en déplacement</Text>
       </View>
-      
+     
       <Text style={styles.temporaryPortDescription}>
         Rentrez en contact avec le Boat Manager du port où vous êtes en escale.
       </Text>
-      
+     
       {selectedTemporaryPort ? (
         <View style={styles.selectedTemporaryPortContainer}>
           <View style={styles.selectedTemporaryPortHeader}>
@@ -638,14 +720,14 @@ const TemporaryPortSection = () => {
               <MapPin size={20} color="#0066CC" />
               <Text style={styles.selectedTemporaryPortName}>{selectedTemporaryPort.name}</Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.clearTemporaryPortButton}
               onPress={handleClearTemporaryPort}
             >
               <X size={20} color="#666" />
             </TouchableOpacity>
           </View>
-          
+         
           {temporaryBoatManagers.length > 0 ? (
             temporaryBoatManagers.map(bm => (
               <View key={bm.id} style={styles.temporaryBoatManagerCard}>
@@ -661,6 +743,7 @@ const TemporaryPortSection = () => {
                       }
                     }}
                   />
+
 
                   <View style={styles.temporaryBoatManagerInfo}>
                     <Text style={styles.temporaryBoatManagerName}>{bm.name}</Text>
@@ -680,7 +763,7 @@ const TemporaryPortSection = () => {
                     <Text style={styles.temporaryBoatManagerRole}>Boat Manager</Text>
                   </View>
                 </View>
-                
+               
                 <View style={styles.temporaryBoatManagerContactInfo}>
                   <View style={styles.temporaryContactRow}>
                     <Phone size={16} color="#666" />
@@ -691,8 +774,8 @@ const TemporaryPortSection = () => {
                     <Text style={styles.temporaryContactText}>{bm.email}</Text>
                   </View>
                 </View>
-                
-                <TouchableOpacity 
+               
+                <TouchableOpacity
                   style={styles.contactBoatManagerButton}
                   onPress={() => handleContactBoatManager(bm.id)}
                 >
@@ -708,7 +791,7 @@ const TemporaryPortSection = () => {
           )}
         </View>
       ) : (
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.selectTemporaryPortButton}
           onPress={() => setShowTemporaryPortModal(true)}
         >
@@ -720,6 +803,7 @@ const TemporaryPortSection = () => {
   );
 };
 
+
   // Handler for service category/service press
   const handleServiceRequestInitiation = (category: ServiceCategory, service: ServiceCategory['services'][0]) => {
     if (!user?.id) {
@@ -727,6 +811,7 @@ const TemporaryPortSection = () => {
       router.push('/login');
       return;
     }
+
 
     // Si le service est "Je cherche un bateau", naviguer directement
     if (service.id === 302) { // ID pour "Je cherche un bateau"
@@ -739,6 +824,7 @@ const TemporaryPortSection = () => {
       return; // Arrêter la fonction ici
     }
 
+
     // Pour les autres services, la logique de sélection de bateau reste la même
     if (userBoats.length === 0) {
       Alert.alert(
@@ -749,7 +835,9 @@ const TemporaryPortSection = () => {
       return;
     }
 
+
     setSelectedServiceForRequest({ category, service });
+
 
     if (userBoats.length === 1) {
       // Si un seul bateau, le sélectionner automatiquement
@@ -766,6 +854,7 @@ const TemporaryPortSection = () => {
     }
   };
 
+
   const handleSelectBoatForRequest = (boat: BoatDetails) => {
     if (selectedServiceForRequest) {
       router.push({
@@ -779,6 +868,7 @@ const TemporaryPortSection = () => {
       setSelectedServiceForRequest(null);
     }
   };
+
 
   const BoatSelectionModal = () => (
     <Modal
@@ -799,6 +889,7 @@ const TemporaryPortSection = () => {
             </TouchableOpacity>
           </View>
 
+
           <ScrollView style={styles.boatList}>
   {userBoats.map((boat) => (
     <TouchableOpacity
@@ -817,12 +908,14 @@ const TemporaryPortSection = () => {
   }}
 />
 
+
       {/* ← Regroupe tout le texte dans une View, et CHAQUE morceau est un <Text> */}
       <View style={styles.boatItemInfo}>
         <Text style={styles.boatItemName}>{String(boat.name ?? '')}</Text>
         <Text style={styles.boatItemDetails}>{String(boat.type ?? '')}</Text>
         <Text style={styles.boatItemPort}>{String(boat.portName ?? '')}</Text>
       </View>
+
 
       <View>
         <ChevronRight size={20} color="#666" />
@@ -834,6 +927,8 @@ const TemporaryPortSection = () => {
       </View>
     </Modal>
   );
+
+
 
 
   return (
@@ -855,9 +950,11 @@ const TemporaryPortSection = () => {
         </View>
       </ImageBackground>
 
+
       <View style={styles.nationalNetworkBanner}>
         <Text style={styles.nationalNetworkText}>Un Réseau National à votre service</Text>
       </View>
+
 
       <View style={styles.content}>
         <View style={styles.servicesContainer}>
@@ -865,7 +962,7 @@ const TemporaryPortSection = () => {
             <ServiceCategoryCard key={index} category={category} onServicePress={handleServiceRequestInitiation} />
           ))}
         </View>
-        
+       
         {/* Vos Boat Managers Section (MODIFIED) */}
       {!!user && associatedBoatManagers.length > 0 && (
           <View style={styles.boatManagerSection}>
@@ -886,6 +983,7 @@ const TemporaryPortSection = () => {
   }}
 />
 
+
                   <View style={styles.boatManagerInfo}>
                     <Text style={styles.boatManagerName}>{bm.name}</Text>
                     <View style={styles.ratingContainer}>
@@ -904,7 +1002,7 @@ const TemporaryPortSection = () => {
                     <Text style={styles.boatManagerRole}>Boat Manager</Text>
                   </View>
                 </View>
-                
+               
                 <View style={styles.temporaryBoatManagerContactInfo}>
                   <View style={styles.temporaryContactRow}>
                     <Phone size={16} color="#666" />
@@ -915,8 +1013,8 @@ const TemporaryPortSection = () => {
                     <Text style={styles.temporaryContactText}>{bm.email}</Text>
                   </View>
                 </View>
-                
-                <TouchableOpacity 
+               
+                <TouchableOpacity
                   style={styles.contactBoatManagerButton}
                   onPress={() => handleContactBoatManager(bm.id)}
                 >
@@ -928,10 +1026,11 @@ const TemporaryPortSection = () => {
           </View>
         )}
 
+
         {/* Temporary Port Section */}
         {!!user && <TemporaryPortSection />}
       </View>
-      
+     
       <TemporaryPortModal
         visible={showTemporaryPortModal}
         onClose={() => setShowTemporaryPortModal(false)}
@@ -943,10 +1042,12 @@ const TemporaryPortSection = () => {
         selectedTemporaryPortId={selectedTemporaryPortId}
       />
 
+
       <BoatSelectionModal />
     </ScrollView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -1438,3 +1539,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
+
+
+

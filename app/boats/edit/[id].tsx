@@ -12,6 +12,12 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { Buffer } from 'buffer';
 
 
+
+
+
+
+
+
 interface BoatForm {
   photo: string;
   name: string;
@@ -27,7 +33,13 @@ interface BoatForm {
   place_de_port: string; // Added place_de_port
 }
 
+
+
+
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
+
+
 
 // Helper to get the public URL for an image in a specific bucket
 const getPublicImageUrl = (filePath: string, bucketName: string): string => {
@@ -35,10 +47,16 @@ const getPublicImageUrl = (filePath: string, bucketName: string): string => {
   // If it's already a full HTTP URL, return it directly
   if (isHttpUrl(filePath)) return filePath;
 
+
+
+
   // Otherwise, construct the public URL from the file path
   const { data } = supabase.storage.from(bucketName).getPublicUrl(filePath);
   return data?.publicUrl || '';
 };
+
+
+
 
 const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }: {
   visible: boolean;
@@ -57,10 +75,16 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
       <View style={styles.modalContent}>
         <Text style={styles.modalTitle}>Photo du bateau</Text>
 
+
+
+
         <TouchableOpacity style={styles.modalOption} onPress={onChoosePhoto}>
           <ImageIcon size={24} color="#0066CC" />
           <Text style={styles.modalOptionText}>Choisir dans la galerie</Text>
         </TouchableOpacity>
+
+
+
 
         {hasPhoto && (
           <TouchableOpacity
@@ -75,6 +99,9 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
           </TouchableOpacity>
         )}
 
+
+
+
         <TouchableOpacity
           style={styles.modalCancelButton}
           onPress={onClose}
@@ -85,6 +112,9 @@ const PhotoModal = ({ visible, onClose, onChoosePhoto, onDeletePhoto, hasPhoto }
     </View>
   </Modal>
 );
+
+
+
 
 export default function EditBoatScreen() {
   const { id } = useLocalSearchParams();
@@ -111,6 +141,9 @@ export default function EditBoatScreen() {
   const [portSearch, setPortSearch] = useState('');
   const [availablePorts, setAvailablePorts] = useState<Array<{ id: string; name: string }>>([]);
 
+
+
+
   useEffect(() => {
   const fetchBoatData = async () => {
     if (!id || typeof id !== 'string') {
@@ -118,6 +151,9 @@ export default function EditBoatScreen() {
       setLoading(false);
       return;
     }
+
+
+
 
     setLoading(true);
     setFetchError(null);
@@ -142,6 +178,9 @@ export default function EditBoatScreen() {
         .eq('id', id)
         .single();
 
+
+
+
       if (error) {
         if (error.code === 'PGRST116') { // No rows found
           setFetchError('Bateau non trouvé.');
@@ -153,13 +192,19 @@ export default function EditBoatScreen() {
         return;
       }
 
+
+
+
       if (data) {
         // Use getPublicImageUrl to ensure we always get a public URL for display
         const publicPhotoUrl = getPublicImageUrl(data.image || '', 'boat.images');
 
+
+
+
         setForm({
           photo: publicPhotoUrl ||
-            'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1',
+            'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop',
           name: data.name || '',
           type: data.type || '',
           manufacturer: data.constructeur || '',
@@ -186,6 +231,9 @@ export default function EditBoatScreen() {
     }
   };
 
+
+
+
   const fetchPorts = async () => {
     const { data, error } = await supabase.from('ports').select('id, name');
     if (error) {
@@ -195,9 +243,18 @@ export default function EditBoatScreen() {
     }
   };
 
+
+
+
   fetchBoatData();
   fetchPorts();
 }, [id]);
+
+
+
+
+
+
 
 
   const handleChoosePhoto = async () => {
@@ -211,6 +268,9 @@ export default function EditBoatScreen() {
         }
       }
 
+
+
+
       const pickerResult = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -218,12 +278,21 @@ export default function EditBoatScreen() {
         quality: 1,
       });
 
+
+
+
       if (pickerResult.canceled || !pickerResult.assets?.length) {
         setShowPhotoModal(false);
         return;
       }
 
+
+
+
       const asset = pickerResult.assets[0];
+
+
+
 
       // Manipulate image and store local URI
       const manipulatedImage = await ImageManipulator.manipulateAsync(
@@ -231,6 +300,9 @@ export default function EditBoatScreen() {
         [],
         { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
       );
+
+
+
 
       setForm(prev => ({ ...prev, photo: manipulatedImage.uri })); // Store local URI
       setShowPhotoModal(false); // Close modal after selection
@@ -240,6 +312,9 @@ export default function EditBoatScreen() {
       setShowPhotoModal(false);
     }
   };
+
+
+
 
   const handleDeletePhoto = async () => {
     // Check if the current photo URL is from Supabase Storage
@@ -264,6 +339,9 @@ export default function EditBoatScreen() {
     setForm(prev => ({ ...prev, photo: '' })); // Reset to empty string
   };
 
+
+
+
   const handleSelectPort = (port: { id: string; name: string }) => {
     setForm(prev => ({
       ...prev,
@@ -277,14 +355,23 @@ export default function EditBoatScreen() {
     }
   };
 
+
+
+
   const handlePortInputChange = (text: string) => {
     setPortSearch(text);
     setShowPortModal(true); // Always show modal when typing
     setForm(prev => ({ ...prev, portId: '', homePort: text })); // Clear portId until a valid one is selected
   };
 
+
+
+
   const validateForm = () => {
     const newErrors: Partial<BoatForm> = {};
+
+
+
 
     if (!form.name.trim()) newErrors.name = 'Le nom est requis';
     if (!form.type.trim()) newErrors.type = 'Le type est requis';
@@ -293,23 +380,38 @@ export default function EditBoatScreen() {
     if (!form.portId) newErrors.homePort = 'Le port d\'attache est requis';
     if (!form.place_de_port.trim()) newErrors.place_de_port = 'La place de port est requise'; // Validate place_de_port
 
+
+
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+
+
+
 
   const handleSubmit = async () => {
     if (!validateForm()) {
       return;
     }
 
+
+
+
     setLoading(true);
     let finalImageUrl = form.photo; // Start with current photo URL
+
+
+
 
     // If photo is a local URI (newly selected), upload it to Supabase
     if (form.photo && !form.photo.startsWith('http')) {
       try {
         const fileName = `boat_images/${id}/${Date.now()}.jpeg`;
         const contentType = 'image/jpeg';
+
+
+
 
         // Read the file as base64
         const base64 = await FileSystem.readAsStringAsync(form.photo, {
@@ -318,12 +420,18 @@ export default function EditBoatScreen() {
         // Convert base64 to Buffer (Uint8Array)
         const fileBuffer = Buffer.from(base64, 'base64');
 
+
+
+
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('boat.images') // Specify the bucket name here
           .upload(fileName, fileBuffer, { // Use the fileBuffer
             contentType,
             upsert: true, // Use upsert to overwrite if file with same name exists
           });
+
+
+
 
         if (uploadError) {
           console.error('Erreur upload Supabase:', uploadError);
@@ -332,8 +440,14 @@ export default function EditBoatScreen() {
           return;
         }
 
+
+
+
         // Get the public URL directly
         finalImageUrl = getPublicImageUrl(uploadData.path, 'boat.images');
+
+
+
 
       } catch (e) {
         console.error('Erreur lors du téléchargement de l\'image:', e);
@@ -342,6 +456,9 @@ export default function EditBoatScreen() {
         return;
       }
     }
+
+
+
 
     try {
       const { error } = await supabase
@@ -360,6 +477,9 @@ export default function EditBoatScreen() {
           place_de_port: form.place_de_port, // Include place_de_port in update
         })
         .eq('id', id);
+
+
+
 
       if (error) {
         console.error('Error updating boat:', error);
@@ -383,6 +503,9 @@ export default function EditBoatScreen() {
       setLoading(false);
     }
   };
+
+
+
 
   const handleDelete = () => {
     Alert.alert(
@@ -412,11 +535,17 @@ export default function EditBoatScreen() {
                 }
               }
 
+
+
+
               // Then delete boat record
               const { error } = await supabase
                 .from('boat')
                 .delete()
                 .eq('id', id);
+
+
+
 
               if (error) {
                 console.error('Error deleting boat:', error);
@@ -445,6 +574,9 @@ export default function EditBoatScreen() {
     );
   };
 
+
+
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -464,6 +596,9 @@ export default function EditBoatScreen() {
       </View>
     );
   }
+
+
+
 
   if (fetchError) {
     return (
@@ -490,24 +625,42 @@ export default function EditBoatScreen() {
     );
   }
 
+
+
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
     <Stack.Screen options={{ headerShown: false }} />
     <StatusBar style="dark" backgroundColor="#fff" />
+
+
+
 
     <View style={styles.header}>
       <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
         <ArrowLeft size={24} color="#1a1a1a" />
       </TouchableOpacity>
 
+
+
+
       <Text style={styles.title}>Modifier le bateau</Text>
+
+
+
 
       {/* Placeholder pour garder le titre parfaitement centré */}
       <View style={{ width: 36, height: 36 }} />
     </View>
 
+
+
+
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <Image source={{ uri: form.photo }} style={styles.boatImage} resizeMode="cover" />
+
+
+
 
       {/* Tabs for boat details - assuming these are part of the original file structure */}
       {/* You might need to uncomment and adjust these sections based on your actual file */}
@@ -555,6 +708,9 @@ export default function EditBoatScreen() {
         </TouchableOpacity>
       </View>
       */}
+
+
+
 
       {/* General Info Tab Content - assuming this is part of the original file structure */}
       {/* You might need to uncomment and adjust these sections based on your actual file */}
@@ -612,6 +768,9 @@ export default function EditBoatScreen() {
       )}
       */}
 
+
+
+
       <View style={styles.form}>
         <TouchableOpacity
           style={styles.photoContainer}
@@ -640,6 +799,9 @@ export default function EditBoatScreen() {
           )}
         </TouchableOpacity>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Nom du bateau</Text>
           <TextInput
@@ -650,6 +812,9 @@ export default function EditBoatScreen() {
           />
           {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
         </View>
+
+
+
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Type de bateau</Text>
@@ -662,6 +827,9 @@ export default function EditBoatScreen() {
           {errors.type && <Text style={styles.errorText}>{errors.type}</Text>}
         </View>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Constructeur</Text>
           <TextInput
@@ -673,6 +841,9 @@ export default function EditBoatScreen() {
           {errors.manufacturer && <Text style={styles.errorText}>{errors.manufacturer}</Text>}
         </View>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Modèle</Text>
           <TextInput
@@ -682,6 +853,9 @@ export default function EditBoatScreen() {
             placeholder="ex: Oceanis 45"
           />
         </View>
+
+
+
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Année de construction</Text>
@@ -694,6 +868,9 @@ export default function EditBoatScreen() {
           />
         </View>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Moteur</Text>
           <TextInput
@@ -703,6 +880,9 @@ export default function EditBoatScreen() {
             placeholder="ex: Volvo Penta D2-50"
           />
         </View>
+
+
+
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Heures moteur</Text>
@@ -715,6 +895,9 @@ export default function EditBoatScreen() {
           />
         </View>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Longueur</Text>
           <TextInput
@@ -725,6 +908,9 @@ export default function EditBoatScreen() {
           />
           {errors.length && <Text style={styles.errorText}>{errors.length}</Text>}
         </View>
+
+
+
 
         <View style={styles.inputContainer}>
   <Text style={styles.label}>Port d'attache</Text>
@@ -750,6 +936,9 @@ export default function EditBoatScreen() {
   {errors.homePort && <Text style={styles.errorText}>{errors.homePort}</Text>}
 </View>
 
+
+
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Place de port</Text>
           <View style={[styles.inputWrapper, errors.place_de_port && styles.inputWrapperError]}>
@@ -764,6 +953,9 @@ export default function EditBoatScreen() {
           {errors.place_de_port && <Text style={styles.errorText}>{errors.place_de_port}</Text>}
         </View>
 
+
+
+
         <TouchableOpacity
           style={[styles.submitButton, loading && styles.submitButtonDisabled]}
           onPress={handleSubmit}
@@ -776,6 +968,9 @@ export default function EditBoatScreen() {
           )}
         </TouchableOpacity>
 
+
+
+
         <TouchableOpacity
           style={styles.deleteButton}
           onPress={handleDelete}
@@ -783,6 +978,9 @@ export default function EditBoatScreen() {
           <Text style={styles.deleteButtonText}>Supprimer le bateau</Text>
         </TouchableOpacity>
       </View>
+
+
+
 
       <PhotoModal
         visible={showPhotoModal}
@@ -804,6 +1002,9 @@ export default function EditBoatScreen() {
     </SafeAreaView>
   );
 }
+
+
+
 
 const styles = StyleSheet.create({
    safeArea: {
@@ -1098,3 +1299,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+
+
+
+
+
+
+
+

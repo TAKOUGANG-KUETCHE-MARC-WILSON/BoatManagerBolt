@@ -1,8 +1,7 @@
 // components/ChatInput.tsx
 import React, { memo, useState, useCallback } from 'react';
 import { View, TextInput, TouchableOpacity, StyleSheet, Platform, Text } from 'react-native';
-import { Send, Paperclip, Camera, FileText } from 'lucide-react-native'; // Import FileText icon
-
+import { Send, Paperclip, Camera, FileText } from 'lucide-react-native';
 
 interface ChatInputProps {
   handleSend: (messageText: string) => void | Promise<void>;
@@ -10,6 +9,10 @@ interface ChatInputProps {
   setShowAttachmentOptions: (show: boolean) => void;
   handleChooseImage: () => void;
   handleChooseDocument: () => void;
+
+  // 🔸 nouveau : mode contrôlé (optionnel)
+  value?: string;
+  onChangeText?: (text: string) => void;
 }
 
 const ChatInput = memo(({
@@ -18,75 +21,83 @@ const ChatInput = memo(({
   setShowAttachmentOptions,
   handleChooseImage,
   handleChooseDocument,
+  value,
+  onChangeText,
 }: ChatInputProps) => {
-  const [message, setMessage] = useState('');
+  // mode contrôlé / non-contrôlé
+  const [inner, setInner] = useState('');
+  const controlled = typeof value === 'string';
+  const text = controlled ? (value as string) : inner;
+  const setText = controlled ? (onChangeText as (t: string) => void) : setInner;
 
   const internalHandleSend = useCallback(async () => {
-  const trimmed = message.trim();
-  if (!trimmed) return;
-  await Promise.resolve(handleSend(trimmed)); // ok si sync ou async
-  setMessage('');
-  setShowAttachmentOptions(false);            // ferme le popover après envoi
-}, [message, handleSend, setShowAttachmentOptions]);
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    await Promise.resolve(handleSend(trimmed)); // ok si sync ou async
+    // ⚠️ si contrôlé, le parent videra le texte APRÈS envoi réussi.
+    if (!controlled) setText('');
+    setShowAttachmentOptions(false);
+  }, [text, handleSend, setShowAttachmentOptions, controlled, setText]);
 
   return (
     <View style={styles.inputContainer}>
       <TouchableOpacity
-  style={styles.attachButton}
-  onPress={() => setShowAttachmentOptions(!showAttachmentOptions)}
-  accessibilityRole="button"
-  accessibilityLabel="Ajouter une pièce jointe"
-  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
->
+        style={styles.attachButton}
+        onPress={() => setShowAttachmentOptions(!showAttachmentOptions)}
+        accessibilityRole="button"
+        accessibilityLabel="Ajouter une pièce jointe"
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
         <Paperclip size={24} color="#0066CC" />
       </TouchableOpacity>
 
       {showAttachmentOptions && (
         <View style={styles.attachmentOptions}>
           <TouchableOpacity
-  style={styles.attachmentOption}
-  onPress={() => { setShowAttachmentOptions(false); handleChooseImage(); }}
->
-  <Camera size={24} color="#0066CC" />
-  <Text style={styles.attachmentOptionText}>Photo</Text>
-</TouchableOpacity>
+            style={styles.attachmentOption}
+            onPress={() => { setShowAttachmentOptions(false); handleChooseImage(); }}
+          >
+            <Camera size={24} color="#0066CC" />
+            <Text style={styles.attachmentOptionText}>Photo</Text>
+          </TouchableOpacity>
 
-<TouchableOpacity
-  style={styles.attachmentOption}
-  onPress={() => { setShowAttachmentOptions(false); handleChooseDocument(); }}
->
-  <FileText size={24} color="#0066CC" />
-  <Text style={styles.attachmentOptionText}>Document</Text>
-</TouchableOpacity>
+          <TouchableOpacity
+            style={styles.attachmentOption}
+            onPress={() => { setShowAttachmentOptions(false); handleChooseDocument(); }}
+          >
+            <FileText size={24} color="#0066CC" />
+            <Text style={styles.attachmentOptionText}>Document</Text>
+          </TouchableOpacity>
         </View>
       )}
 
       <TextInput
-  style={styles.input}
-  placeholder="Votre message..."
-  placeholderTextColor="#94a3b8"
-  value={message}
-  onChangeText={setMessage}
-  onFocus={() => setShowAttachmentOptions(false)}
-  multiline
-  onKeyPress={(e) => {
-    // web/desktop : Entrée = envoyer, Shift/Ctrl/Cmd+Entrée = nouvelle ligne
-    const key = (e as any)?.nativeEvent?.key;
-    const isWeb = Platform.OS === 'web';
-    const hasModifier = (e as any)?.shiftKey || (e as any)?.ctrlKey || (e as any)?.metaKey;
-    if (isWeb && key === 'Enter' && !hasModifier) {
-      e.preventDefault?.();
-      internalHandleSend();
-    }
-  }}
-/>
+        style={styles.input}
+        placeholder="Votre message..."
+        placeholderTextColor="#94a3b8"
+        value={text}
+        onChangeText={setText}
+        onFocus={() => setShowAttachmentOptions(false)}
+        multiline
+        onKeyPress={(e) => {
+          // web/desktop : Entrée = envoyer, Shift/Ctrl/Cmd+Entrée = nouvelle ligne
+          const key = (e as any)?.nativeEvent?.key;
+          const isWeb = Platform.OS === 'web';
+          const hasModifier = (e as any)?.shiftKey || (e as any)?.ctrlKey || (e as any)?.metaKey;
+          if (isWeb && key === 'Enter' && !hasModifier) {
+            e.preventDefault?.();
+            internalHandleSend();
+          }
+        }}
+      />
+
       <TouchableOpacity
         style={[
           styles.sendButton,
-          !message.trim() && styles.sendButtonDisabled
+          !text?.trim() && styles.sendButtonDisabled
         ]}
         onPress={internalHandleSend}
-        disabled={!message.trim()}
+        disabled={!text?.trim()}
       >
         <Send size={24} color="white" />
       </TouchableOpacity>
@@ -108,24 +119,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f7ff',
     borderRadius: 24,
   },
- attachmentOptions: {
-  position: 'absolute',
-  bottom: 70,
-  left: 12,
-  backgroundColor: 'white',
-  borderRadius: 12,
-  padding: 12,
-  flexDirection: 'row',
-  gap: 16,
-  zIndex: 1000,              // ← passe au-dessus
-  borderWidth: 1,
-  borderColor: '#e2e8f0',
-  ...Platform.select({
-    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 },
-    android: { elevation: 8 }, // un peu plus haut que 4
-    web: { boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)' },
-  }),
-},
+  attachmentOptions: {
+    position: 'absolute',
+    bottom: 70,
+    left: 12,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: 'row',
+    gap: 16,
+    zIndex: 1000,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 },
+      android: { elevation: 8 },
+      web: { boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)' },
+    }),
+  },
   attachmentOption: {
     alignItems: 'center',
     gap: 8,
@@ -136,19 +147,19 @@ const styles = StyleSheet.create({
     color: '#0066CC',
   },
   input: {
-  flex: 1,
-  backgroundColor: '#f8fafc',
-  borderRadius: 24,
-  paddingVertical: 8,
-  paddingHorizontal: 16,
-  maxHeight: 120,
-  fontSize: 16,
-  color: '#1a1a1a',
-  textAlignVertical: 'top', // ← ajout
-  ...Platform.select({
-    web: { outlineStyle: 'none' },
-  }),
-},
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 24,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    maxHeight: 120,
+    fontSize: 16,
+    color: '#1a1a1a',
+    textAlignVertical: 'top',
+    ...Platform.select({
+      web: { outlineStyle: 'none' },
+    }),
+  },
   sendButton: {
     width: 48,
     height: 48,
@@ -163,12 +174,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.2,
         shadowRadius: 8,
       },
-      android: {
-        elevation: 4,
-      },
-      web: {
-        boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)',
-      },
+      android: { elevation: 4 },
+      web: { boxShadow: '0 4px 8px rgba(0, 102, 204, 0.2)' },
     }),
   },
   sendButtonDisabled: {
@@ -177,4 +184,3 @@ const styles = StyleSheet.create({
 });
 
 export default ChatInput;
-

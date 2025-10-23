@@ -1,134 +1,170 @@
-import { Platform, TouchableOpacity, AppState } from 'react-native';
-import { Tabs } from 'expo-router';
+// app/(boat-manager)/_layout.tsx
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, TouchableOpacity, AppState, View, Text } from 'react-native';
+import { Tabs, router } from 'expo-router';
 import { Users, FileText, MessageSquare, User, Calendar, Plus, ArrowLeft } from 'lucide-react-native';
-import { Logo } from '../../components/Logo';
-import { useAuth } from '@/context/AuthContext';
-import { useEffect, useState, useCallback } from 'react';
-import { router } from 'expo-router';
-import { supabase } from '@/src/lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
+
+import { useResetBadgeOnLogout } from '@/app/services/utils/useResetBadgeOnLogout';
+import { Logo } from '../../components/Logo';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/src/lib/supabase';
+
+// ---------- Logo + badge dans le header
+const LogoWithBadge = ({ total }: { total: number }) => (
+  <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
+    <Logo size="small" />
+    {total > 0 && (
+      <View
+        style={{
+          position: 'absolute',
+          top: -4,
+          right: -8,
+          backgroundColor: '#EF4444',
+          minWidth: 18,
+          height: 18,
+          paddingHorizontal: 4,
+          borderRadius: 9,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ color: 'white', fontSize: 11, fontWeight: '700' }}>
+          {total > 99 ? '99+' : total}
+        </Text>
+      </View>
+    )}
+  </View>
+);
 
 export default function BoatManagerTabLayout() {
   const { user } = useAuth();
+  useResetBadgeOnLogout(user); // ✅ remet le badge à 0 quand l'utilisateur se déconnecte
+
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadRequests, setUnreadRequests] = useState(0);
+  const appState = useRef(AppState.currentState);
 
-  // ---- Compteur réutilisable (AppState, interval, realtime s'en servent)
+  const uid = useMemo(() => (user?.id ? Number(user.id) : undefined), [user?.id]);
+  const isBoatManager = user?.role === 'boat_manager';
+
+  const formatBadge = (n: number) => (n > 0 ? (n > 99 ? '99+' : n) : undefined);
+
+  // ---- Init notifs (autorisation + canal Android)
+  useEffect(() => {
+    const initNotif = async () => {
+      if (Platform.OS === 'ios') {
+        await Notifications.requestPermissionsAsync({
+          ios: { allowAlert: true, allowBadge: true, allowSound: true },
+        });
+      } else if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'default',
+          importance: Notifications.AndroidImportance.DEFAULT,
+          showBadge: true,
+        });
+      }
+    };
+    initNotif();
+  }, []);
+
+  // ---- Source de vérité : user_conversation_unreads + service_request(submitted)
   const fetchUnreadCounts = useCallback(async () => {
-    if (!user?.id) {
+    if (!uid) {
       setUnreadMessages(0);
       setUnreadRequests(0);
+      await Notifications.setBadgeCountAsync(0).catch(() => {});
       return;
     }
 
-    // --- Messages non lus
+    let totalMsg = 0;
+    let totalReq = 0;
+
+    // 1) Messages non lus (somme des lignes pour ce user)
     try {
-      const { data: convMembers } = await supabase
-        .from('conversation_members')
-        .select('conversation_id')
-        .eq('user_id', user.id);
+      const { data, error } = await supabase
+        .from('user_conversation_unreads')
+        .select('unread_count')
+        .eq('user_id', uid);
 
-      const convIds = (convMembers ?? []).map((c) => c.conversation_id);
-      if (!convIds.length) {
-        setUnreadMessages(0);
-      } else {
-        const { count: messagesCount } = await supabase
-          .from('messages')
-          .select('id', { count: 'exact', head: true })
-          .in('conversation_id', convIds) // uniquement les conversations où il est membre
-          .neq('sender_id', user.id)      // pas mes propres messages
-          .eq('is_read', false);          // uniquement les non lus
-
-        setUnreadMessages(messagesCount || 0);
-      }
+      totalMsg = error ? 0 : (data ?? []).reduce((s, r: any) => s + Number(r.unread_count || 0), 0);
+      setUnreadMessages(totalMsg);
     } catch {
+      totalMsg = 0;
       setUnreadMessages(0);
     }
 
-    // --- Requêtes non lues
+    // 2) Demandes "submitted" pour ce boat manager
     try {
-      const { count: requestsCount } = await supabase
+      const { count } = await supabase
         .from('service_request')
         .select('id', { count: 'exact', head: true })
-        .eq('id_boat_manager', user.id)
+        .eq('id_boat_manager', uid)
         .eq('statut', 'submitted');
 
-      setUnreadRequests(requestsCount || 0);
+      totalReq = count || 0;
+      setUnreadRequests(totalReq);
     } catch {
+      totalReq = 0;
       setUnreadRequests(0);
     }
-  }, [user?.id]);
 
-  // ---- Premier chargement + garde-fou de rôle
+    // 3) ✅ Badge d’icône = SOMME immédiate (ne dépend pas du state)
+    await Notifications.setBadgeCountAsync(totalMsg + totalReq).catch(() => {});
+  }, [uid]);
+
+  // ---- Garde-fou + premier chargement
   useEffect(() => {
-    if (user?.role !== 'boat_manager') {
+    if (!isBoatManager) {
       router.replace('/(tabs)');
       return;
     }
     fetchUnreadCounts();
-  }, [user?.role, fetchUnreadCounts]);
+  }, [isBoatManager, fetchUnreadCounts]);
 
-  // ---- Realtime INSERT + retour app + interval
+  // ---- Realtime + refresh au retour foreground
   useEffect(() => {
-    if (!user?.id) return;
+    if (!uid) return;
 
-    let mounted = true;
-    let cleanupRealtime: (() => void) | null = null;
+    const channel = supabase
+      .channel(`bm-badges-${uid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'user_conversation_unreads', filter: `user_id=eq.${uid}` },
+        () => fetchUnreadCounts()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'service_request', filter: `id_boat_manager=eq.${uid}` },
+        () => fetchUnreadCounts()
+      )
+      .subscribe();
 
-    const wireRealtime = async () => {
-      const { data: convMembers } = await supabase
-        .from('conversation_members')
-        .select('conversation_id')
-        .eq('user_id', user.id);
-
-      const ids = (convMembers ?? []).map((c) => c.conversation_id).filter(Boolean);
-      if (!ids.length) return;
-
-      const channel = supabase
-        .channel(`bm-unread-${user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-            filter: `conversation_id=in.(${ids.join(',')})`,
-          },
-          async (payload) => {
-            const row = payload.new as any;
-            // Ignore mes propres messages
-            if (row?.sender_id === user.id) return;
-            if (!mounted) return;
-            await fetchUnreadCounts();
-          }
-        )
-        .subscribe();
-
-      cleanupRealtime = () => supabase.removeChannel(channel);
-    };
-
-    wireRealtime();
-
-    // Re-calcul à la ré-ouverture de l’app
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') fetchUnreadCounts();
+      appState.current = s;
     });
 
-    // Tick régulier (sécurité)
     const interval = setInterval(fetchUnreadCounts, 30_000);
 
     return () => {
-      mounted = false;
       sub.remove();
       clearInterval(interval);
-      if (cleanupRealtime) cleanupRealtime();
+      supabase.removeChannel(channel);
     };
-  }, [user?.id, fetchUnreadCounts]);
+  }, [uid, fetchUnreadCounts]);
 
-  if (user?.role !== 'boat_manager') {
-    return null;
-  }
+  // ---- Reset badge si uid disparaît (sécurité)
+  useEffect(() => {
+    if (!uid) Notifications.setBadgeCountAsync(0).catch(() => {});
+  }, [uid]);
+
+  // ✅ somme unique pour le header
+  const totalForLogo = useMemo(() => unreadMessages + unreadRequests, [unreadMessages, unreadRequests]);
+
+  if (!isBoatManager) return null;
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
@@ -149,18 +185,21 @@ export default function BoatManagerTabLayout() {
           options={{
             title: 'Accueil',
             tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
-            headerTitle: () => <Logo size="small" />,
+            // ✅ passe explicitement la SOMME au logo
+            headerTitle: () => <LogoWithBadge  />,
           }}
         />
+
         <Tabs.Screen
           name="requests"
           options={{
             title: 'Demandes',
             tabBarIcon: ({ color, size }) => <FileText color={color} size={size} />,
-            tabBarBadge: unreadRequests > 0 ? unreadRequests : undefined,
+            tabBarBadge: formatBadge(unreadRequests),
             tabBarBadgeStyle: { backgroundColor: '#EF4444' },
           }}
         />
+
         <Tabs.Screen
           name="company-request"
           options={{
@@ -168,6 +207,7 @@ export default function BoatManagerTabLayout() {
             tabBarIcon: ({ color, size }) => <Plus color={color} size={size} />,
           }}
         />
+
         <Tabs.Screen
           name="planning"
           options={{
@@ -175,15 +215,17 @@ export default function BoatManagerTabLayout() {
             tabBarIcon: ({ color, size }) => <Calendar color={color} size={size} />,
           }}
         />
+
         <Tabs.Screen
           name="messages"
           options={{
             title: 'Messagerie',
             tabBarIcon: ({ color, size }) => <MessageSquare color={color} size={size} />,
-            tabBarBadge: unreadMessages > 0 ? unreadMessages : undefined,
+            tabBarBadge: formatBadge(unreadMessages),
             tabBarBadgeStyle: { backgroundColor: '#EF4444' },
           }}
         />
+
         <Tabs.Screen
           name="profile"
           options={{
@@ -191,35 +233,16 @@ export default function BoatManagerTabLayout() {
             tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
           }}
         />
-        <Tabs.Screen
-          name="quote-upload"
-          options={{
-            title: 'Devis',
-            headerShown: true,
-            href: null, // Masquer cet écran de la barre d'onglets
-          }}
-        />
-        <Tabs.Screen
-          name="other-boat-managers-list"
-          options={{
-            title: 'Devis',
-            headerShown: false,
-            href: null, // Masquer cet écran de la barre d'onglets
-          }}
-        />
-        <Tabs.Screen
-          name="headquarters-contacts-list"
-          options={{
-            title: 'Devis',
-            headerShown: false,
-            href: null, // Masquer cet écran de la barre d'onglets
-          }}
-        />
+
+        {/* écrans masqués */}
+        <Tabs.Screen name="quote-upload" options={{ title: 'Devis', headerShown: true, href: null }} />
+        <Tabs.Screen name="other-boat-managers-list" options={{ title: 'Devis', headerShown: false, href: null }} />
+        <Tabs.Screen name="headquarters-contacts-list" options={{ title: 'Devis', headerShown: false, href: null }} />
         <Tabs.Screen
           name="clients-list"
           options={{
             title: 'Tous mes clients',
-            href: null, // écran masqué de la barre d’onglets
+            href: null,
             headerLargeTitle: false,
             headerTitleStyle: { fontSize: 16, fontWeight: '600' },
             headerStyle: { height: Platform.OS === 'ios' ? 48 : 56 },

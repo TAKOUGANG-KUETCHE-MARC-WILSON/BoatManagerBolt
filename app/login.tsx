@@ -5,13 +5,9 @@ import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, LogIn } from 'lucide-react-
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Importez supabase
-import bcrypt from 'bcryptjs'; // Importez bcryptjs pour le hachage
 import Constants from 'expo-constants'; // Import Constants for status bar height
 
 
-// Assurez-vous que cette variable d'environnement est accessible.
-// Elle est généralement définie dans .env et exposée via un outil comme Expo ou Vite.
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 
 interface LoginForm {
@@ -20,7 +16,11 @@ interface LoginForm {
 }
 
 
+
+
 type UserRole = 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate';
+
+
 
 
 const roleOptions = [
@@ -29,6 +29,8 @@ const roleOptions = [
   { value: 'nautical_company', label: 'Entreprise du nautisme' },
   { value: 'corporate', label: 'Corporate' }
 ];
+
+
 
 
 export default function LoginScreen() {
@@ -44,20 +46,22 @@ export default function LoginScreen() {
   const [portId, setPortId] = useState('1'); // Changed from 'p1' to '1'
 
 
+
+
   // --- États pour la fonction "Mot de passe oublié" ---
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
-  const [newPassword, setNewPassword] = useState(''); // Nouveau: état pour le nouveau mot de passe
-  const [confirmPassword, setConfirmPassword] = useState(''); // Nouveau: état pour la confirmation
   const [forgotPasswordEmailError, setForgotPasswordEmailError] = useState('');
-  const [newPasswordError, setNewPasswordError] = useState(''); // Nouveau: erreur pour le nouveau mot de passe
-  const [confirmPasswordError, setConfirmPasswordError] = useState(''); // Nouveau: erreur pour la confirmation
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [isSendingResetLink, setIsSendingResetLink] = useState(false);
   // --- Fin des états pour la fonction "Mot de passe oublié" ---
+
+
 
 
   const validateForm = () => {
     const newErrors: Partial<LoginForm> = {};
+
+
 
 
     if (!form.email.trim()) {
@@ -68,9 +72,13 @@ export default function LoginScreen() {
     if (!form.password.trim()) newErrors.password = 'Le mot de passe est requis';
 
 
+
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+
+
 
 
   const handleSubmit = async () => {
@@ -89,7 +97,8 @@ export default function LoginScreen() {
             await loginAsCorporate(form.email, form.password);
             break;
           default: // pleasure_boater
-            await login(form.email, form.password, portId); // Pass portId for pleasure_boater
+            // MODIFICATION ICI : Ne pas passer portId à la fonction login
+            await login(form.email, form.password);
             break;
         }
       } catch (error: any) {
@@ -102,12 +111,14 @@ export default function LoginScreen() {
   };
 
 
-  // --- Nouvelle fonction pour la réinitialisation directe du mot de passe ---
-  const handleDirectPasswordReset = async () => {
+
+
+  // --- Nouvelle fonction pour la demande de réinitialisation du mot de passe ---
+  const handleForgotPasswordRequest = async () => {
     let isValid = true;
     setForgotPasswordEmailError('');
-    setNewPasswordError('');
-    setConfirmPasswordError('');
+
+
 
 
     if (!forgotPasswordEmail.trim()) {
@@ -119,20 +130,6 @@ export default function LoginScreen() {
     }
 
 
-    if (!newPassword.trim()) {
-      setNewPasswordError('Le nouveau mot de passe est requis');
-      isValid = false;
-    } else if (newPassword.length < 6) {
-      setNewPasswordError('Minimum 6 caractères');
-      isValid = false;
-    }
-
-
-    if (newPassword !== confirmPassword) {
-      setConfirmPasswordError('Les 2 mots de passe ne correspondent pas');
-      setNewPasswordError('Les 2 mots de passe ne correspondent pas'); // Afficher aussi sur le premier champ
-      isValid = false;
-    }
 
 
     if (!isValid) {
@@ -140,65 +137,54 @@ export default function LoginScreen() {
     }
 
 
-    setIsResettingPassword(true);
+
+
+    setIsSendingResetLink(true);
+
+
 
 
     try {
-      const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+      // Appel de votre Edge Function personnalisée
+      const EDGE_FUNCTION_URL = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/password-reset/request-reset`;
 
 
-      const FUNCTION_URL = `https://jxzwwwpxxrlukamxiurz.supabase.co/functions/v1/request-password-reset`;
-
-
-      console.log("DEBUG: Attempting to send request to URL:", FUNCTION_URL);
-      console.log("DEBUG: Request body (email):", forgotPasswordEmail.trim());
-      console.log("DEBUG: Request body (hashed password starts with):", hashedNewPassword.substring(0, 10) + "...");
-
-
-      const resp = await fetch(FUNCTION_URL, {
-        method: "POST",
+      const response = await fetch(EDGE_FUNCTION_URL, {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          // NOUVEAU: Ajout de l'en-tête d'autorisation
-          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({
-          email: forgotPasswordEmail.trim(),
-          newHashedPassword: hashedNewPassword,
-        }),
+          'Content-Type': 'application/json',
+           Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+                  },
+        body: JSON.stringify({ e_mail: forgotPasswordEmail.trim() }),
       });
 
 
-      console.log("DEBUG: Received response from Edge Function. Status:", resp.status);
-      const result = await resp.json();
-      console.log("DEBUG: Response body:", result);
-
-
-      if (!resp.ok) {
-        // La fonction Edge renvoie { error: "..." } en cas d'erreur 4xx/5xx
-        // Pour des raisons de sécurité, nous affichons un message générique.
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("DEBUG: Edge Function /request-reset error:", response.status, errorData);
         Alert.alert(
-          "Demande traitée",
-          "Si votre adresse e-mail est enregistrée, votre mot de passe a été réinitialisé."
+          "Erreur",
+          errorData.error || "Une erreur est survenue lors de l'envoi du lien de réinitialisation."
         );
       } else {
+        // La fonction Edge est conçue pour ne pas révéler si l'email existe ou non
         Alert.alert(
-          "Mot de passe réinitialisé",
-          "Votre mot de passe a été modifié avec succès. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe."
+          "Lien envoyé",
+          "Si votre adresse e-mail est enregistrée, un lien de réinitialisation a été envoyé à votre boîte de réception."
         );
         setShowForgotPasswordModal(false);
         setForgotPasswordEmail('');
-        setNewPassword('');
-        setConfirmPassword('');
       }
     } catch (e: any) {
-      console.error("DEBUG: Client-side fetch error:", e);
-      Alert.alert("Erreur", "Une erreur réseau est survenue ou la fonction n'a pas répondu.");
+      console.error("DEBUG: Client-side request error:", e);
+      Alert.alert("Erreur", "Une erreur réseau est survenue ou le service n'a pas répondu.");
     } finally {
-      setIsResettingPassword(false);
+      setIsSendingResetLink(false);
     }
   };
-  // --- Fin de la nouvelle fonction pour la réinitialisation directe ---
+  // --- Fin de la nouvelle fonction pour la demande de réinitialisation ---
+
+
 
 
   return (
@@ -235,6 +221,8 @@ export default function LoginScreen() {
         </ImageBackground>
 
 
+
+
         <View style={styles.formContainer}>
           <TouchableOpacity
             style={styles.roleSelector}
@@ -245,6 +233,8 @@ export default function LoginScreen() {
             </Text>
             <ChevronDown size={20} color="#666" />
           </TouchableOpacity>
+
+
 
 
           {showRoleSelector && (
@@ -273,6 +263,8 @@ export default function LoginScreen() {
           )}
 
 
+
+
           <View style={styles.form}>
             {errors.general && <Text style={styles.errorText}>{errors.general}</Text>}
             <View style={styles.inputContainer}>
@@ -296,6 +288,8 @@ export default function LoginScreen() {
             </View>
 
 
+
+
             <View style={styles.inputContainer}>
               <View style={[styles.inputWrapper, errors.password && styles.inputWrapperError]}>
                 <Lock size={20} color={errors.password ? '#ff4444' : '#666'} />
@@ -314,6 +308,8 @@ export default function LoginScreen() {
             </View>
 
 
+
+
             <TouchableOpacity
               style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
               onPress={handleSubmit}
@@ -329,6 +325,8 @@ export default function LoginScreen() {
             </TouchableOpacity>
 
 
+
+
             {/* --- Nouveau bouton "Mot de passe oublié" --- */}
             <TouchableOpacity
               style={styles.forgotPasswordLink}
@@ -337,6 +335,8 @@ export default function LoginScreen() {
               <Text style={styles.forgotPasswordLinkText}>Mot de passe oublié ?</Text>
             </TouchableOpacity>
             {/* --- Fin du nouveau bouton --- */}
+
+
 
 
             {selectedRole === 'pleasure_boater' && (
@@ -355,6 +355,8 @@ export default function LoginScreen() {
       </ScrollView>
 
 
+
+
       {/* --- Modale "Mot de passe oublié" --- */}
       <Modal
         visible={showForgotPasswordModal}
@@ -366,8 +368,10 @@ export default function LoginScreen() {
           <View style={styles.forgotPasswordModalContent}>
             <Text style={styles.forgotPasswordModalTitle}>Mot de passe oublié</Text>
             <Text style={styles.forgotPasswordModalText}>
-              Veuillez saisir votre email et votre nouveau mot de passe.
+              Veuillez saisir votre email pour recevoir un lien de réinitialisation.
             </Text>
+
+
 
 
             <View style={styles.inputContainer}>
@@ -393,63 +397,23 @@ export default function LoginScreen() {
             </View>
 
 
-            {/* Nouveau champ: Nouveau Mot de passe */}
-            <View style={styles.inputContainer}>
-              <View style={[styles.inputWrapper, newPasswordError && styles.inputWrapperError]}>
-                <Lock size={20} color={newPasswordError ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Nouveau mot de passe"
-                  value={newPassword}
-                  onChangeText={(text) => {
-                    setNewPassword(text);
-                    setNewPasswordError('');
-                    setConfirmPasswordError(''); // Effacer l'erreur de confirmation aussi
-                  }}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  textContentType="newPassword"
-                />
-              </View>
-              {newPasswordError && <Text style={styles.errorText}>{newPasswordError}</Text>}
-            </View>
-
-
-            {/* Nouveau champ: Confirmez votre nouveau mot de passe */}
-            <View style={styles.inputContainer}>
-              <View style={[styles.inputWrapper, confirmPasswordError && styles.inputWrapperError]}>
-                <Lock size={20} color={confirmPasswordError ? '#ff4444' : '#666'} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Confirmez votre nouveau mot de passe"
-                  value={confirmPassword}
-                  onChangeText={(text) => {
-                    setConfirmPassword(text);
-                    setConfirmPasswordError('');
-                    setNewPasswordError(''); // Effacer l'erreur du nouveau mot de passe aussi
-                  }}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  textContentType="newPassword"
-                />
-              </View>
-              {confirmPasswordError && <Text style={styles.errorText}>{confirmPasswordError}</Text>}
-            </View>
 
 
             <TouchableOpacity
-              style={[styles.submitButton, isResettingPassword && styles.submitButtonDisabled]}
-              onPress={handleDirectPasswordReset} // Appel de la nouvelle fonction
-              disabled={isResettingPassword}
+              style={[styles.submitButton, isSendingResetLink && styles.submitButtonDisabled]}
+              onPress={handleForgotPasswordRequest}
+              disabled={isSendingResetLink}
             >
-              {isResettingPassword ? (
+              {isSendingResetLink ? (
                 <ActivityIndicator color="white" size="small" />
               ) : (
                 <Text style={styles.submitButtonText}>
-                  Réinitialiser mon mot de passe
+                  Envoyer le lien de réinitialisation
                 </Text>
               )}
             </TouchableOpacity>
+
+
 
 
             <TouchableOpacity
@@ -465,6 +429,8 @@ export default function LoginScreen() {
     </KeyboardAvoidingView>
   );
 }
+
+
 
 
 const styles = StyleSheet.create({
@@ -805,3 +771,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
+
+
+

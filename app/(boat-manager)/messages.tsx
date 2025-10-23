@@ -35,7 +35,7 @@ import {
 
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
@@ -43,8 +43,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
-import { bootOnLoginOrReopen } from '@/src/notifications/boot';
-import { refreshAppBadge } from '@/src/lib/notifications';
+import { bootOnLoginOrReopen, refreshAppBadge } from '@/src/notifications/boot';
 
 // ---------- Config Storage ----------
 const ATTACHMENTS_BUCKET = 'chat.attachments';
@@ -296,6 +295,10 @@ const NewConversationModal = ({
   );
 };
 
+
+
+type PendingAttachment = { uri: string; name?: string; mime?: string; isImage?: boolean };
+
 // ---------- Écran principal ----------
 export default function MessagesScreen() {
   const { client: initialClientId } = useLocalSearchParams<{ client?: string }>();
@@ -308,6 +311,10 @@ export default function MessagesScreen() {
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [draftText, setDraftText] = useState('');
+
+const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
+
   const scrollViewRef = useRef<ScrollView>(null);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
@@ -405,9 +412,14 @@ export default function MessagesScreen() {
 
         // sinon créer via RPC
         const { data: convId, error: rpcErr } = await supabase.rpc(
-          'create_conversation_with_members',
-          { p_title: null, p_is_group: false, p_member_ids: [targetClientId] }
-        );
+  'create_conversation_with_members',
+  {
+    p_actor_id: Number(user.id),        // 👈 add this
+    p_member_ids: [Number(targetClientId)],
+    p_title: null,
+    p_is_group: false,
+  }
+);
         if (rpcErr) throw rpcErr;
 
         return await hydrateConv(Number(convId));
@@ -657,7 +669,7 @@ export default function MessagesScreen() {
           table: 'messages',
           filter: `conversation_id=eq.${Number(activeChat.id)}`,
         },
-        (payload) => {
+        async (payload) => {
           const n = payload.new as any;
           const newMsg: Message = {
             id: Number(n.id),
@@ -670,12 +682,28 @@ export default function MessagesScreen() {
             timestamp: new Date(n.created_at),
           };
           setMessages(prev => [...prev, newMsg]);
+
+          // Si message entrant et conv ouverte → marque lu + MAJ badge
+          if (user?.id && Number(n.sender_id) !== Number(user.id)) {
+            try {
+              await supabase
+                .from('conversation_members')
+                .update({ last_read_at: new Date().toISOString() })
+                .eq('conversation_id', Number(activeChat.id))
+                .eq('user_id', Number(user.id));
+              await refreshAppBadge(Number(user.id));
+              setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, unreadCount: 0 } : c));
+            } catch (e) {
+              devError('mark read on live insert', e);
+            }
+          }
+
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
         }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [activeChat?.id]);
+  }, [activeChat?.id, user?.id]);
 
   // --------- Realtime reçus de lecture (maj last_read_at des membres) ----------
   useEffect(() => {
@@ -807,78 +835,87 @@ export default function MessagesScreen() {
 
   // --------- Envoi / upload ----------
   const handleSend = useCallback(async (messageContent: string) => {
-    if (!activeChat || !currentUserId) return;
-    const trimmed = messageContent.trim();
-    if (!trimmed) return;
-    try {
-      const isFile = /^\w+:\/\/.+/.test(trimmed);
-      const { error } = await supabase.from('messages').insert({
-        conversation_id: Number(activeChat.id),
-        sender_id: Number(currentUserId),
-        content: isFile ? undefined : trimmed,
-        file_url: isFile ? trimmed : undefined,
-      });
-      if (error) throw error;
-    } catch (e) {
-      maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
-    }
-  }, [activeChat, currentUserId]);
+      if (!activeChat || !currentUserId) return;
+  
+      const trimmed = (messageContent ?? '').trim();
+      const isUrlTyped = /^\w+:\/\/.+/.test(trimmed);
+  
+      const hasText = !!trimmed && !isUrlTyped;
+      const fileUrl = pendingAttachment?.uri || (isUrlTyped ? trimmed : undefined);
+      if (!hasText && !fileUrl) return;
+  
+      try {
+        const { data, error } = await supabase.from('messages').insert({
+          conversation_id: Number(activeChat.id),
+          sender_id: Number(currentUserId),
+          content: hasText ? trimmed : undefined,
+          file_url: fileUrl,
+        }).select('id').single();
+        if (error) throw error;
+  
+        if (data?.id) {
+          try {
+            await supabase.functions.invoke('send-message-push', { body: { message_id: data.id } });
+          } catch (fnErr) {
+            devError('send-message-push', fnErr);
+          }
+        }
+  
+        setDraftText('');
+        setPendingAttachment(null);
+      } catch (e) {
+        maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
+      }
+    }, [activeChat, currentUserId, pendingAttachment]);
 
   const handleChooseImage = useCallback(async () => {
-    if (!mediaPermission?.granted) {
+    // Sur web pas besoin de permission
+    if (Platform.OS !== 'web' && !mediaPermission?.granted) {
       const permission = await requestMediaPermission();
       if (!permission.granted) {
         notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
         return;
       }
     }
-
-    // Fallback cross-version
-    const pickerAny = ImagePicker as any;
-    const mediaTypes =
-      pickerAny?.MediaType?.image ??
-      pickerAny?.MediaType?.images ??
-      pickerAny?.MediaTypeOptions?.Images ??
-      ImagePicker.MediaTypeOptions.Images;
-
+  
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
     });
-
+  
     if (!result.canceled && result.assets?.length) {
       const asset = result.assets[0];
       const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
       const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
-
+  
       try {
         const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
-        await handleSend(publicUrl);
+        setPendingAttachment({ uri: publicUrl, name, mime, isImage: true });
       } catch (e) {
         devError('upload image', e);
         notifyError('Téléversement impossible. Réessayez.');
       }
     }
-
+  
     setShowAttachmentOptions(false);
-  }, [mediaPermission, requestMediaPermission, handleSend]);
+  }, [mediaPermission, requestMediaPermission]);
 
   const handleChooseDocument = useCallback(async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
-      if (!result.canceled && result.assets?.length) {
-        const f = result.assets[0];
-        const url = await uploadFileToSupabase(f.uri, f.name, f.mimeType || 'application/octet-stream');
-        await handleSend(url);
+      try {
+        const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+        if (!result.canceled && result.assets?.length) {
+          const f = result.assets[0];
+          const url = await uploadFileToSupabase(f.uri, f.name, f.mimeType || 'application/octet-stream');
+          setPendingAttachment({ uri: url, name: f.name, mime: f.mimeType || 'application/octet-stream', isImage: isImageUrl(url) });
+        }
+      } catch (e) {
+        maskAndNotify('handleChooseDocument', e, 'Téléversement du document impossible.');
+      } finally {
+        setShowAttachmentOptions(false);
       }
-    } catch (e) {
-      maskAndNotify('handleChooseDocument', e, 'Téléversement du document impossible.');
-    } finally {
-      setShowAttachmentOptions(false);
-    }
-  }, [handleSend]);
+    }, []);
 
   // --------- Listes / vues ----------
   const filteredChats = chats.filter(chat => {
@@ -903,10 +940,46 @@ export default function MessagesScreen() {
     }
   };
 
-  const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  // ----- Utils dates (smart) -----
+const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const isSameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const isYesterday = (d: Date, now = new Date()) => {
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  return isSameDay(d, y);
+};
+const isSameYear = (a: Date, b: Date) => a.getFullYear() === b.getFullYear();
+const diffDays = (a: Date, b: Date) => Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86400000);
 
-  const ChatList = () => (
+const formatSmartListTimestamp = (d: Date, now = new Date()) => {
+  if (isSameDay(d, now)) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isYesterday(d, now)) return 'Hier';
+  const days = diffDays(d, now);
+  if (days <= 6) return d.toLocaleDateString('fr-FR', { weekday: 'short' });         // ex: "lun."
+  if (isSameYear(d, now)) return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }); // "7 oct."
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });      // "07/10/23"
+};
+
+const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+const formatDayHeader = (d: Date, now = new Date()) => {
+  if (isSameDay(d, now)) return 'Aujourd’hui';
+  if (isYesterday(d, now)) return 'Hier';
+  return d.toLocaleDateString('fr-FR', {
+    weekday: 'long', day: 'numeric', month: 'long',
+    year: isSameYear(d, now) ? undefined : 'numeric',
+  });
+};
+
+const formatSmartBubbleTime = (d: Date, now = new Date()) => {
+  if (isSameDay(d, now)) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); // "14:06"
+  if (isSameYear(d, now)) return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }); // "07/10"
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }); // "07/10/23"
+};
+
+  // ✅ Fonctions de rendu (pas de composants internes qui se démontent)
+  const renderChatList = () => (
     <ScrollView style={styles.chatList}>
       <View style={styles.headerContainer}>
         <View style={styles.searchContainer}>
@@ -948,7 +1021,7 @@ export default function MessagesScreen() {
               <View style={styles.chatItemContent}>
                 <View style={styles.chatItemHeader}>
                   <Text style={styles.chatItemName} numberOfLines={1}>{name}</Text>
-                  {!!last && <Text style={styles.chatItemTime}>{formatTime(last.timestamp)}</Text>}
+                  {!!last && <Text style={styles.chatItemTime}>{formatSmartListTimestamp(last.timestamp)}</Text>}
                 </View>
                 {!!last && (
                   <Text
@@ -956,8 +1029,12 @@ export default function MessagesScreen() {
                     numberOfLines={1}
                   >
                     {last.senderId === currentUserId ? 'Vous : ' : ''}
-                    {last.content || (last.image ? 'Image' : last.file ? `Document : ${last.file.name}` : '')}
-                  </Text>
+                  {[
+  last.content?.trim(),
+  last.image ? '📷 Photo' : undefined,
+  last.file ? `📎 ${last.file.name}` : undefined,
+].filter(Boolean).join(' · ')}
+</Text>
                 )}
               </View>
               {(chat.unreadCount ?? 0) > 0 && (
@@ -970,7 +1047,7 @@ export default function MessagesScreen() {
     </ScrollView>
   );
 
-  const ChatView = () => {
+  const renderChatView = () => {
     if (!activeChat) return null;
 
     let headerDisplayParticipant: Contact | undefined;
@@ -1034,37 +1111,46 @@ export default function MessagesScreen() {
                       <Text style={styles.messageSender}>{sender?.name}</Text>
                     )}
 
-                    {msg.image ? (
-                      <Image source={{ uri: msg.image }} style={styles.messageImage} />
-                    ) : msg.file ? (
-                      <TouchableOpacity
-                        style={styles.messageFileContainer}
-                        onPress={async () => {
-                          try {
-                            await WebBrowser.openBrowserAsync(msg.file!.uri);
-                          } catch {
-                            Linking.openURL(msg.file!.uri);
-                          }
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
-                        <Text
-                          style={[
-                            styles.messageFileName,
-                            isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
-                          ]}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {msg.file.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
-                        {msg.content}
-                      </Text>
-                    )}
+                    {/* Texte s'il y en a */}
+{typeof msg.content === 'string' && msg.content.trim().length > 0 && (
+  <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
+    {msg.content}
+  </Text>
+)}
+
+{/* Image si présente */}
+{msg.image && (
+  <Image source={{ uri: msg.image }} style={styles.messageImage} />
+)}
+
+{/* Document si présent */}
+{msg.file && (
+  <TouchableOpacity
+    style={[
+      styles.messageFileContainer,
+      // fond plus doux dans une bulle bleue (message envoyé)
+      isOwnMessage && { backgroundColor: 'rgba(255,255,255,0.15)' },
+    ]}
+    onPress={async () => {
+      try { await WebBrowser.openBrowserAsync(msg.file!.uri); }
+      catch { Linking.openURL(msg.file!.uri); }
+    }}
+    activeOpacity={0.7}
+  >
+    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+    <Text
+      style={[
+        styles.messageFileName,
+        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+      ]}
+      numberOfLines={1}
+      ellipsizeMode="tail"
+    >
+      {msg.file.name}
+    </Text>
+  </TouchableOpacity>
+)}
+
 
                     {/* Heure + reçus */}
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -1084,22 +1170,44 @@ export default function MessagesScreen() {
           </ScrollView>
         )}
 
-        <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
-          <ChatInput
-            handleSend={handleSend}
-            showAttachmentOptions={showAttachmentOptions}
-            setShowAttachmentOptions={setShowAttachmentOptions}
-            handleChooseImage={handleChooseImage}
-            handleChooseDocument={handleChooseDocument}
-          />
+ {/* ✅ Preview de la PJ en attente */}
+        <View style={{ backgroundColor: 'white' }}>
+          {pendingAttachment && (
+            <View style={styles.pendingAttachmentBar}>
+              {pendingAttachment.isImage ? (
+                <Image source={{ uri: pendingAttachment.uri }} style={styles.pendingPreviewImage} />
+              ) : (
+                <FileText size={20} color="#1a1a1a" />
+              )}
+              <Text style={styles.pendingAttachmentName} numberOfLines={1}>
+                {pendingAttachment.name || (pendingAttachment.isImage ? 'Photo' : 'Pièce jointe')}
+              </Text>
+              <TouchableOpacity style={styles.pendingRemoveButton} onPress={() => setPendingAttachment(null)}>
+                <X size={16} color="#666" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
+            <ChatInput
+              handleSend={handleSend}
+              showAttachmentOptions={showAttachmentOptions}
+              setShowAttachmentOptions={setShowAttachmentOptions}
+              handleChooseImage={handleChooseImage}
+              handleChooseDocument={handleChooseDocument}
+              value={draftText}
+              onChangeText={setDraftText}
+            />
+          </View>
         </View>
       </KeyboardAvoidingView>
     );
   };
 
+
   return (
     <View style={styles.container}>
-      {activeChat ? <ChatView /> : <ChatList />}
+      {activeChat ? renderChatView() : renderChatList()}
       <NewConversationModal
         visible={showNewConversationModal}
         onClose={() => {
@@ -1121,16 +1229,17 @@ export default function MessagesScreen() {
           setIsCreatingConversation(true);
           try {
             const { data: convId, error: rpcErr } = await supabase.rpc(
-              'create_conversation_with_members',
-              {
-                p_title:
-                  selectedContacts.length > 1
-                    ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
-                    : null,
-                p_is_group: selectedContacts.length > 1,
-                p_member_ids: selectedContacts.map(c => Number(c.id)),
-              }
-            );
+  'create_conversation_with_members',
+  {
+    p_actor_id: Number(user.id),                      // 👈 add this
+    p_member_ids: selectedContacts.map(c => Number(c.id)),
+    p_title: selectedContacts.length > 1
+              ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
+              : null,
+    p_is_group: selectedContacts.length > 1,
+  }
+);
+
             if (rpcErr) throw rpcErr;
 
             const { data: conv, error: convErr } = await supabase
@@ -1269,11 +1378,29 @@ const styles = StyleSheet.create({
   ownMessageText: { color: 'white' },
   otherMessageText: { color: '#1a1a1a' },
   messageImage: { width: 200, height: 150, borderRadius: 8 },
-  messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8 },
+  messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8, borderWidth: 1,
+  borderColor: '#e2e8f0', },
   messageFileName: { fontSize: 14, fontWeight: '500', flexShrink: 1 },
   messageTime: { fontSize: 12, alignSelf: 'flex-end' },
   ownMessageTime: { color: 'rgba(255,255,255,0.8)' },
   otherMessageTime: { color: '#666' },
+
+
+ // Preview PJ en attente
+  pendingAttachmentBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: 'white',
+  },
+  pendingAttachmentName: { flex: 1, fontSize: 14, color: '#1a1a1a' },
+  pendingPreviewImage: { width: 36, height: 36, borderRadius: 6, backgroundColor: '#f1f5f9' },
+  pendingRemoveButton: { padding: 6 },
+
 
   // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center' },

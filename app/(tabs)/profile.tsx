@@ -30,12 +30,14 @@ import {
   LogOut,
   Image as ImageIcon,
   X,
+  Bot as Boat,
   Plus,
   Pencil,
   Star,
   ChevronRight,
   ChevronDown,
   ChevronUp,
+  MapPin, // AJOUTÉ : Import de MapPin
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -45,6 +47,7 @@ import { supabase } from '@/src/lib/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import MultiPortSelectionModal from '../../components/MultiPortSelectionModal'; // AJOUTÉ : Import de MultiPortSelectionModal
 
 
 // ———————————————————————————————————————
@@ -101,7 +104,7 @@ const getSignedAvatarUrl = async (value?: string) => {
     // Si c’est une URL Supabase, on re-signe proprement
     const bp = extractBucketAndPathFromSupabaseUrl(raw);
     if (bp) {
-      const { data, error } = await supabase.storage.from(bp.bucket).createSignedUrl(bp.path, 60 * 60);
+      const { data, error } = await supabase.storage.from(bp.bucket).createSignedUrl(60 * 60 * 24 * 7);
       if (error || !data?.signedUrl) return '';
       return data.signedUrl;
     }
@@ -112,7 +115,7 @@ const getSignedAvatarUrl = async (value?: string) => {
 
   // Sinon c’est un chemin de bucket (ex: "users/1/avatar.jpg")
   const path = raw.replace(/^\/+/, '');
-  const { data, error } = await supabase.storage.from('avatars').createSignedUrl(path, 60 * 60);
+  const { data, error } = await supabase.storage.from('avatars').createSignedUrl(path, 60 * 60 * 24 * 7);
   if (error || !data?.signedUrl) return '';
   return data.signedUrl;
 };
@@ -176,7 +179,7 @@ const getSignedBoatImageUrl = async (imageDbValue: string) => {
   }
 
 
-  const { data, error } = await supabase.storage.from('boat.images').createSignedUrl(rawPath, 60 * 60);
+  const { data, error } = await supabase.storage.from('boat.images').createSignedUrl(rawPath, 60 * 60 * 24 * 7);
   if (error) {
     logError('boatImage.signUrl', { error, rawPath });
     return '';
@@ -198,13 +201,14 @@ interface BoatDetails {
   lastService?: string;
   nextService?: string;
   status: 'active' | 'maintenance' | 'inactive';
+  portId: number; // AJOUTÉ
+  portName: string; // AJOUTÉ
 }
 
 
 interface ServiceHistory {
   id: string;
   date: string;
-  type: string;
   description: string;
   status:
     | 'completed'
@@ -262,6 +266,25 @@ const serviceIconsMap = {
 // ———————————————————————————————————————
 
 
+interface EditProfileModalProps {
+  visible: boolean;
+  onClose: () => void;
+  formData: { firstName: string; lastName: string; email: string; phone: string; ports: { portId: string; portName: string }[] };
+  setFormData: React.Dispatch<React.SetStateAction<{ firstName: string; lastName: string; email: string; phone: string; ports: { portId: string; portName: string }[] }>>;
+  handleSaveProfile: () => void;
+  allPorts: { id: string; name: string }[];
+  isFetchingPorts: boolean;
+  showMultiPortSelectionModal: boolean;
+  setShowMultiPortSelectionModal: React.Dispatch<React.SetStateAction<boolean>>;
+  boats: BoatDetails[];
+  // 👇 ajout
+  pendingDeletePortIds: string[];
+  setPendingDeletePortIds: React.Dispatch<React.SetStateAction<string[]>>;
+}
+
+
+
+
 const EditProfileModal = memo(
   ({
     visible,
@@ -269,89 +292,234 @@ const EditProfileModal = memo(
     formData,
     setFormData,
     handleSaveProfile,
-  }: {
-    visible: boolean;
-    onClose: () => void;
-    formData: { firstName: string; lastName: string; email: string; phone: string };
-    setFormData: React.Dispatch<
-      React.SetStateAction<{ firstName: string; lastName: string; email: string; phone: string }>
-    >;
-    handleSaveProfile: () => void;
-  }) => (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Modifier mon profil</Text>
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <X size={24} color="#666" />
-            </TouchableOpacity>
+    allPorts,
+    isFetchingPorts,
+    showMultiPortSelectionModal,
+    setShowMultiPortSelectionModal,
+    boats,
+    // 👇 AJOUTÉS
+    pendingDeletePortIds,
+    setPendingDeletePortIds,
+  }: EditProfileModalProps) => {
+
+
+    // Ports qui sont dans user_ports mais pas liés à un bateau
+    const standalonePorts = formData.ports.filter(
+      (p) => !boats.some((b) => b.portId.toString() === p.portId)
+    );
+
+
+    return (
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Modifier mon profil</Text>
+              <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+                <X size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Prénom</Text>
+                <TextInput
+                  style={styles.formInput}
+                  value={formData.firstName}
+                  onChangeText={(text) => setFormData((prev) => ({ ...prev, firstName: text }))}
+                  placeholder="Votre prénom"
+                />
+              </View>
+
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Nom</Text>
+                <TextInput
+                  style={styles.formInput}
+                  value={formData.lastName}
+                  onChangeText={(text) => setFormData((prev) => ({ ...prev, lastName: text }))}
+                  placeholder="Votre nom"
+                />
+              </View>
+
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Email</Text>
+                <TextInput
+                  style={styles.formInput}
+                  value={formData.email}
+                  onChangeText={(text) => setFormData((prev) => ({ ...prev, email: text }))}
+                  placeholder="Votre email"
+                  keyboardType="email-address"
+                />
+              </View>
+
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Téléphone</Text>
+                <TextInput
+                  style={styles.formInput}
+                  value={formData.phone}
+                  onChangeText={(text) => setFormData((prev) => ({ ...prev, phone: text }))}
+                  placeholder="Votre numéro de téléphone"
+                  keyboardType="phone-pad"
+                />
+              </View>
+
+
+              {/* AJOUTÉ : Section pour les ports d'attache */}
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Ports d'attache</Text>
+
+
+                {/* Ports de mes bateaux */}
+                {boats.length > 0 && (
+                  <View style={styles.portsSectionContainer}>
+                    <Text style={styles.portsSectionTitle}>Mes ports avec bateau</Text>
+                    {boats.map((boat) => (
+                      <View key={boat.id} style={{ marginBottom: 8 }}>
+  <View style={styles.portItemRow}>
+    <Boat size={20} color="#0066CC" />
+    <Text style={styles.portItemText}>{boat.name}:</Text>
+    <Text style={styles.portItemTextBold}>{boat.portName}</Text>
+  </View>
+
+
+  <TouchableOpacity
+  style={[styles.affectBoatButton, { marginTop: 6 }]}
+  onPress={() => {
+    onClose();
+    router.push(`/boats/edit/${boat.id}`);
+  }}
+>
+  <Text style={styles.affectBoatButtonText}>Modifier ce port</Text>
+</TouchableOpacity>
+
+
+</View>
+
+
+                    ))}
+                  </View>
+                )}
+
+
+                {/* Mes ports d'attache personnels */}
+                {standalonePorts.length > 0 && (
+                  <View style={styles.portsSectionContainer}>
+                    <Text style={styles.portsSectionTitle}>Mes ports sans bateau</Text>
+                    {standalonePorts.map((port) => (
+  <View key={port.portId} style={{ marginBottom: 12 }}>
+    {/* Ligne du port (icône + nom + suppression) */}
+    <View style={styles.portItemRow}>
+  <MapPin size={20} color="#0066CC" />
+  <Text style={styles.portItemText}>
+    {port.portName}
+    {pendingDeletePortIds.includes(port.portId) ? ' (à supprimer)' : ''}
+  </Text>
+
+
+  {/* bouton croix visible uniquement si pas déjà marqué */}
+ {!pendingDeletePortIds.includes(port.portId) && (
+  <TouchableOpacity
+    style={styles.deletePortButton}
+    onPress={() => {
+      Alert.alert(
+        'Supprimer le port',
+        `Voulez-vous vraiment supprimer le port "${port.portName}" de votre liste ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Supprimer',
+            style: 'destructive',
+            onPress: () => {
+              setPendingDeletePortIds(prev => [...new Set([...prev, port.portId])]);
+            },
+          },
+        ]
+      );
+    }}
+  >
+    <X size={16} color="#ff4444" />
+  </TouchableOpacity>
+)}
+
+
+</View>
+
+
+{/* Sous la ligne : soit "Modifier ce port", soit "Annuler la suppression" */}
+{pendingDeletePortIds.includes(port.portId) ? (
+  <TouchableOpacity
+    style={[styles.affectBoatButton, { marginTop: 6, backgroundColor: '#ef4444' }]}
+    onPress={() =>
+      setPendingDeletePortIds((prev) => prev.filter((id) => id !== port.portId))
+    }
+  >
+    <Text style={styles.affectBoatButtonText}>Annuler la suppression</Text>
+  </TouchableOpacity>
+) : (
+  <TouchableOpacity
+    style={[styles.affectBoatButton, { marginTop: 6 }]}
+    onPress={() => setShowMultiPortSelectionModal(true)}
+  >
+    <Text style={styles.affectBoatButtonText}>Modifier ce port</Text>
+  </TouchableOpacity>
+)}
+
+
+  </View>
+))}
+
+
+                  </View>
+                )}
+
+
+                
+              </View>
+              {/* FIN AJOUTÉ */}
+            </ScrollView>
+
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+                <Text style={styles.cancelButtonText}>Annuler</Text>
+              </TouchableOpacity>
+
+
+              <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile}>
+                <Text style={styles.saveButtonText}>Enregistrer</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
 
-          <ScrollView style={styles.modalBody}>
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Prénom</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.firstName}
-                onChangeText={(text) => setFormData((prev) => ({ ...prev, firstName: text }))}
-                placeholder="Votre prénom"
-              />
-            </View>
-
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Nom</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.lastName}
-                onChangeText={(text) => setFormData((prev) => ({ ...prev, lastName: text }))}
-                placeholder="Votre nom"
-              />
-            </View>
-
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Email</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.email}
-                onChangeText={(text) => setFormData((prev) => ({ ...prev, email: text }))}
-                placeholder="Votre email"
-                keyboardType="email-address"
-              />
-            </View>
-
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Téléphone</Text>
-              <TextInput
-                style={styles.formInput}
-                value={formData.phone}
-                onChangeText={(text) => setFormData((prev) => ({ ...prev, phone: text }))}
-                placeholder="Votre numéro de téléphone"
-                keyboardType="phone-pad"
-              />
-            </View>
-          </ScrollView>
-
-
-          <View style={styles.modalFooter}>
-            <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-              <Text style={styles.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-
-
-            <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile}>
-              <Text style={styles.saveButtonText}>Enregistrer</Text>
-            </TouchableOpacity>
-          </View>
+          {/* AJOUTÉ : MultiPortSelectionModal */}
+          <MultiPortSelectionModal
+            showPortModal={showMultiPortSelectionModal}
+            setShowPortModal={setShowMultiPortSelectionModal}
+            allPorts={allPorts}
+            selectedPorts={formData.ports}
+            setSelectedPorts={(newPorts) => setFormData(prev => ({ ...prev, ports: newPorts }))}
+            isFetchingPorts={isFetchingPorts}
+          />
+          {/* FIN AJOUTÉ */}
         </View>
-      </View>
-    </Modal>
-  )
+        </Modal>
+      )
+    }
 );
+
+
+interface PhotoModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onChoosePhoto: () => void;
+  onDeletePhoto: () => void;
+  hasCustomPhoto: boolean;
+}
 
 
 const PhotoModal = memo(
@@ -361,13 +529,7 @@ const PhotoModal = memo(
     onChoosePhoto,
     onDeletePhoto,
     hasCustomPhoto,
-  }: {
-    visible: boolean;
-    onClose: () => void;
-    onChoosePhoto: () => void;
-    onDeletePhoto: () => void;
-    hasCustomPhoto: boolean;
-  }) => (
+  }: PhotoModalProps) => (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
@@ -437,13 +599,10 @@ export default function ProfileScreen() {
   const [error, setError] = useState<string | null>(null);
 
 
-  // SUPPRIMÉ : profileData n'est plus nécessaire, on utilise 'user' directement
-  // const [profileData, setProfileData] = useState({
-  //   firstName: user?.firstName || '',
-  //   lastName: user?.lastName || '',
-  //   email: user?.email || '',
-  //   phone: user?.phone || '',
-  // });
+  // AJOUTÉ : États pour la gestion des ports dans la modale
+  const [showMultiPortSelectionModal, setShowMultiPortSelectionModal] = useState(false);
+  const [allPorts, setAllPorts] = useState<{ id: string; name: string }[]>([]);
+  const [isFetchingPorts, setIsFetchingPorts] = useState(true);
 
 
   const [boats, setBoats] = useState<BoatDetails[]>([]);
@@ -458,13 +617,17 @@ export default function ProfileScreen() {
   const [showAllReviews, setShowAllReviews] = useState(false);
 
 
-  // MODIFIÉ : formData est initialisé dans handleEditProfile
+  // MODIFIÉ : formData inclut maintenant les ports
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
+    ports: [] as { portId: string; portName: string }[], // AJOUTÉ
   });
+
+
+const [pendingDeletePortIds, setPendingDeletePortIds] = useState<string[]>([]);
 
 
   const formatDate = (dateString: string) => {
@@ -536,7 +699,21 @@ export default function ProfileScreen() {
 
 
     try {
-      // Profil
+      // 1. Fetch all ports (moved to the beginning to ensure it's available)
+      const { data: portsData, error: portsFetchError } = await supabase // RENOMMÉ : allPortsError -> portsFetchError
+        .from('ports')
+        .select('id, name');
+      if (portsFetchError) {
+        logError('fetchProfile.portsData', portsFetchError);
+        // Don't throw, continue with empty ports if there's an error
+        setAllPorts([]);
+      } else {
+        setAllPorts(portsData.map(p => ({ id: p.id.toString(), name: p.name })));
+      }
+      setIsFetchingPorts(false); // Set fetching to false after ports are fetched
+
+
+      // 2. Fetch user data
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('first_name, last_name, e_mail, phone, avatar, created_at')
@@ -567,20 +744,22 @@ export default function ProfileScreen() {
         setLocalAvatar(signed || '');
 
 
-        // SUPPRIMÉ : setProfileData n'est plus nécessaire
-        // setProfileData({
-        //   firstName: userData.first_name || '',
-        //   lastName: userData.last_name || '',
-        //   email: userData.e_mail || '',
-        //   phone: userData.phone || '',
-        // });
+        // Initialise formData avec les données de l'utilisateur
+        // Utilisez les ports de l'utilisateur global (user.ports) et mappez-les avec les noms de ports fraîchement récupérés
+        setFormData({
+          firstName: userData.first_name || '',
+          lastName: userData.last_name || '',
+          email: userData.e_mail || '',
+          phone: userData.phone || '',
+          ports: user.ports.map(p => ({ portId: p.portId, portName: (portsData || []).find(ap => ap.id.toString() === p.portId)?.name || 'Port inconnu' })) || [],
+        });
       }
 
 
-      // Bateaux
+      // 3. Bateaux
       const { data: boatsData, error: boatsError } = await supabase
         .from('boat')
-        .select('id, name, type, image, etat, annee_construction')
+        .select('id, name, type, image, etat, annee_construction, id_port') // AJOUTÉ id_port
         .eq('id_user', user.id);
 
 
@@ -598,7 +777,7 @@ export default function ProfileScreen() {
             imageUrl = await getSignedBoatImageUrl(boat.image);
           } else {
             imageUrl =
-              'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1';
+              'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop';
           }
 
 
@@ -608,6 +787,8 @@ export default function ProfileScreen() {
             type: boat.type,
             image: imageUrl,
             status: boat.etat || 'active',
+            portId: boat.id_port, // AJOUTÉ
+            portName: (portsData || []).find(p => p.id === boat.id_port)?.name || 'Port inconnu', // AJOUTÉ
           };
         })
       );
@@ -616,7 +797,7 @@ export default function ProfileScreen() {
       setBoats(formattedBoats);
 
 
-      // Historique de services
+      // 4. Historique de services
       const { data: serviceHistoryData, error: serviceHistoryError } = await supabase
         .from('service_request')
         .select(
@@ -656,7 +837,7 @@ export default function ProfileScreen() {
       setServiceHistory(formattedServiceHistory);
 
 
-      // Avis
+      // 5. Avis
       const { data: reviewsData, error: reviewsError } = await supabase
         .from('reviews')
         .select(
@@ -684,53 +865,51 @@ export default function ProfileScreen() {
 
 
       const formattedReviews: Review[] = await Promise.all(
-        (reviewsData || [])
-          .filter((review) => review.service_request)
-          .map(async (review) => {
-            const sr = review.service_request;
-            const isBM = !!sr.id_boat_manager;
-            const name = isBM
-              ? `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`
-              : sr.id_companie?.company_name || 'Inconnu';
+        (reviewsData || []).filter((review) => review.service_request).map(async (review) => {
+          const sr = review.service_request;
+          const isBM = !!sr.id_boat_manager;
+          const name = isBM
+            ? `${sr.id_boat_manager.first_name} ${sr.id_boat_manager.last_name}`
+            : sr.id_companie?.company_name || 'Inconnu';
 
 
-            const rawAvatar = isBM ? sr.id_boat_manager.avatar : sr.id_companie?.avatar;
-            const signed = await getSignedAvatarUrl(rawAvatar);
+          const rawAvatar = isBM ? sr.id_boat_manager.avatar : sr.id_companie?.avatar;
+          const signed = await getSignedAvatarUrl(rawAvatar);
 
 
-            const reviewedEntity: Review['reviewedEntity'] = {
-              id: (isBM ? sr.id_boat_manager.id : sr.id_companie?.id)?.toString?.() || 'unknown',
-              name,
-              avatar: signed || DEFAULT_AVATAR,
-              type: isBM ? 'boat_manager' : 'nautical_company',
-              entityRating: isBM ? sr.id_boat_manager.rating : sr.id_companie?.rating,
-              entityReviewCount: isBM ? sr.id_boat_manager.review_count : sr.id_companie?.review_count,
-            };
+          const reviewedEntity: Review['reviewedEntity'] = {
+            id: (isBM ? sr.id_boat_manager.id : sr.id_companie?.id)?.toString?.() || 'unknown',
+            name,
+            avatar: signed || DEFAULT_AVATAR,
+            type: isBM ? 'boat_manager' : 'nautical_company',
+            entityRating: isBM ? sr.id_boat_manager.rating : sr.id_companie?.rating,
+            entityReviewCount: isBM ? sr.id_boat_manager.review_count : sr.id_companie?.review_count,
+          };
 
 
-            return {
-              id: review.id.toString(),
-              rating: review.rating,
-              comment: review.comment,
-              createdAt: review.created_at,
-              reviewedEntity,
-            };
-          })
+          return {
+            id: review.id.toString(),
+            rating: review.rating,
+            comment: review.comment,
+            createdAt: review.created_at,
+            reviewedEntity,
+          };
+        })
       );
 
 
       setMyReviews(formattedReviews);
 
 
-      // Associer les Boat Managers (ports en commun)
-      const { data: allUserPorts, error: allPortsError } = await supabase
+      // 6. Associer les Boat Managers (ports en commun)
+      const { data: allUserPorts, error: userPortsErrorForBMs } = await supabase // RENOMMÉ : allPortsError -> userPortsErrorForBMs
         .from('user_ports')
         .select('port_id')
         .eq('user_id', user.id);
 
 
-      if (allPortsError) {
-        console.error('Erreur récupération des ports client :', allPortsError);
+      if (userPortsErrorForBMs) { // MODIFIÉ
+        console.error('Erreur récupération des ports client pour BMs :', userPortsErrorForBMs); // MODIFIÉ
         setAssociatedBoatManagers([]);
         return;
       }
@@ -820,13 +999,16 @@ export default function ProfileScreen() {
 
 
       setAssociatedBoatManagers(associatedBMsWithLocation);
+
+
     } catch (e) {
       logError('fetchProfile.unexpected', e);
       setError('error');
     } finally {
       setLoading(false);
+      // setIsFetchingPorts(false); // Cette ligne n'est plus nécessaire ici car allPorts est géré au début
     }
-  }, [user?.id]);
+  }, [user?.id, user?.ports]); // AJOUTÉ user.ports comme dépendance
 
 
   // Rechargement quand l'écran reprend le focus
@@ -906,7 +1088,7 @@ export default function ProfileScreen() {
 
       const { data: signedData, error: signedErr } = await supabase.storage
         .from('avatars')
-        .createSignedUrl(path, 60 * 60);
+        .createSignedUrl(path, 60 * 60 * 24 * 7);
       if (signedErr || !signedData?.signedUrl) throw signedErr || new Error('Signed URL manquante');
 
 
@@ -970,7 +1152,9 @@ export default function ProfileScreen() {
       lastName: user?.lastName || '',
       email: user?.email || '',
       phone: user?.phone || '',
+      ports: user?.ports.map(p => ({ portId: p.portId, portName: allPorts.find(ap => ap.id.toString() === p.portId)?.name || 'Port inconnu' })) || [], // Initialise les ports
     });
+    setPendingDeletePortIds([]);
     setShowEditModal(true);
   };
 
@@ -996,6 +1180,75 @@ export default function ProfileScreen() {
       logError('profile.update', error);
       notifyError();
     } else {
+      // AJOUTÉ : Mise à jour des ports dans la table user_ports
+      // 1. Supprimer les ports existants pour cet utilisateur
+      const { data: currentPortAssignments, error: fetchCurrentPortsError } = await supabase
+        .from('user_ports')
+        .select('port_id')
+        .eq('user_id', user.id);
+
+
+      if (fetchCurrentPortsError) {
+        logError('profile.updatePorts.fetchCurrent', fetchCurrentPortsError);
+        notifyError();
+        return;
+      }
+
+
+       // 1) Construire la "photo finale" voulue côté client (ports conservés)
+  const desiredPortsAfterPending = formData.ports.filter(
+    (p) => !pendingDeletePortIds.includes(p.portId)
+  );
+
+
+  // 2) Calculer le diff DB comme avant mais avec desiredPortsAfterPending
+  const currentPortIds = new Set(currentPortAssignments.map(p => p.port_id.toString()));
+  const desiredPortIds = new Set(desiredPortsAfterPending.map(p => p.portId));
+
+
+  const portsToDelete = Array.from(currentPortIds).filter(portId => !desiredPortIds.has(portId));
+  const portsToInsert = Array.from(desiredPortIds).filter(portId => !currentPortIds.has(portId));
+
+
+      // 2. Effectuer les suppressions
+      if (portsToDelete.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('user_ports')
+          .delete()
+          .eq('user_id', user.id)
+          .in('port_id', portsToDelete.map(pId => parseInt(pId))); // Assurez-vous que port_id est un entier
+
+
+        if (deleteError) {
+          logError('profile.updatePorts.deleteSpecific', deleteError);
+          notifyError();
+          return;
+        }
+      }
+
+
+      // 3. Effectuer les insertions
+      if (portsToInsert.length > 0) {
+  const newAssignments = portsToInsert.map(portId => ({
+    user_id: user.id,
+    port_id: parseInt(portId),
+  }));
+
+
+  const { error: insertError } = await supabase
+    .from('user_ports')
+    .insert(newAssignments);
+
+
+  if (insertError) {
+    logError('profile.updatePorts.insertSpecific', insertError);
+    notifyError();
+    return;
+  }
+}
+
+
+setPendingDeletePortIds([]);
       // AJOUTÉ : Appelle refreshUser pour mettre à jour l'état global de l'utilisateur
       await refreshUser();
       setShowEditModal(false);
@@ -1156,18 +1409,21 @@ export default function ProfileScreen() {
         {/* Tabs */}
         <View style={styles.tabs}>
           <TouchableOpacity
+            key="boats-tab" // AJOUTÉ : key prop
             style={[styles.tab, selectedTab === 'boats' && styles.activeTab]}
             onPress={() => setSelectedTab('boats')}
           >
             <Text style={[styles.tabText, selectedTab === 'boats' && styles.activeTabText]}>Mes bateaux</Text>
           </TouchableOpacity>
           <TouchableOpacity
+            key="history-tab" // AJOUTÉ : key prop
             style={[styles.tab, selectedTab === 'history' && styles.activeTab]}
             onPress={() => setSelectedTab('history')}
           >
             <Text style={[styles.tabText, selectedTab === 'history' && styles.activeTabText]}>Historique</Text>
           </TouchableOpacity>
           <TouchableOpacity
+            key="reviews-tab" // AJOUTÉ : key prop
             style={[styles.tab, selectedTab === 'reviews' && styles.activeTab]}
             onPress={() => setSelectedTab('reviews')}
           >
@@ -1370,12 +1626,12 @@ export default function ProfileScreen() {
         {/* Paramètres + Logout */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Paramètres</Text>
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push('/profile/privacy')}>
+          <TouchableOpacity key="privacy-setting" style={styles.settingItem} onPress={() => router.push('/profile/privacy')}>
             <Shield size={20} color="#0066CC" />
             <Text style={styles.settingItemText}>Confidentialité</Text>
             <ChevronRight size={20} color="#666" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push('/profile/notifications')}>
+          <TouchableOpacity key="notifications-setting" style={styles.settingItem} onPress={() => router.push('/profile/notifications')}>
             <Mail size={20} color="#0066CC" />
             <Text style={styles.settingItemText}>Notifications</Text>
             <ChevronRight size={20} color="#666" />
@@ -1390,12 +1646,20 @@ export default function ProfileScreen() {
 
 
         <EditProfileModal
-          visible={showEditModal}
-          onClose={() => setShowEditModal(false)}
-          formData={formData}
-          setFormData={setFormData}
-          handleSaveProfile={handleSaveProfile}
-        />
+  visible={showEditModal}
+  onClose={() => setShowEditModal(false)}
+  formData={formData}
+  setFormData={setFormData}
+  handleSaveProfile={handleSaveProfile}
+  allPorts={allPorts}
+  isFetchingPorts={isFetchingPorts}
+  showMultiPortSelectionModal={showMultiPortSelectionModal}
+  setShowMultiPortSelectionModal={setShowMultiPortSelectionModal}
+  boats={boats}
+  // 👇 nouveaux props
+  pendingDeletePortIds={pendingDeletePortIds}
+  setPendingDeletePortIds={setPendingDeletePortIds}
+/>
         <PhotoModal
           visible={showPhotoModal}
           onClose={() => setShowPhotoModal(false)}
@@ -1533,7 +1797,6 @@ const styles = StyleSheet.create({
   reviewsContainer: { padding: 20, gap: 16 },
   reviewCard: {
     backgroundColor: 'white',
-    padding: 16,
     borderRadius: 12,
     gap: 12,
     ...Platform.select({
@@ -1613,7 +1876,7 @@ const styles = StyleSheet.create({
   modalOption: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 16, backgroundColor: '#f8f9fa', borderRadius: 12, marginBottom: 12 },
   modalOptionText: { fontSize: 16, color: '#1a1a1a' },
   deleteOption: { backgroundColor: '#fff5f5' },
-  deleteOptionText: { fontSize: 16, color: '#ff4444' },
+  deleteOptionText: { fontSize: 16, color: '#ff4444', fontWeight: '600' },
   modalCancelButton: { padding: 16, alignItems: 'center', marginTop: 8 },
   modalCancelText: { fontSize: 16, color: '#ff4444', fontWeight: '600' },
   avatarOption: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 16, backgroundColor: '#f8f9fa', borderRadius: 12, marginBottom: 12 },
@@ -1704,7 +1967,95 @@ const styles = StyleSheet.create({
   otherBMName: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
   otherBMLocation: { fontSize: 14, color: '#666' },
   otherBMContactButton: { padding: 8 },
-});
+  // AJOUTÉ : Styles pour la section des ports d'attache dans la modale d'édition
+  portsSectionContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  portsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 12,
+  },
+  portItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  portItemText: {
+    fontSize: 14,
+    color: '#1a1a1a',
+  },
+  portItemTextBold: {
+    fontSize: 14,
+    color: '#1a1a1a',
+    fontWeight: 'bold',
+  },
+  editPortButton: {
+    marginLeft: 'auto',
+    padding: 4,
+  },
+  deletePortButton: {
+    padding: 4,
+  },
+  affectBoatButton: {
+  // Ne pas s'étirer : même largeur "contenu" partout
+  alignSelf: 'flex-start',
+  // On enlève la marge gauche pour éviter les décalages selon le conteneur
+  paddingVertical: 6,
+  paddingHorizontal: 10,
+  borderRadius: 8,
+  backgroundColor: '#0066CC',
+},
 
+
+  affectBoatButtonText: {
+    fontSize: 12,
+    color: 'white',
+  },
+  portsTagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  portTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    backgroundColor: '#f0f7ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  portTagText: {
+    fontSize: 14,
+    color: '#0066CC',
+  },
+  addPortTagButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#0066CC',
+    borderStyle: 'dashed',
+  },
+  addPortTagText: {
+    fontSize: 14,
+    color: '#0066CC',
+  },
+});
 
 

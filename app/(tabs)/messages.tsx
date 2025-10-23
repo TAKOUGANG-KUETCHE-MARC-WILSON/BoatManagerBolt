@@ -18,17 +18,14 @@ import {
   Alert,
   ToastAndroid,
   Linking,
-  AppState,
 } from 'react-native';
 
-import { bootOnLoginOrReopen } from '@/src/notifications/boot';
-import { refreshAppBadge } from '@/src/lib/notifications';
 import {
   Search,
   ChevronLeft,
   Building,
   X,
-  CheckCheck, // ✅ double coche
+  CheckCheck,
   Check,
   MessageSquare,
   FileText,
@@ -36,12 +33,13 @@ import {
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
+import { refreshAppBadge } from '@/src/notifications/boot';
 
 // ---------- Config Storage ----------
 const ATTACHMENTS_BUCKET = 'chat.attachments';
@@ -109,7 +107,7 @@ interface Message {
   image?: string;
   file?: { name: string; uri: string; type: string };
   timestamp: Date;
-  readByAll?: boolean; // ✅ reçu de lecture (bleu si true)
+  readByAll?: boolean;
 }
 interface Contact {
   id: number;
@@ -126,10 +124,72 @@ interface Chat {
   participants: Contact[];
   isGroup: boolean;
   name?: string;
-  unreadCount?: number; // ✅ badge "non lus"
+  unreadCount?: number;
   lastMessage?: Message;
   messages?: Message[];
 }
+
+// ---------- Utils dates + tri (smart) ----------
+const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const isSameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const isYesterday = (d: Date, now = new Date()) => {
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  return isSameDay(d, y);
+};
+const isSameYear = (a: Date, b: Date) => a.getFullYear() === b.getFullYear();
+const diffDays = (a: Date, b: Date) => Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86400000);
+function formatDate(d: Date) {
+  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+export function formatSmartListTimestamp(d: Date, now = new Date()) {
+  if (isSameDay(d, now)) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (isYesterday(d, now)) return 'Hier';
+  const days = diffDays(d, now);
+  if (days <= 6) {
+    // ex: "lun." (fr-FR)
+    return d.toLocaleDateString('fr-FR', { weekday: 'short' });
+  }
+  if (isSameYear(d, now)) {
+    // ex: "7 oct."
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  }
+  // ex: "07/10/23"
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+export function formatDayHeader(d: Date, now = new Date()) {
+  if (isSameDay(d, now)) return 'Aujourd’hui';
+  if (isYesterday(d, now)) return 'Hier';
+  // ex: "lundi 7 octobre 2025" (année masquée si année courante)
+  return d.toLocaleDateString('fr-FR', {
+    weekday: 'long', day: 'numeric', month: 'long',
+    year: isSameYear(d, now) ? undefined : 'numeric',
+  });
+}
+
+export function formatSmartBubbleTime(d: Date, now = new Date()) {
+  if (isSameDay(d, now)) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (isSameYear(d, now)) {
+    // ex: "07/10"
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+  }
+  // ex: "07/10/23"
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+export function sortChatsByLastActivity(list: Chat[]) {
+  return [...list].sort((a, b) => {
+    const ta = a.lastMessage?.timestamp?.getTime?.() ?? 0;
+    const tb = b.lastMessage?.timestamp?.getTime?.() ?? 0;
+    return tb - ta; // plus récent en haut
+  });
+}
+
 
 // ---------- Modal création conversation ----------
 const NewConversationModal = ({
@@ -311,8 +371,12 @@ const AuthOverlay = () => (
 );
 
 // ---------- Écran principal ----------
+type PendingAttachment = { uri: string; name?: string; mime?: string; isImage?: boolean };
+
 export default function MessagesScreen() {
-  const { conversationId, client: initialClientId } = useLocalSearchParams<{ conversationId?: string; client?: string }>();
+  const { conversationId, client: initialClientId } =
+    useLocalSearchParams<{ conversationId?: string; client?: string }>();
+
   const { user } = useAuth();
   const currentUserId = Number(user?.id);
   const insets = useSafeAreaInsets();
@@ -322,6 +386,8 @@ export default function MessagesScreen() {
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [draftText, setDraftText] = useState(''); // texte contrôlé
+
   const scrollViewRef = useRef<ScrollView>(null);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
 
@@ -337,26 +403,8 @@ export default function MessagesScreen() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
 
-  // --------- Helpers icônes / labels contact type ----------
-  const getContactTypeIcon = (t: Contact['type']) => {
-    switch (t) {
-      case 'pleasure_boater': return <UserIcon size={16} color="#0EA5E9" />;
-      case 'boat_manager': return <UserIcon size={16} color="#10B981" />;
-      case 'nautical_company': return <Building size={16} color="#8B5CF6" />;
-      case 'corporate': return <Building size={16} color="#F59E0B" />;
-      default: return <UserIcon size={16} color="#666" />;
-    }
-  };
-  const getContactTypeLabel = (t: Contact['type']) =>
-    t === 'pleasure_boater' ? 'Plaisancier'
-      : t === 'boat_manager' ? 'Boat Manager'
-      : t === 'nautical_company' ? 'Entreprise du nautisme'
-      : t === 'corporate' ? 'Corporate' : t;
-  const getContactTypeColor = (t: Contact['type']) =>
-    t === 'pleasure_boater' ? '#0EA5E9'
-      : t === 'boat_manager' ? '#10B981'
-      : t === 'nautical_company' ? '#8B5CF6'
-      : t === 'corporate' ? '#F59E0B' : '#666';
+  // ✅ PJ en attente
+  const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
 
   // --------- Création / recherche d'une 1–1 via param `client` ----------
   const findOrCreateConversationWithClient = useCallback(
@@ -408,10 +456,17 @@ export default function MessagesScreen() {
 
         if (foundId) return await hydrateConv(foundId);
 
-        const { data: convId, error: rpcErr } = await supabase.rpc(
-          'create_conversation_with_members',
-          { p_title: null, p_is_group: false, p_member_ids: [targetClientId] }
-        );
+        // sinon créer via RPC
+const { data: convId, error: rpcErr } = await supabase.rpc(
+  'create_conversation_with_members',
+  {
+    p_actor_id: Number(user.id),        // 👈 add this
+    p_member_ids: [Number(targetClientId)],
+    p_title: null,
+    p_is_group: false,
+  }
+);
+
         if (rpcErr) throw rpcErr;
 
         return await hydrateConv(Number(convId));
@@ -425,47 +480,42 @@ export default function MessagesScreen() {
     [user]
   );
 
+  // --------- Realtime: nouveaux messages toutes conversations ----------
   useEffect(() => {
-  if (!user?.id || chats.length === 0) return;
+    if (!user?.id || chats.length === 0) return;
+    const knownIds = new Set(chats.map(c => c.id));
 
-  const knownIds = new Set(chats.map(c => c.id));
+    const channel = supabase
+      .channel(`messages-global-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+      }, (payload) => {
+        const n = payload.new as any;
+        const convId = Number(n.conversation_id);
+        if (!knownIds.has(convId)) return;
 
-  const channel = supabase
-    .channel(`messages-global-${user.id}`)
-    .on('postgres_changes', {
-      event: 'INSERT',
-      schema: 'public',
-      table: 'messages',
-    }, (payload) => {
-      const n = payload.new as any;
-      const convId = Number(n.conversation_id);
-      if (!knownIds.has(convId)) return; // ignorer les convs qu’on n’affiche pas
+        const msg: Message = {
+          id: Number(n.id),
+          senderId: Number(n.sender_id),
+          content: n.content ?? undefined,
+          image: isImageUrl(n.file_url) ? n.file_url : undefined,
+          file: n.file_url && !isImageUrl(n.file_url)
+            ? { name: n.file_url.split('/').pop() || 'document', uri: n.file_url, type: 'application/octet-stream' }
+            : undefined,
+          timestamp: new Date(n.created_at),
+        };
 
-      const msg = {
-        id: Number(n.id),
-        senderId: Number(n.sender_id),
-        content: n.content ?? undefined,
-        image: n.file_url && /\.(jpg|jpeg|png|gif|webp|bmp|tiff|heic|heif)(\?|$)/i.test(n.file_url) ? n.file_url : undefined,
-        file: n.file_url && !/\.(jpg|jpeg|png|gif|webp|bmp|tiff|heic|heif)(\?|$)/i.test(n.file_url)
-          ? { name: n.file_url.split('/').pop() || 'document', uri: n.file_url, type: 'application/octet-stream' }
-          : undefined,
-        timestamp: new Date(n.created_at),
-      };
+        setChats(prev => {
+          const next = prev.map(c => c.id === convId ? { ...c, lastMessage: msg } : c);
+          return sortChatsByLastActivity(next);
+        });
+      })
+      .subscribe();
 
-      // 1) Met à jour le "dernier message" + réordonne
-      setChats(prev => {
-        const next = prev.map(c => c.id === convId ? { ...c, lastMessage: msg } : c);
-        return [...next].sort((a, b) => (b.lastMessage?.timestamp?.getTime?.() ?? 0) - (a.lastMessage?.timestamp?.getTime?.() ?? 0));
-      });
-
-      // 2) Si la conv n’est pas ouverte, le compteur passera via user_conversation_unreads (déjà écouté)
-      //    donc pas besoin d’incrémenter ici (évite les doubles compteurs).
-    })
-    .subscribe();
-
-  return () => { supabase.removeChannel(channel); };
-}, [user?.id, chats]);
-
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, chats]);
 
   // --------- Récup init : contacts + conversations + non-lus ----------
   useEffect(() => {
@@ -474,7 +524,6 @@ export default function MessagesScreen() {
       if (!user?.id) { setIsLoadingChats(false); return; }
       setIsLoadingChats(true);
       try {
-        // Contacts autorisés (RPC)
         const { data: uData, error: uErr } = await supabase
           .rpc('get_contacts_for_boat_manager', { manager_id: Number(user.id) });
         if (uErr) throw uErr;
@@ -493,7 +542,6 @@ export default function MessagesScreen() {
         if (!alive) return;
         setAllUsers(contacts);
 
-        // Conversations du user
         const { data: memberRows, error: mErr } = await supabase
           .from('conversation_members')
           .select('conversation_id, conversations(id, title, is_group)')
@@ -502,7 +550,6 @@ export default function MessagesScreen() {
 
         const convs = memberRows?.map(r => r.conversations).filter(Boolean) || [];
 
-        // Pour chaque conv: participants + dernier message
         const hydrated: Chat[] = await Promise.all(convs.map(async (conv: any) => {
           const [participantsRes, lastMsgRes] = await Promise.all([
             supabase
@@ -546,7 +593,6 @@ export default function MessagesScreen() {
 
         if (!alive) return;
 
-        // 🔢 Récupère les non-lus pour l’utilisateur courant
         const ids = hydrated.map(c => c.id);
         let unreadMap = new Map<number, number>();
         if (ids.length) {
@@ -631,7 +677,7 @@ export default function MessagesScreen() {
 
         setMessages(baseMsgs);
 
-        // ✅ marque comme lu (et badge app)
+        // ✅ marque comme lu
         if (user?.id) {
           await supabase
             .from('conversation_members')
@@ -639,7 +685,6 @@ export default function MessagesScreen() {
             .eq('conversation_id', Number(activeChat.id))
             .eq('user_id', Number(user.id));
           await refreshAppBadge(Number(user.id));
-          // local: remet le compteur de cette conv à 0
           setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, unreadCount: 0 } : c));
         }
       } catch (e) {
@@ -669,7 +714,7 @@ export default function MessagesScreen() {
           table: 'messages',
           filter: `conversation_id=eq.${Number(activeChat.id)}`,
         },
-        (payload) => {
+        async (payload) => {
           const n = payload.new as any;
           const newMsg: Message = {
             id: Number(n.id),
@@ -682,14 +727,29 @@ export default function MessagesScreen() {
             timestamp: new Date(n.created_at),
           };
           setMessages(prev => [...prev, newMsg]);
+
+          // si le message vient d’un autre, marque comme lu
+          if (user?.id && Number(n.sender_id) !== Number(user.id)) {
+            try {
+              await supabase
+                .from('conversation_members')
+                .update({ last_read_at: new Date().toISOString() })
+                .eq('conversation_id', Number(activeChat.id))
+                .eq('user_id', Number(user.id));
+              await refreshAppBadge(Number(user.id));
+              setChats(prev => prev.map(c => c.id === activeChat.id ? { ...c, unreadCount: 0 } : c));
+            } catch (e) {
+              devError('mark read on live insert', e);
+            }
+          }
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
         }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [activeChat?.id]);
+  }, [activeChat?.id, user?.id]);
 
-  // --------- Realtime reçus de lecture (mise à jour de last_read_at) ----------
+  // --------- Realtime reçus de lecture ----------
   useEffect(() => {
     if (!activeChat?.id) return;
     const channel = supabase
@@ -722,14 +782,14 @@ export default function MessagesScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [activeChat?.id, messages]);
 
-  // --------- Realtime non-lus (écoute la table user_conversation_unreads pour CE user) ----------
+  // --------- Realtime non-lus (écoute user_conversation_unreads) ----------
   useEffect(() => {
     if (!user?.id) return;
 
     const channel = supabase
       .channel(`unreads-${user.id}`)
       .on('postgres_changes', {
-        event: '*', // INSERT/UPDATE/DELETE
+        event: '*',
         schema: 'public',
         table: 'user_conversation_unreads',
         filter: `user_id=eq.${Number(user.id)}`
@@ -737,38 +797,16 @@ export default function MessagesScreen() {
         const row = (payload.new || payload.old) as any;
         const convId = Number(row?.conversation_id);
         const count = Number((payload.new as any)?.unread_count ?? 0);
-
         if (!convId) return;
 
         setChats(prev => {
-          // si la conv n’est pas encore connue, on ignore
           if (!prev.some(c => c.id === convId)) return prev;
-          // si la conv est ouverte et le message vient d’arriver, elle sera à 0 via markAsRead, sinon on applique le compteur serveur
           return prev.map(c => c.id === convId ? { ...c, unreadCount: count } : c);
         });
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id]);
-
-  // --- Boot notifications & badge sur login / retour app ---
-  useEffect(() => {
-    if (!user?.id) return;
-    let cleanup: (() => void) | undefined;
-
-    (async () => {
-      cleanup = await bootOnLoginOrReopen(Number(user.id));
-    })();
-
-    const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') bootOnLoginOrReopen(Number(user.id));
-    });
-
-    return () => {
-      sub.remove();
-      cleanup?.();
-    };
   }, [user?.id]);
 
   // --- Helpers lecture & upload ---
@@ -823,54 +861,72 @@ export default function MessagesScreen() {
   // --------- Envoi / upload ----------
   const handleSend = useCallback(async (messageContent: string) => {
     if (!activeChat || !currentUserId) return;
-    const trimmed = messageContent.trim();
-    if (!trimmed) return;
+
+    const trimmed = (messageContent ?? '').trim();
+    const isUrlTyped = /^\w+:\/\/.+/.test(trimmed);
+
+    const hasText = !!trimmed && !isUrlTyped;
+    const fileUrl = pendingAttachment?.uri || (isUrlTyped ? trimmed : undefined);
+    if (!hasText && !fileUrl) return;
+
     try {
-      const isFile = /^\w+:\/\/.+/.test(trimmed);
-      const { error } = await supabase.from('messages').insert({
+      const { data, error } = await supabase.from('messages').insert({
         conversation_id: Number(activeChat.id),
         sender_id: Number(currentUserId),
-        content: isFile ? undefined : trimmed,
-        file_url: isFile ? trimmed : undefined,
-      });
+        content: hasText ? trimmed : undefined,
+        file_url: fileUrl,
+      }).select('id').single();
       if (error) throw error;
+
+      if (data?.id) {
+        try {
+          await supabase.functions.invoke('send-message-push', { body: { message_id: data.id } });
+        } catch (fnErr) {
+          devError('send-message-push', fnErr);
+        }
+      }
+
+      setDraftText('');
+      setPendingAttachment(null);
     } catch (e) {
       maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
     }
-  }, [activeChat, currentUserId]);
+  }, [activeChat, currentUserId, pendingAttachment]);
 
   const handleChooseImage = useCallback(async () => {
-    if (!mediaPermission?.granted) {
-      const permission = await requestMediaPermission();
-      if (!permission.granted) {
-        notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
-        return;
-      }
+  // Sur web pas besoin de permission
+  if (Platform.OS !== 'web' && !mediaPermission?.granted) {
+    const permission = await requestMediaPermission();
+    if (!permission.granted) {
+      notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
+      return;
     }
+  }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
-    });
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    allowsEditing: true,
+    aspect: [4, 3],
+    quality: 1,
+  });
 
-    if (!result.canceled && result.assets?.length) {
-      const asset = result.assets[0];
-      const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
-      const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
+  if (!result.canceled && result.assets?.length) {
+    const asset = result.assets[0];
+    const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
+    const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
 
-      try {
-        const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
-        await handleSend(publicUrl);
-      } catch (e) {
-        devError('upload image', e);
-        notifyError('Téléversement impossible. Réessayez.');
-      }
+    try {
+      const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
+      setPendingAttachment({ uri: publicUrl, name, mime, isImage: true });
+    } catch (e) {
+      devError('upload image', e);
+      notifyError('Téléversement impossible. Réessayez.');
     }
+  }
 
-    setShowAttachmentOptions(false);
-  }, [mediaPermission, requestMediaPermission, handleSend]);
+  setShowAttachmentOptions(false);
+}, [mediaPermission, requestMediaPermission]);
+
 
   const handleChooseDocument = useCallback(async () => {
     try {
@@ -878,14 +934,14 @@ export default function MessagesScreen() {
       if (!result.canceled && result.assets?.length) {
         const f = result.assets[0];
         const url = await uploadFileToSupabase(f.uri, f.name, f.mimeType || 'application/octet-stream');
-        await handleSend(url);
+        setPendingAttachment({ uri: url, name: f.name, mime: f.mimeType || 'application/octet-stream', isImage: isImageUrl(url) });
       }
     } catch (e) {
       maskAndNotify('handleChooseDocument', e, 'Téléversement du document impossible.');
     } finally {
       setShowAttachmentOptions(false);
     }
-  }, [handleSend]);
+  }, []);
 
   // --------- Listes / vues ----------
   const filteredChats = chats.filter(chat => {
@@ -911,28 +967,8 @@ export default function MessagesScreen() {
     }
   };
 
-  const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-  
-  // --- utils tri / maj last message / compteur
-  const sortChatsByLastActivity = (list: Chat[]) =>
-    [...list].sort((a, b) => {
-      const ta = a.lastMessage?.timestamp?.getTime?.() ?? 0;
-      const tb = b.lastMessage?.timestamp?.getTime?.() ?? 0;
-      return tb - ta; // recent -> top
-    });
-
-  const bumpChatLastMessage = (list: Chat[], convId: number, msg: Message) => {
-    const next = list.map(c => c.id === convId ? { ...c, lastMessage: msg } : c);
-    return sortChatsByLastActivity(next);
-  };
-
-  const bumpUnreadCount = (list: Chat[], convId: number, delta = 1) => {
-    const next = list.map(c => c.id === convId ? { ...c, unreadCount: Math.max(0, (c.unreadCount ?? 0) + delta) } : c);
-    return sortChatsByLastActivity(next);
-  }
-
-  const ChatList = () => (
+  // ✅ RENDER FUNCTIONS (pas de <ChatView/> interne qui remonte/démonte)
+  const renderChatList = () => (
     <ScrollView style={styles.chatList}>
       <View style={styles.headerContainer}>
         <View style={styles.searchContainer}>
@@ -972,16 +1008,20 @@ export default function MessagesScreen() {
               <View style={styles.chatItemContent}>
                 <View style={styles.chatItemHeader}>
                   <Text style={styles.chatItemName} numberOfLines={1}>{name}</Text>
-                  {!!last && <Text style={styles.chatItemTime}>{formatTime(last.timestamp)}</Text>}
-                </View>
+                  {!!last && <Text style={styles.chatItemTime}>{formatSmartListTimestamp(last.timestamp)}</Text>}
+                  </View>
                 {!!last && (
                   <Text
                     style={[styles.chatItemLastMessage, (chat.unreadCount ?? 0) > 0 && styles.unreadMessage]}
                     numberOfLines={1}
                   >
                     {last.senderId === currentUserId ? 'Vous : ' : ''}
-                    {last.content || (last.image ? 'Image' : last.file ? `Document : ${last.file.name}` : '')}
-                  </Text>
+                   {[
+  last.content?.trim(),
+  last.image ? '📷 Photo' : undefined,
+  last.file ? `📎 ${last.file.name}` : undefined,
+].filter(Boolean).join(' · ')}
+</Text>
                 )}
               </View>
               {(chat.unreadCount ?? 0) > 0 && (
@@ -994,7 +1034,7 @@ export default function MessagesScreen() {
     </ScrollView>
   );
 
-  const ChatView = () => {
+  const renderChatView = () => {
     if (!activeChat) return null;
 
     let headerDisplayParticipant: Contact | undefined;
@@ -1011,7 +1051,7 @@ export default function MessagesScreen() {
     return (
       <KeyboardAvoidingView
         style={styles.chatView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
       >
         <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
@@ -1043,15 +1083,15 @@ export default function MessagesScreen() {
               const isOwnMessage = msg.senderId === currentUserId;
               const sender = activeChat.participants.find((p) => p.id === msg.senderId);
               const showDate =
-                index === 0 || formatDate(messages[index - 1].timestamp) !== formatDate(msg.timestamp);
-
+                index === 0 || !isSameDay(messages[index - 1].timestamp, msg.timestamp);
               return (
                 <View key={msg.id}>
                   {showDate && (
-                    <View style={styles.dateHeader}>
-                      <Text style={styles.dateText}>{formatDate(msg.timestamp)}</Text>
-                    </View>
-                  )}
+  <View style={styles.dateHeader}>
+    <Text style={styles.dateText}>{formatDayHeader(msg.timestamp)}</Text>
+  </View>
+)}
+
 
                   <View
                     style={[styles.messageContainer, isOwnMessage ? styles.ownMessage : styles.otherMessage]}
@@ -1060,50 +1100,56 @@ export default function MessagesScreen() {
                       <Text style={styles.messageSender}>{sender?.name}</Text>
                     )}
 
-                    {msg.image ? (
-                      <Image source={{ uri: msg.image }} style={styles.messageImage} />
-                    ) : msg.file ? (
-                      <TouchableOpacity
-                        style={styles.messageFileContainer}
-                        onPress={async () => {
-                          try {
-                            await WebBrowser.openBrowserAsync(msg.file!.uri);
-                          } catch {
-                            Linking.openURL(msg.file!.uri);
-                          }
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
-                        <Text
-                          style={[
-                            styles.messageFileName,
-                            isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
-                          ]}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {msg.file.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <Text
-                        style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}
-                      >
-                        {msg.content}
-                      </Text>
-                    )}
+                   {/* Texte s'il y en a */}
+{typeof msg.content === 'string' && msg.content.trim().length > 0 && (
+  <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
+    {msg.content}
+  </Text>
+)}
 
-                    {/* Heure + reçus */}
+{/* Image si présente */}
+{msg.image && (
+  <Image source={{ uri: msg.image }} style={styles.messageImage} />
+)}
+
+{/* Document si présent */}
+{msg.file && (
+  <TouchableOpacity
+    style={[
+      styles.messageFileContainer,
+      // fond plus doux dans une bulle bleue (message envoyé)
+      isOwnMessage && { backgroundColor: 'rgba(255,255,255,0.15)' },
+    ]}
+    onPress={async () => {
+      try { await WebBrowser.openBrowserAsync(msg.file!.uri); }
+      catch { Linking.openURL(msg.file!.uri); }
+    }}
+    activeOpacity={0.7}
+  >
+    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+    <Text
+      style={[
+        styles.messageFileName,
+        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+      ]}
+      numberOfLines={1}
+      ellipsizeMode="tail"
+    >
+      {msg.file.name}
+    </Text>
+  </TouchableOpacity>
+)}
+
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <Text style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}>
-                        {formatTime(msg.timestamp)}
-                      </Text>
-                     {isOwnMessage && (
-  msg.readByAll
-    ? <CheckCheck size={16} color="#3b82f6" style={{ marginLeft: 6 }} />
-    : <Check size={16} color={Platform.OS === 'web' ? '#666' : 'rgba(255,255,255,0.8)'} style={{ marginLeft: 6 }} />
-)}
+  {formatSmartBubbleTime(msg.timestamp)}
+</Text>
+
+                      {isOwnMessage && (
+                        msg.readByAll
+                          ? <CheckCheck size={16} color="#3b82f6" style={{ marginLeft: 6 }} />
+                          : <Check size={16} color={Platform.OS === 'web' ? '#666' : 'rgba(255,255,255,0.8)'} style={{ marginLeft: 6 }} />
+                      )}
                     </View>
                   </View>
                 </View>
@@ -1112,14 +1158,35 @@ export default function MessagesScreen() {
           </ScrollView>
         )}
 
-        <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
-          <ChatInput
-            handleSend={handleSend}
-            showAttachmentOptions={showAttachmentOptions}
-            setShowAttachmentOptions={setShowAttachmentOptions}
-            handleChooseImage={handleChooseImage}
-            handleChooseDocument={handleChooseDocument}
-          />
+        {/* ✅ Preview de la PJ en attente */}
+        <View style={{ backgroundColor: 'white' }}>
+          {pendingAttachment && (
+            <View style={styles.pendingAttachmentBar}>
+              {pendingAttachment.isImage ? (
+                <Image source={{ uri: pendingAttachment.uri }} style={styles.pendingPreviewImage} />
+              ) : (
+                <FileText size={20} color="#1a1a1a" />
+              )}
+              <Text style={styles.pendingAttachmentName} numberOfLines={1}>
+                {pendingAttachment.name || (pendingAttachment.isImage ? 'Photo' : 'Pièce jointe')}
+              </Text>
+              <TouchableOpacity style={styles.pendingRemoveButton} onPress={() => setPendingAttachment(null)}>
+                <X size={16} color="#666" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
+            <ChatInput
+              handleSend={handleSend}
+              showAttachmentOptions={showAttachmentOptions}
+              setShowAttachmentOptions={setShowAttachmentOptions}
+              handleChooseImage={handleChooseImage}
+              handleChooseDocument={handleChooseDocument}
+              value={draftText}
+              onChangeText={setDraftText}
+            />
+          </View>
         </View>
       </KeyboardAvoidingView>
     );
@@ -1127,7 +1194,7 @@ export default function MessagesScreen() {
 
   return (
     <View style={styles.container}>
-      {activeChat ? <ChatView /> : <ChatList />}
+      {activeChat ? renderChatView() : renderChatList()}
       <NewConversationModal
         visible={showNewConversationModal}
         onClose={() => {
@@ -1149,16 +1216,17 @@ export default function MessagesScreen() {
           setIsCreatingConversation(true);
           try {
             const { data: convId, error: rpcErr } = await supabase.rpc(
-              'create_conversation_with_members',
-              {
-                p_title:
-                  selectedContacts.length > 1
-                    ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
-                    : null,
-                p_is_group: selectedContacts.length > 1,
-                p_member_ids: selectedContacts.map(c => Number(c.id)),
-              }
-            );
+  'create_conversation_with_members',
+  {
+    p_actor_id: Number(user.id),                      // 👈 add this
+    p_member_ids: selectedContacts.map(c => Number(c.id)),
+    p_title: selectedContacts.length > 1
+              ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
+              : null,
+    p_is_group: selectedContacts.length > 1,
+  }
+);
+
             if (rpcErr) throw rpcErr;
 
             const { data: conv, error: convErr } = await supabase
@@ -1187,7 +1255,7 @@ export default function MessagesScreen() {
               unreadCount: 0,
             };
 
-            setChats(prev => [newChat, ...prev]);
+           setChats(prev => sortChatsByLastActivity([newChat, ...prev]));
             setActiveChat(newChat);
 
             setShowNewConversationModal(false);
@@ -1204,9 +1272,25 @@ export default function MessagesScreen() {
           }
         }}
         isCreatingConversation={isCreatingConversation}
-        getContactTypeIcon={getContactTypeIcon}
-        getContactTypeLabel={getContactTypeLabel}
-        getContactTypeColor={getContactTypeColor}
+        getContactTypeIcon={(t: Contact['type']) =>
+          t === 'pleasure_boater' ? <UserIcon size={16} color="#0EA5E9" /> :
+          t === 'boat_manager' ? <UserIcon size={16} color="#10B981" /> :
+          t === 'nautical_company' ? <Building size={16} color="#8B5CF6" /> :
+          t === 'corporate' ? <Building size={16} color="#F59E0B" /> :
+          <UserIcon size={16} color="#666" />
+        }
+        getContactTypeLabel={(t: Contact['type']) =>
+          t === 'pleasure_boater' ? 'Plaisancier' :
+          t === 'boat_manager' ? 'Boat Manager' :
+          t === 'nautical_company' ? 'Entreprise du nautisme' :
+          t === 'corporate' ? 'Corporate' : t
+        }
+        getContactTypeColor={(t: Contact['type']) =>
+          t === 'pleasure_boater' ? '#0EA5E9' :
+          t === 'boat_manager' ? '#10B981' :
+          t === 'nautical_company' ? '#8B5CF6' :
+          t === 'corporate' ? '#F59E0B' : '#666'
+        }
       />
       {!user?.id && <AuthOverlay />}
     </View>
@@ -1346,20 +1430,36 @@ const styles = StyleSheet.create({
   ownMessageText: { color: 'white' },
   otherMessageText: { color: '#1a1a1a' },
   messageImage: { width: 200, height: 150, borderRadius: 8 },
-  messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8 },
+  messageFileContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: '#f0f7ff', borderRadius: 8, borderWidth: 1,
+  borderColor: '#e2e8f0', },
   messageFileName: { fontSize: 14, fontWeight: '500', flexShrink: 1 },
   messageTime: { fontSize: 12, alignSelf: 'flex-end' },
   ownMessageTime: { color: 'rgba(255,255,255,0.8)' },
   otherMessageTime: { color: '#666' },
 
+  // Preview PJ en attente
+  pendingAttachmentBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: 'white',
+  },
+  pendingAttachmentName: { flex: 1, fontSize: 14, color: '#1a1a1a' },
+  pendingPreviewImage: { width: 36, height: 36, borderRadius: 6, backgroundColor: '#f1f5f9' },
+  pendingRemoveButton: { padding: 6 },
+
   // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: {
     backgroundColor: 'white', borderRadius: 16, width: '90%', maxWidth: 500, maxHeight: '90%', flex: 1, minHeight: '50%',
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 },
       android: { elevation: 4 },
-      web: { boxShadow: '0 4px 12px rgba(0,0,0,0.1)' },
+      web: { boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)' },
     }),
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },

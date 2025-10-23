@@ -5,12 +5,12 @@ import 'react-native-reanimated';
 declare const global: any;
 
 import { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter, useNavigationContainerRef } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/context/AuthContext';
-import { LogBox, Platform } from 'react-native';
+import { LogBox, Linking, Platform } from 'react-native';
 
 if (__DEV__) {
   const origError = console.error;
@@ -29,6 +29,9 @@ if (__DEV__) {
 
 export default function RootLayout() {
   useFrameworkReady();
+
+ const router = useRouter();
+  const navigationRef = useNavigationContainerRef();
 
   // ⚠️ PROD uniquement : on coupe les warnings/overlays et on redirige les logs
   useEffect(() => {
@@ -64,6 +67,61 @@ export default function RootLayout() {
       }
     };
   }, []);
+
+
+  // --- Gestion des Deep Links pour la réinitialisation de mot de passe ---
+  useEffect(() => {
+    const handleDeepLink = (event: { url: string }) => {
+      try {
+        const raw = event.url;
+        const url = new URL(raw);
+
+
+        if (!raw.includes('/auth/reset-password') && !raw.includes('auth/reset-password')) {
+          return;
+        }
+
+
+        const hash = url.hash?.startsWith('#') ? url.hash.substring(1) : '';
+        const query = url.search?.startsWith('?') ? url.search.substring(1) : '';
+        const params = new URLSearchParams(hash || query);
+
+
+        // MODIFICATION ICI : Récupérer 'token' et 'email' de l'URL
+        const token = params.get('token');
+        const email = params.get('email');
+
+
+        if (token && email) {
+          router.replace({
+            pathname: '/auth/reset-password',
+            params: { token: token, email: email }, // Passer les nouveaux paramètres
+          });
+        } else {
+          router.replace('/login');
+        }
+      } catch (err) {
+        console.warn('Deep link handling failed', event.url, err);
+        router.replace('/login');
+      }
+    };
+
+
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleDeepLink({ url });
+      }
+    });
+
+
+    const subscription = Linking.addEventListener('url', handleDeepLink);
+
+
+    return () => {
+      subscription.remove();
+    };
+  }, [router, navigationRef]);
+
 
   return (
     <SafeAreaProvider>

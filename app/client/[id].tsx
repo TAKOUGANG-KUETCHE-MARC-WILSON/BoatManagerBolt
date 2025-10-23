@@ -6,24 +6,30 @@ import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 
+
 // Définition de l'avatar par défaut
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
 
+
 // Fonctions utilitaires pour les URLs d'avatars
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+
 
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return '';
   if (isHttpUrl(value)) return value;
 
+
   const { data, error } = await supabase
     .storage
     .from('avatars')
-    .createSignedUrl(value, 60 * 60); // 1h de validité
+    .createSignedUrl(value, 60 * 60 * 24 * 7); // 1h de validité
+
 
   if (error || !data?.signedUrl) return '';
   return data.signedUrl;
 };
+
 
 interface Client {
   id: string;
@@ -46,6 +52,7 @@ interface Client {
   port: string;
 }
 
+
 interface ServiceHistory {
   id: string;
   date: string;
@@ -58,6 +65,7 @@ interface ServiceHistory {
   };
 }
 
+
 export default function ClientDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
@@ -67,6 +75,7 @@ export default function ClientDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+
   const fetchClientData = useCallback(async () => {
     if (!id) {
       setError("ID du client manquant.");
@@ -74,8 +83,10 @@ export default function ClientDetailsScreen() {
       return;
     }
 
+
     setLoading(true);
     setError(null);
+
 
     try {
       // 1. Fetch client details
@@ -98,6 +109,7 @@ export default function ClientDetailsScreen() {
         .eq('profile', 'pleasure_boater')
         .single();
 
+
       if (clientError || !clientData) {
         console.error('Error fetching client:', clientError);
         setError('Client non trouvé.');
@@ -105,24 +117,27 @@ export default function ClientDetailsScreen() {
         return;
       }
 
+
       const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
       const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
 
+
       const processedBoats = await Promise.all((clientData.boat || []).map(async (b: any) => {
         // Assuming boat images are in 'boat.images' bucket
-        const boatImageUrl = await getSignedAvatarUrl(b.image); 
+        const boatImageUrl = await getSignedAvatarUrl(b.image);
         // You might need to fetch lastService and nextService from other tables (e.g., service_request, rendez_vous)
         // For now, these are placeholders or derived from request history
         return {
           id: b.id.toString(),
           name: b.name,
           type: b.type,
-          image: boatImageUrl || 'https://images.pexels.com/photos/163236/boat-yacht-marina-dock-163236.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1', // Default boat image
+          image: boatImageUrl || 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop', // Default boat image
           lastService: 'N/A', // Placeholder
           nextService: 'N/A', // Placeholder
           status: 'active' as 'active' | 'maintenance' | 'inactive', // Placeholder
         };
       }));
+
 
       setClient({
         id: clientData.id,
@@ -137,6 +152,7 @@ export default function ClientDetailsScreen() {
         boats: processedBoats,
       });
 
+
       // 2. Fetch service history for the client
       const { data: historyData, error: historyError } = await supabase
         .from('service_request')
@@ -150,6 +166,7 @@ export default function ClientDetailsScreen() {
         `)
         .eq('id_client', id)
         .order('date', { ascending: false });
+
 
       if (historyError) {
         console.error('Error fetching service history:', historyError);
@@ -167,6 +184,7 @@ export default function ClientDetailsScreen() {
         })));
       }
 
+
     } catch (e: any) {
       console.error('Unexpected error fetching client data:', e);
       setError('Une erreur inattendue est survenue.');
@@ -175,11 +193,13 @@ export default function ClientDetailsScreen() {
     }
   }, [id]);
 
+
   useFocusEffect(
     useCallback(() => {
       fetchClientData();
     }, [fetchClientData])
   );
+
 
   if (loading) {
     return (
@@ -190,11 +210,12 @@ export default function ClientDetailsScreen() {
     );
   }
 
+
   if (error || !client) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
@@ -204,7 +225,7 @@ export default function ClientDetailsScreen() {
         </View>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error || 'Ce client n\'existe pas.'}</Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.errorButton}
             onPress={() => router.back()}
           >
@@ -215,13 +236,16 @@ export default function ClientDetailsScreen() {
     );
   }
 
+
   const handleMessage = () => {
     router.push(`/(boat-manager)/messages?client=${client.id}`);
   };
 
+
   const handleRequests = () => {
     router.push(`/(boat-manager)/requests?client=${client.id}`);
   };
+
 
   const formatDate = (dateString: string) => {
     if (!dateString || dateString === 'N/A') return 'N/A';
@@ -231,6 +255,7 @@ export default function ClientDetailsScreen() {
       year: 'numeric',
     });
   };
+
 
   const getStatusColor = (status: Client['status']) => {
     switch (status) {
@@ -245,6 +270,7 @@ export default function ClientDetailsScreen() {
     }
   };
 
+
   const getStatusLabel = (status: Client['status']) => {
     switch (status) {
       case 'active':
@@ -257,6 +283,7 @@ export default function ClientDetailsScreen() {
         return status;
     }
   };
+
 
   const getBoatStatusColor = (status: 'active' | 'maintenance' | 'inactive') => {
     switch (status) {
@@ -271,6 +298,7 @@ export default function ClientDetailsScreen() {
     }
   };
 
+
   const getBoatStatusLabel = (status: 'active' | 'maintenance' | 'inactive') => {
     switch (status) {
       case 'active':
@@ -283,6 +311,7 @@ export default function ClientDetailsScreen() {
         return status;
     }
   };
+
 
   const getServiceStatusColor = (status: ServiceHistory['status']) => {
     switch (status) {
@@ -313,6 +342,7 @@ export default function ClientDetailsScreen() {
     }
   };
 
+
   const getServiceStatusLabel = (status: ServiceHistory['status']) => {
     switch (status) {
       case 'completed':
@@ -342,11 +372,12 @@ export default function ClientDetailsScreen() {
     }
   };
 
+
   return (
     <ScrollView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}
         >
@@ -354,6 +385,7 @@ export default function ClientDetailsScreen() {
         </TouchableOpacity>
         <Text style={styles.title}>Détails du client</Text>
       </View>
+
 
       {/* Client Profile */}
       <View style={styles.profileSection}>
@@ -392,15 +424,16 @@ export default function ClientDetailsScreen() {
           </View>
         </View>
 
+
         <View style={styles.actions}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.actionButton}
             onPress={handleMessage}
           >
             <MessageSquare size={20} color="#0066CC" />
             <Text style={styles.actionButtonText}>Message</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.actionButton}
             onPress={handleRequests}
           >
@@ -410,9 +443,10 @@ export default function ClientDetailsScreen() {
         </View>
       </View>
 
+
       {/* Tabs */}
       <View style={styles.tabs}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, selectedTab === 'boats' && styles.activeTab]}
           onPress={() => setSelectedTab('boats')}
         >
@@ -420,7 +454,7 @@ export default function ClientDetailsScreen() {
             Bateaux
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, selectedTab === 'history' && styles.activeTab]}
           onPress={() => setSelectedTab('history')}
         >
@@ -429,6 +463,7 @@ export default function ClientDetailsScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
 
       {/* Tab Content */}
       {selectedTab === 'boats' ? (
@@ -451,6 +486,7 @@ export default function ClientDetailsScreen() {
                     </View>
                   </View>
 
+
                   <View style={styles.boatDetails}>
                     {boat.lastService && (
                       <View style={styles.boatDetailRow}>
@@ -470,7 +506,8 @@ export default function ClientDetailsScreen() {
                     )}
                   </View>
 
-                  <TouchableOpacity 
+
+                  <TouchableOpacity
                     style={styles.boatButton}
                     onPress={() => router.push(`/boats/${boat.id}`)}
                   >
@@ -491,8 +528,8 @@ export default function ClientDetailsScreen() {
         <View style={styles.historyContainer}>
           {serviceHistory.length > 0 ? (
             serviceHistory.map((service) => (
-              <TouchableOpacity 
-                key={service.id} 
+              <TouchableOpacity
+                key={service.id}
                 style={styles.serviceCard}
                 onPress={() => router.push(`/request/${service.id}`)}
               >
@@ -508,6 +545,7 @@ export default function ClientDetailsScreen() {
                   </View>
                 </View>
 
+
                 <View style={styles.serviceDetails}>
                   <View style={styles.serviceBoat}>
                     <Boat size={16} color="#666" />
@@ -515,6 +553,7 @@ export default function ClientDetailsScreen() {
                   </View>
                   <Text style={styles.serviceDescription}>{service.description}</Text>
                 </View>
+
 
                 <View style={styles.serviceFooter}>
                   <Text style={styles.viewDetails}>Voir les détails</Text>
@@ -533,6 +572,7 @@ export default function ClientDetailsScreen() {
     </ScrollView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -851,3 +891,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
 });
+
+
+

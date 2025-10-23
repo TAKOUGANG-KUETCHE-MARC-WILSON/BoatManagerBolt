@@ -16,13 +16,19 @@ interface ServiceRequest {
 }
 
 
+
+
 interface Port {
   id: string;
   name: string;
 }
 
 
+
+
 export type UserRole = 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate';
+
+
 
 
 interface BaseUser {
@@ -36,6 +42,8 @@ interface BaseUser {
 }
 
 
+
+
 interface PleasureBoater extends BaseUser {
   role: 'pleasure_boater';
   ports: Array<{
@@ -46,11 +54,15 @@ interface PleasureBoater extends BaseUser {
 }
 
 
+
+
 interface BoatManagerUser extends BaseUser {
   role: 'boat_manager';
   phone?: string;
   categories: Array<{ id: number; description1: string; }>; // Added for BoatManagerUser
 }
+
+
 
 
 interface NauticalCompany extends BaseUser {
@@ -70,6 +82,8 @@ interface NauticalCompany extends BaseUser {
 }
 
 
+
+
 interface CorporateUser extends BaseUser {
   role: 'corporate';
   permissions: {
@@ -81,7 +95,11 @@ interface CorporateUser extends BaseUser {
 }
 
 
+
+
 export type User = PleasureBoater | BoatManagerUser | NauticalCompany | CorporateUser;
+
+
 
 
 interface AuthContextType {
@@ -103,7 +121,11 @@ interface AuthContextType {
 }
 
 
+
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+
 
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -116,11 +138,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 
 
+
+
+
+
   // Configure bcrypt with a cryptographically secure random number generator
 bcrypt.setRandomFallback((len: number) => {
   const bytes = Crypto.getRandomBytes(len);
   return Array.from(bytes);
 });
+
+
+
+
+
+
 
 
 
@@ -138,7 +170,11 @@ bcrypt.setRandomFallback((len: number) => {
     };
 
 
+
+
     fetchPorts();
+
+
 
 
     const loadAndSetSession = async () => {
@@ -151,8 +187,12 @@ bcrypt.setRandomFallback((len: number) => {
     }
 
 
+
+
     if (userId) {
       const userProfile = await getAndSetUserProfile(userId);
+
+
 
 
       // ✅ Redirection automatique si on retrouve un utilisateur
@@ -167,7 +207,11 @@ bcrypt.setRandomFallback((len: number) => {
 };
 
 
+
+
     loadAndSetSession().finally(() => setLoading(false));
+
+
 
 
     // Listen for auth state changes from Supabase
@@ -185,10 +229,14 @@ bcrypt.setRandomFallback((len: number) => {
     });
 
 
+
+
     return () => {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+
 
 
   const getAndSetUserProfile = async (authUserId: string) => {
@@ -199,12 +247,16 @@ bcrypt.setRandomFallback((len: number) => {
       .maybeSingle();
 
 
+
+
     if (error) {
       console.error('Error fetching user profile:', error);
       setIsAuthenticated(false);
       setUser(null);
       return null;
     }
+
+
 
 
     if (data) {
@@ -217,6 +269,8 @@ bcrypt.setRandomFallback((len: number) => {
             .limit(1);
 
 
+
+
           let boatManagerId = '';
           if (!bmUserPortsError && bmUserPorts.length > 0) {
             const { data: bmProfile, error: bmProfileError } = await supabase
@@ -226,10 +280,14 @@ bcrypt.setRandomFallback((len: number) => {
               .single();
 
 
+
+
             if (!bmProfileError && bmProfile.profile === 'boat_manager') {
               boatManagerId = bmUserPorts[0].user_id.toString();
             }
           }
+
+
 
 
           return {
@@ -238,6 +296,8 @@ bcrypt.setRandomFallback((len: number) => {
           };
         })
       );
+
+
 
 
       const commonUserData = {
@@ -254,6 +314,8 @@ bcrypt.setRandomFallback((len: number) => {
         bio: data.bio,
         certification: data.certification,
       };
+
+
 
 
       let userProfile: User;
@@ -321,12 +383,16 @@ bcrypt.setRandomFallback((len: number) => {
       }
 
 
+
+
       setIsAuthenticated(true);
       setUser(userProfile);
       return userProfile;
     }
     return null;
   };
+
+
 
 
   const saveSession = async (userId: string) => {
@@ -342,6 +408,8 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
 
+
+
   const clearSession = async () => {
     try {
       if (Platform.OS === 'web') {
@@ -355,6 +423,8 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
 
+
+
   const login = async (email: string, password: string, portId?: string, shouldRedirect: boolean = true) => {
     const { data: users, error: userError } = await supabase
       .from('users')
@@ -362,20 +432,30 @@ bcrypt.setRandomFallback((len: number) => {
       .eq('e_mail', email);
 
 
+
+
     if (userError || !users || users.length === 0) {
       throw new Error('Email ou mot de passe incorrect.');
     }
 
 
+
+
     const userInDb = users[0];
+
+
 
 
     const passwordMatch = await bcrypt.compare(password, userInDb.password);
 
 
+
+
     if (!passwordMatch) {
       throw new Error('Email ou mot de passe incorrect.');
     }
+
+
 
 
     // --- Logique de mise à jour du statut basée sur last_login ---
@@ -384,7 +464,9 @@ bcrypt.setRandomFallback((len: number) => {
     threeMonthsAgo.setMonth(now.getMonth() - 3);
 
 
-    let newStatus = 'active';
+
+
+    let newStatus = 'inactive';
     if (userInDb.last_login) {
       const lastLoginDate = new Date(userInDb.last_login);
       if (lastLoginDate < threeMonthsAgo) {
@@ -393,10 +475,14 @@ bcrypt.setRandomFallback((len: number) => {
     }
 
 
+
+
     const { error: updateError } = await supabase
       .from('users')
       .update({ last_login: now.toISOString(), status: newStatus })
       .eq('id', userInDb.id);
+
+
 
 
     if (updateError) {
@@ -405,8 +491,12 @@ bcrypt.setRandomFallback((len: number) => {
     // --- Fin de la logique de mise à jour du statut ---
 
 
+
+
     await saveSession(userInDb.id.toString());
     const userProfile = await getAndSetUserProfile(userInDb.id.toString());
+
+
 
 
     if (userProfile && userProfile.role === 'pleasure_boater' && portId) {
@@ -421,15 +511,21 @@ bcrypt.setRandomFallback((len: number) => {
           .eq('port_id', parsedPortId);
 
 
+
+
         if (existingPortError) {
           console.error('Error checking existing port assignment during login:', existingPortError);
         }
+
+
 
 
         if (!existingPortAssignment || existingPortAssignment.length === 0) {
           const { error: insertPortError } = await supabase
             .from('user_ports')
             .insert({ user_id: userProfile.id, port_id: parsedPortId });
+
+
 
 
           if (insertPortError) {
@@ -444,6 +540,8 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
 
+
+
   const signup = async (
   firstName: string,
   lastName: string,
@@ -456,10 +554,14 @@ bcrypt.setRandomFallback((len: number) => {
   const hashedPassword = await bcrypt.hash(password, 10);
 
 
+
+
   const { data: existingUsers, error: existingUserError } = await supabase
     .from('users')
     .select('id')
     .eq('e_mail', email);
+
+
 
 
   if (existingUserError) {
@@ -468,6 +570,8 @@ bcrypt.setRandomFallback((len: number) => {
   if (existingUsers && existingUsers.length > 0) {
     throw new Error('Un compte avec cet email existe déjà.');
   }
+
+
 
 
   const { data: newUser, error: userInsertError } = await supabase
@@ -487,10 +591,14 @@ bcrypt.setRandomFallback((len: number) => {
     .single();
 
 
+
+
   if (userInsertError) {
     console.error('Error inserting user profile:', userInsertError);
     throw new Error('Échec de la création du profil utilisateur.');
   }
+
+
 
 
   const userPortInserts = selectedPorts.map((p) => ({
@@ -499,9 +607,13 @@ bcrypt.setRandomFallback((len: number) => {
   }));
 
 
+
+
   const { error: userPortsInsertError } = await supabase
     .from('user_ports')
     .insert(userPortInserts);
+
+
 
 
   if (userPortsInsertError) {
@@ -510,8 +622,12 @@ bcrypt.setRandomFallback((len: number) => {
   }
 
 
+
+
   await saveSession(newUser.id.toString());
   const userProfile = await getAndSetUserProfile(newUser.id.toString());
+
+
 
 
   if (userProfile) {
@@ -525,10 +641,14 @@ bcrypt.setRandomFallback((len: number) => {
         }[] = [];
 
 
+
+
         const { data: userPorts, error: userPortsError } = await supabase
           .from('user_ports')
           .select('user_id')
           .eq('port_id', parseInt(p.portId));
+
+
 
 
         if (!userPortsError && userPorts && userPorts.length > 0) {
@@ -538,6 +658,8 @@ bcrypt.setRandomFallback((len: number) => {
             .select('first_name, last_name, e_mail, phone')
             .in('id', userIds)
             .eq('profile', 'boat_manager');
+
+
 
 
           if (!bmError && boatManagersData && boatManagersData.length > 0) {
@@ -550,12 +672,16 @@ bcrypt.setRandomFallback((len: number) => {
         }
 
 
+
+
         return {
           portName: portInfo?.name || 'Port inconnu',
           boatManagers,
         };
       })
     );
+
+
 
 
     // Affichage dans showWelcomeMessage
@@ -567,6 +693,8 @@ bcrypt.setRandomFallback((len: number) => {
     ) => {
       let message = `Bienvenue sur Your Boat Manager !\n\n`;
       message += `Des Boat Managers vous ont été affectés :\n\n`;
+
+
 
 
       ports.forEach((detail, index) => {
@@ -581,10 +709,14 @@ bcrypt.setRandomFallback((len: number) => {
       });
 
 
+
+
       message += `\nPour profiter pleinement de nos services, nous vous invitons à :\n`;
       message += `1. Compléter votre profil\n`;
       message += `2. Ajouter vos bateaux\n\n`;
       message += `Souhaitez-vous ajouter votre bateau maintenant ?`;
+
+
 
 
       if (Platform.OS === 'web') {
@@ -616,10 +748,18 @@ bcrypt.setRandomFallback((len: number) => {
     };
 
 
+
+
     await showWelcomeMessage(welcomePorts);
     redirectUser(userProfile.role);
   }
 };
+
+
+
+
+
+
 
 
 
@@ -635,6 +775,8 @@ bcrypt.setRandomFallback((len: number) => {
   };
 
 
+
+
   const loginAsBoatManager = async (email: string, password: string) => {
   await login(email, password);
   const storedUserId = await SecureStore.getItemAsync('user_id');
@@ -646,6 +788,8 @@ bcrypt.setRandomFallback((len: number) => {
 };
 
 
+
+
 const loginAsNauticalCompany = async (email: string, password: string) => {
   await login(email, password);
   const storedUserId = await SecureStore.getItemAsync('user_id');
@@ -655,6 +799,8 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
     throw new Error('Accès refusé : Ce compte n\'est pas une Entreprise du nautisme.');
   }
 };
+
+
 
 
 const loginAsCorporate = async (email: string, password: string) => {
@@ -670,12 +816,18 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
 
 
 
+
+
+
+
   const logout = async () => {
     await clearSession();
     setIsAuthenticated(false);
     setUser(null);
     router.replace('/login');
   };
+
+
 
 
   const redirectUser = (role: UserRole) => {
@@ -703,9 +855,17 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
 
 
 
+
+
+
+
+
+
   const clearPendingServiceRequest = () => {
     setPendingServiceRequest(null);
   };
+
+
 
 
   return (
@@ -737,6 +897,8 @@ const currentUser = storedUserId ? await getAndSetUserProfile(storedUserId) : nu
 }
 
 
+
+
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
@@ -746,9 +908,13 @@ export function useAuth() {
 }
 
 
+
+
 export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
   return function AuthCheckedComponent(props: any) {
     const { isAuthenticated, setPendingServiceRequest, user } = useAuth();
+
+
 
 
     const sendServiceRequestEmail = async ({ requestType, requestData, user }: {
@@ -761,10 +927,14 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
       }
 
 
+
+
       const { data: userPortsData, error: userPortsError } = await supabase
         .from('user_ports')
         .select('port_id')
         .eq('user_id', user.id);
+
+
 
 
       if (userPortsError) {
@@ -773,7 +943,11 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
       }
 
 
+
+
       const portIds = userPortsData.map(up => up.port_id);
+
+
 
 
       const { data: bmPortAssignments, error: bmPortAssignmentsError } = await supabase
@@ -782,13 +956,19 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         .in('port_id', portIds);
 
 
+
+
       if (bmPortAssignmentsError) {
         console.error('Error fetching boat manager port assignments:', bmPortAssignmentsError);
         return;
       }
 
 
+
+
       const bmUserIds = [...new Set(bmPortAssignments.map(bmup => bmup.user_id))];
+
+
 
 
       const { data: boatManagersData, error: bmError } = await supabase
@@ -798,10 +978,14 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         .eq('profile', 'boat_manager');
 
 
+
+
       if (bmError) {
         console.error('Error fetching boat managers for email:', bmError);
         return;
       }
+
+
 
 
       for (const bm of boatManagersData) {
@@ -826,6 +1010,8 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
     };
 
 
+
+
     const handleSubmit = async (formData: any) => {
       if (!isAuthenticated) {
         setPendingServiceRequest({
@@ -837,6 +1023,8 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
       }
 
 
+
+
       try {
         await sendServiceRequestEmail({
           requestType: props.title,
@@ -845,7 +1033,11 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         });
 
 
+
+
         props.onSubmit?.(formData);
+
+
 
 
         Alert.alert('Succès', 'Votre demande de service a été envoyée.');
@@ -855,6 +1047,8 @@ export function withAuthCheck(WrappedComponent: React.ComponentType<any>) {
         Alert.alert('Erreur', 'Échec de l\'envoi de la demande de service.');
       }
     };
+
+
 
 
     return <WrappedComponent {...props} onSubmit={handleSubmit} />;
