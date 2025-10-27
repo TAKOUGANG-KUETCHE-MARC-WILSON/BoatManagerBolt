@@ -213,6 +213,7 @@ interface ServiceHistory {
   status:
     | 'completed'
     | 'in_progress'
+    | 'accepted'
     | 'cancelled'
     | 'submitted'
     | 'quote_sent'
@@ -642,6 +643,8 @@ const [pendingDeletePortIds, setPendingDeletePortIds] = useState<string[]>([]);
     switch (status) {
       case 'completed':
         return '#10B981';
+      case 'accepted':
+        return '#f63bceff';
       case 'in_progress':
         return '#3B82F6';
       case 'cancelled':
@@ -670,6 +673,8 @@ const [pendingDeletePortIds, setPendingDeletePortIds] = useState<string[]>([]);
         return 'Terminé';
       case 'in_progress':
         return 'En cours';
+      case 'accepted':
+        return 'accepté';
       case 'cancelled':
         return 'Annulé';
       case 'submitted':

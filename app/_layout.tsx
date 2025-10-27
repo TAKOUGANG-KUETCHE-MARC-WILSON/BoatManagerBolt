@@ -127,6 +127,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <Stack
+          backBehavior="none" 
           screenOptions={{
             headerShown: false,
             headerBackTitleVisible: false,

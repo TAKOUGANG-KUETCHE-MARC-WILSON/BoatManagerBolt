@@ -211,6 +211,7 @@ export default function NauticalCompanyTabLayout() {
     <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
       <StatusBar style="dark" backgroundColor="#ffffff" hidden={false} />
       <Tabs
+        
         screenOptions={{
           headerShown: true,
           // somme sur le logo du header (toutes les pages)

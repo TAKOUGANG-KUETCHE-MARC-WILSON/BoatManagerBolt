@@ -224,10 +224,11 @@ export default function CorporateTabLayout() {
   const totalForHeader = unreadMessages + unreadRequests;
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
       <StatusBar style="dark" hidden={false} translucent backgroundColor="transparent" />
 
       <Tabs
+        
         screenOptions={{
           headerShown: true,
           headerTitle: () => <LogoWithBadge />, // 👈 somme sur le logo

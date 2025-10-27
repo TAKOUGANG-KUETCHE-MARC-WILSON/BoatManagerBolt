@@ -13,11 +13,13 @@ import {
   KeyboardAvoidingView,
   Modal,
   ActivityIndicator,
+  Keyboard,
   TouchableWithoutFeedback,
   Alert,
   ToastAndroid,
   Linking,
   AppState,
+  BackHandler,
 } from 'react-native';
 
 import {
@@ -39,6 +41,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
+
+import { INPUT_BAR_MIN_HEIGHT } from '@/components/ChatInput';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
@@ -305,7 +311,9 @@ export default function MessagesScreen() {
   const { user } = useAuth();
   const currentUserId = Number(user?.id);
   const insets = useSafeAreaInsets();
+   const tabBarHeight = useBottomTabBarHeight?.() ?? 0;
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [isKeyboardVisible, setKeyboardVisible] = useState(false);
 
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -358,6 +366,64 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
       const tb = b.lastMessage?.timestamp?.getTime?.() ?? 0;
       return tb - ta; // plus récent en haut
     });
+
+
+  // hauteur mesurée (Preview PJ + barre d'input). Sert au padding du ScrollView.
+  const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_MIN_HEIGHT);
+
+  
+  // Helper: scroll-to-end fiable (après layout/clavier)
+  const scrollToEndSoon = useCallback((delay = 50, animated = true) => {
+    requestAnimationFrame(() => {
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated }), delay);
+    });
+  }, []);
+
+
+// Intercepte le bouton retour Android pour prioriser nos états locaux
+useFocusEffect(
+  useCallback(() => {
+    if (Platform.OS !== 'android') return;
+
+    const onBackPress = () => {
+      // ordre de fermeture : modales/menus -> clavier -> preview PJ -> sortir du détail
+      if (showNewConversationModal) {
+        setShowNewConversationModal(false);
+        return true;
+      }
+      if (showAttachmentOptions) {
+        setShowAttachmentOptions(false);
+        return true;
+      }
+      if (isKeyboardVisible) {
+        Keyboard.dismiss();
+        return true;
+      }
+      if (pendingAttachment) {
+        setPendingAttachment(null);
+        return true;
+      }
+      if (activeChat) {
+        setActiveChat(null);
+        return true;
+      }
+      // rien à gérer côté écran -> laisser la nav par défaut (changer d’onglet / quitter)
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [
+    activeChat,
+    showNewConversationModal,
+    showAttachmentOptions,
+    isKeyboardVisible,
+    pendingAttachment,
+  ])
+);
+
+
+
 
   // --------- Création / recherche d'une 1–1 via param `client` ----------
   const findOrCreateConversationWithClient = useCallback(
@@ -433,6 +499,18 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
     },
     [user]
   );
+
+// 👂 clavier (Android & iOS)
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = () => { setKeyboardVisible(true); scrollToEndSoon(60); };
+    const onHide = () => setKeyboardVisible(false);
+    const showSub = Keyboard.addListener(showEvt, onShow);
+    const hideSub = Keyboard.addListener(hideEvt, onHide);
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, [scrollToEndSoon]);
+
 
   // --------- Realtime global : nouveaux messages -> maj "dernier message" ----------
   useEffect(() => {
@@ -704,12 +782,13 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
             }
           }
 
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
-        }
+          
+         scrollToEndSoon(50);
+         }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [activeChat?.id, user?.id]);
+  }, [activeChat?.id, user?.id, scrollToEndSoon]);
 
   // --------- Realtime reçus de lecture (maj last_read_at des membres) ----------
   useEffect(() => {
@@ -869,6 +948,7 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
   
         setDraftText('');
         setPendingAttachment(null);
+        scrollToEndSoon(40);
       } catch (e) {
         maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
       }
@@ -1069,10 +1149,14 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
 
     return (
       <KeyboardAvoidingView
-        style={styles.chatView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
-      >
+              style={styles.chatView}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              keyboardVerticalOffset={
+                Platform.OS === 'ios'
+                  ? insets.top + headerHeight
+                  : (isKeyboardVisible ? tabBarHeight + 8 : 0) // 👈 clé sur Android
+              }
+            >
         <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
             <ChevronLeft size={24} color="#1a1a1a" />
@@ -1091,13 +1175,13 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
           </View>
         ) : (
           <ScrollView
-            ref={scrollViewRef}
-            style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
-          >
+                                ref={scrollViewRef}
+                                style={styles.messagesList}
+                                contentContainerStyle={[styles.messagesContent, { paddingBottom: inputBarHeight }]}
+                                keyboardShouldPersistTaps="handled"
+                                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                                onContentSizeChange={() => scrollToEndSoon(0, false)}
+                              >
             {messages.map((msg, index) => {
               const isOwnMessage = msg.senderId === currentUserId;
               const sender = activeChat.participants.find((p) => p.id === msg.senderId);
@@ -1177,7 +1261,17 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
         )}
 
  {/* ✅ Preview de la PJ en attente */}
-        <View style={{ backgroundColor: 'white' }}>
+        <View
+          style={{ backgroundColor: 'white' }}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            if (h !== inputBarHeight) {
+              setInputBarHeight(h);
+              // ancre bas quand l'input grandit / options PJ ouvertes
+              scrollToEndSoon(0, false);
+            }
+          }}
+        >
           {pendingAttachment && (
             <View style={styles.pendingAttachmentBar}>
               {pendingAttachment.isImage ? (
@@ -1193,19 +1287,17 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
               </TouchableOpacity>
             </View>
           )}
-
-          <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
-            <ChatInput
-              handleSend={handleSend}
-              showAttachmentOptions={showAttachmentOptions}
-              setShowAttachmentOptions={setShowAttachmentOptions}
-              handleChooseImage={handleChooseImage}
-              handleChooseDocument={handleChooseDocument}
-              value={draftText}
-              onChangeText={setDraftText}
-            />
+<ChatInput
+            handleSend={handleSend}
+            showAttachmentOptions={showAttachmentOptions}
+            setShowAttachmentOptions={setShowAttachmentOptions}
+            handleChooseImage={handleChooseImage}
+            handleChooseDocument={handleChooseDocument}
+            value={draftText}
+            onChangeText={setDraftText}
+          />
           </View>
-        </View>
+      
       </KeyboardAvoidingView>
     );
   };

@@ -1,7 +1,10 @@
 // components/ChatInput.tsx
-import React, { memo, useState, useCallback } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, Platform, Text } from 'react-native';
+import React, { memo, useState, useCallback, useEffect } from 'react';
+import { View, TextInput, TouchableOpacity, StyleSheet, Platform, Text, Keyboard } from 'react-native';
 import { Send, Paperclip, Camera, FileText } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+export const INPUT_BAR_MIN_HEIGHT = 52; // utilisé pour le padding bas côté liste
 
 interface ChatInputProps {
   handleSend: (messageText: string) => void | Promise<void>;
@@ -10,7 +13,7 @@ interface ChatInputProps {
   handleChooseImage: () => void;
   handleChooseDocument: () => void;
 
-  // 🔸 nouveau : mode contrôlé (optionnel)
+  // 🔸 mode contrôlé (optionnel)
   value?: string;
   onChangeText?: (text: string) => void;
 }
@@ -24,6 +27,16 @@ const ChatInput = memo(({
   value,
   onChangeText,
 }: ChatInputProps) => {
+  const insets = useSafeAreaInsets();
+  const [sending, setSending] = useState(false);
+
+  // On ferme juste les options PJ quand le clavier s’ouvre
+  useEffect(() => {
+    const evt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const sub = Keyboard.addListener(evt, () => setShowAttachmentOptions(false));
+    return () => sub.remove();
+  }, [setShowAttachmentOptions]);
+
   // mode contrôlé / non-contrôlé
   const [inner, setInner] = useState('');
   const controlled = typeof value === 'string';
@@ -32,30 +45,42 @@ const ChatInput = memo(({
 
   const internalHandleSend = useCallback(async () => {
     const trimmed = (text || '').trim();
-    if (!trimmed) return;
-    await Promise.resolve(handleSend(trimmed)); // ok si sync ou async
-    // ⚠️ si contrôlé, le parent videra le texte APRÈS envoi réussi.
-    if (!controlled) setText('');
-    setShowAttachmentOptions(false);
-  }, [text, handleSend, setShowAttachmentOptions, controlled, setText]);
+    if (!trimmed || sending) return;
+    setSending(true);
+    try {
+      await Promise.resolve(handleSend(trimmed));
+      if (!controlled) setText('');
+      setShowAttachmentOptions(false);
+    } finally {
+      setSending(false);
+    }
+  }, [text, sending, handleSend, setShowAttachmentOptions, controlled, setText]);
+
+  // padding bas: constant, basé sur le safe area
+  const bottomPad = Math.max(Platform.OS === 'ios' ? 6 : 4, insets.bottom);
+  const attachmentBottomOffset = 70 + Math.max(0, bottomPad - 8);
 
   return (
-    <View style={styles.inputContainer}>
+    <View style={[styles.inputContainer, { paddingBottom: bottomPad, minHeight: INPUT_BAR_MIN_HEIGHT }]}>
+      
       <TouchableOpacity
         style={styles.attachButton}
         onPress={() => setShowAttachmentOptions(!showAttachmentOptions)}
         accessibilityRole="button"
-        accessibilityLabel="Ajouter une pièce jointe"
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        accessibilityLabel={showAttachmentOptions ? "Fermer les options de pièces jointes" : "Ouvrir les options de pièces jointes"}
+        accessibilityHint="Joindre une photo ou un document"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Paperclip size={24} color="#0066CC" />
       </TouchableOpacity>
 
       {showAttachmentOptions && (
-        <View style={styles.attachmentOptions}>
+        <View style={[styles.attachmentOptions, { bottom: attachmentBottomOffset }]}>
           <TouchableOpacity
             style={styles.attachmentOption}
             onPress={() => { setShowAttachmentOptions(false); handleChooseImage(); }}
+            accessibilityRole="button"
+            accessibilityLabel="Joindre une photo"
           >
             <Camera size={24} color="#0066CC" />
             <Text style={styles.attachmentOptionText}>Photo</Text>
@@ -64,6 +89,8 @@ const ChatInput = memo(({
           <TouchableOpacity
             style={styles.attachmentOption}
             onPress={() => { setShowAttachmentOptions(false); handleChooseDocument(); }}
+            accessibilityRole="button"
+            accessibilityLabel="Joindre un document"
           >
             <FileText size={24} color="#0066CC" />
             <Text style={styles.attachmentOptionText}>Document</Text>
@@ -79,8 +106,16 @@ const ChatInput = memo(({
         onChangeText={setText}
         onFocus={() => setShowAttachmentOptions(false)}
         multiline
+        // UX saisie
+        autoCorrect
+        autoCapitalize="sentences"
+        keyboardAppearance={Platform.OS === 'ios' ? 'light' : undefined}
+        selectionColor="#0066CC"
+        returnKeyType="send"
+        blurOnSubmit={false}
+        maxLength={8000}
+        // Web: Entrée = envoyer, Shift/Ctrl/Cmd+Entrée = nouvelle ligne
         onKeyPress={(e) => {
-          // web/desktop : Entrée = envoyer, Shift/Ctrl/Cmd+Entrée = nouvelle ligne
           const key = (e as any)?.nativeEvent?.key;
           const isWeb = Platform.OS === 'web';
           const hasModifier = (e as any)?.shiftKey || (e as any)?.ctrlKey || (e as any)?.metaKey;
@@ -92,12 +127,12 @@ const ChatInput = memo(({
       />
 
       <TouchableOpacity
-        style={[
-          styles.sendButton,
-          !text?.trim() && styles.sendButtonDisabled
-        ]}
+        style={[styles.sendButton, (!text?.trim() || sending) && styles.sendButtonDisabled]}
         onPress={internalHandleSend}
-        disabled={!text?.trim()}
+        disabled={!text?.trim() || sending}
+        accessibilityRole="button"
+        accessibilityLabel="Envoyer le message"
+        accessibilityState={{ disabled: !text?.trim() || sending }}
       >
         <Send size={24} color="white" />
       </TouchableOpacity>

@@ -2,24 +2,13 @@
 import * as WebBrowser from 'expo-web-browser';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  Platform,
-  KeyboardAvoidingView,
-  Modal,
-  ActivityIndicator,
-  TouchableWithoutFeedback,
-  Alert,
-  ToastAndroid,
-  Linking,
-  AppState,
+  View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image,
+  Platform, Keyboard, KeyboardAvoidingView, Modal, ActivityIndicator, TouchableWithoutFeedback,
+  Alert, ToastAndroid, Linking, AppState,
 } from 'react-native';
+import { INPUT_BAR_MIN_HEIGHT } from '@/components/ChatInput';
 
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
   Search,
   ChevronLeft,
@@ -44,6 +33,9 @@ import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
 import { bootOnLoginOrReopen, refreshAppBadge } from '@/src/notifications/boot';
+
+import { BackHandler } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 
 // ---------- Config Storage ----------
 const ATTACHMENTS_BUCKET = 'chat.attachments';
@@ -325,6 +317,20 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
     useState<'all' | 'pleasure_boater' | 'boat_manager' | 'nautical_company' | 'corporate'>('all');
   const [allUsers, setAllUsers] = useState<Contact[]>([]);
 
+
+const [isKeyboardVisible, setKeyboardVisible] = useState(false);
+const tabBarHeight = useBottomTabBarHeight?.() ?? 0;
+// Hauteur mesurée (Preview PJ + input). Sert à laisser la place en bas de la liste.
+const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_MIN_HEIGHT);
+
+// Scroll-to-end fiable (après layout / clavier)
+const scrollToEndSoon = useCallback((delay = 50, animated = true) => {
+  requestAnimationFrame(() => {
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated }), delay);
+  });
+}, []);
+
+
   const [showAttachmentOptions, setShowAttachmentOptions] = useState(false);
   const [isLoadingChats, setIsLoadingChats] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -470,6 +476,19 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
 
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, chats]);
+
+
+ useEffect(() => {
+  const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+  const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+  const onShow = () => { setKeyboardVisible(true); scrollToEndSoon(60); };
+  const onHide = () => setKeyboardVisible(false);
+  const showSub = Keyboard.addListener(showEvt, onShow);
+  const hideSub = Keyboard.addListener(hideEvt, onHide);
+  return () => { showSub.remove(); hideSub.remove(); };
+}, [scrollToEndSoon]);
+
+
 
   // --------- Récup init : contacts + conversations + non-lus ----------
   useEffect(() => {
@@ -648,8 +667,8 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
       } finally {
         if (alive) {
           setIsLoadingMessages(false);
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 80);
-        }
+         scrollToEndSoon(80);
+         }
       }
     };
     fetchMessages();
@@ -698,8 +717,8 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
             }
           }
 
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
-        }
+         scrollToEndSoon(50);
+  }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -863,6 +882,7 @@ const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | n
   
         setDraftText('');
         setPendingAttachment(null);
+        scrollToEndSoon(40);
       } catch (e) {
         maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
       }
@@ -1047,6 +1067,30 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
     </ScrollView>
   );
 
+
+useFocusEffect(
+  useCallback(() => {
+    if (Platform.OS !== 'android') return;
+
+    const onBackPress = () => {
+      if (showNewConversationModal) { setShowNewConversationModal(false); return true; }
+      if (showAttachmentOptions) { setShowAttachmentOptions(false); return true; }
+      if (isKeyboardVisible) { Keyboard.dismiss(); return true; }
+      if (pendingAttachment) { setPendingAttachment(null); return true; }
+      if (activeChat) { setActiveChat(null); return true; }
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [
+    activeChat,
+    showNewConversationModal,
+    showAttachmentOptions,
+    isKeyboardVisible,
+    pendingAttachment,
+  ])
+);
   const renderChatView = () => {
     if (!activeChat) return null;
 
@@ -1063,10 +1107,14 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
 
     return (
       <KeyboardAvoidingView
-        style={styles.chatView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
-      >
+  style={styles.chatView}
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+  keyboardVerticalOffset={
+    Platform.OS === 'ios'
+      ? insets.top + headerHeight
+      : (isKeyboardVisible ? tabBarHeight + 8 : 0) // 👈 clé sur Android
+  }
+>
         <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
             <ChevronLeft size={24} color="#1a1a1a" />
@@ -1087,11 +1135,11 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
           <ScrollView
             ref={scrollViewRef}
             style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[styles.messagesContent, { paddingBottom: inputBarHeight }]}
+            onContentSizeChange={() => scrollToEndSoon(0, false)}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
-          >
+              >
             {messages.map((msg, index) => {
               const isOwnMessage = msg.senderId === currentUserId;
               const sender = activeChat.participants.find((p) => p.id === msg.senderId);
@@ -1170,9 +1218,19 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
           </ScrollView>
         )}
 
- {/* ✅ Preview de la PJ en attente */}
-        <View style={{ backgroundColor: 'white' }}>
-          {pendingAttachment && (
+ {/* ✅ Preview PJ + input, hauteur mesurée */}
+<View
+  style={{ backgroundColor: 'white' }}
+  onLayout={(e) => {
+    const h = e.nativeEvent.layout.height;
+    if (h !== inputBarHeight) {
+      setInputBarHeight(h);
+      // ancre bas quand la hauteur change (ouvert/fermé PJ, input multi-ligne…)
+      scrollToEndSoon(0, false);
+    }
+  }}
+>
+           {pendingAttachment && (
             <View style={styles.pendingAttachmentBar}>
               {pendingAttachment.isImage ? (
                 <Image source={{ uri: pendingAttachment.uri }} style={styles.pendingPreviewImage} />
@@ -1188,18 +1246,17 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
             </View>
           )}
 
-          <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
-            <ChatInput
-              handleSend={handleSend}
-              showAttachmentOptions={showAttachmentOptions}
-              setShowAttachmentOptions={setShowAttachmentOptions}
-              handleChooseImage={handleChooseImage}
-              handleChooseDocument={handleChooseDocument}
-              value={draftText}
-              onChangeText={setDraftText}
-            />
-          </View>
+          <ChatInput
+            handleSend={handleSend}
+            showAttachmentOptions={showAttachmentOptions}
+            setShowAttachmentOptions={setShowAttachmentOptions}
+            handleChooseImage={handleChooseImage}
+            handleChooseDocument={handleChooseDocument}
+            value={draftText}
+            onChangeText={setDraftText}
+          />
         </View>
+    
       </KeyboardAvoidingView>
     );
   };
@@ -1292,6 +1349,9 @@ const formatSmartBubbleTime = (d: Date, now = new Date()) => {
     </View>
   );
 }
+
+
+
 
 // ---------- Styles ----------
 const styles = StyleSheet.create({

@@ -171,6 +171,7 @@ export default function BoatManagerTabLayout() {
       <StatusBar style="dark" backgroundColor="#ffffff" hidden={false} />
 
       <Tabs
+      
         screenOptions={{
           headerShown: true,
           tabBarActiveTintColor: '#0066CC',

@@ -11,15 +11,17 @@ import {
   ScrollView,
   Image,
   Platform,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   ActivityIndicator,
   TouchableWithoutFeedback,
   Alert,
   ToastAndroid,
+  BackHandler,
   Linking,
 } from 'react-native';
-
+import { useFocusEffect } from '@react-navigation/native';
 import {
   Search,
   ChevronLeft,
@@ -36,10 +38,12 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { INPUT_BAR_MIN_HEIGHT } from '@/components/ChatInput';
 import { useAuth } from '@/context/AuthContext';
 import ChatInput from '@/components/ChatInput';
 import { supabase } from '@/src/lib/supabase';
 import { refreshAppBadge } from '@/src/notifications/boot';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 // ---------- Config Storage ----------
 const ATTACHMENTS_BUCKET = 'chat.attachments';
@@ -149,21 +153,17 @@ export function formatSmartListTimestamp(d: Date, now = new Date()) {
   if (isYesterday(d, now)) return 'Hier';
   const days = diffDays(d, now);
   if (days <= 6) {
-    // ex: "lun." (fr-FR)
     return d.toLocaleDateString('fr-FR', { weekday: 'short' });
   }
   if (isSameYear(d, now)) {
-    // ex: "7 oct."
     return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   }
-  // ex: "07/10/23"
   return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
 export function formatDayHeader(d: Date, now = new Date()) {
   if (isSameDay(d, now)) return 'Aujourd’hui';
   if (isYesterday(d, now)) return 'Hier';
-  // ex: "lundi 7 octobre 2025" (année masquée si année courante)
   return d.toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long',
     year: isSameYear(d, now) ? undefined : 'numeric',
@@ -175,10 +175,8 @@ export function formatSmartBubbleTime(d: Date, now = new Date()) {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
   if (isSameYear(d, now)) {
-    // ex: "07/10"
     return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
   }
-  // ex: "07/10/23"
   return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
@@ -186,10 +184,9 @@ export function sortChatsByLastActivity(list: Chat[]) {
   return [...list].sort((a, b) => {
     const ta = a.lastMessage?.timestamp?.getTime?.() ?? 0;
     const tb = b.lastMessage?.timestamp?.getTime?.() ?? 0;
-    return tb - ta; // plus récent en haut
+    return tb - ta;
   });
 }
-
 
 // ---------- Modal création conversation ----------
 const NewConversationModal = ({
@@ -380,13 +377,15 @@ export default function MessagesScreen() {
   const { user } = useAuth();
   const currentUserId = Number(user?.id);
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight?.() ?? 0;
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [isKeyboardVisible, setKeyboardVisible] = useState(false);
 
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [draftText, setDraftText] = useState(''); // texte contrôlé
+  const [draftText, setDraftText] = useState('');
 
   const scrollViewRef = useRef<ScrollView>(null);
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
@@ -403,8 +402,62 @@ export default function MessagesScreen() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
 
+  // hauteur mesurée (Preview PJ + barre d'input). Sert au padding du ScrollView.
+  const [inputBarHeight, setInputBarHeight] = useState(INPUT_BAR_MIN_HEIGHT);
+
   // ✅ PJ en attente
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
+
+  // Helper: scroll-to-end fiable (après layout/clavier)
+  const scrollToEndSoon = useCallback((delay = 50, animated = true) => {
+    requestAnimationFrame(() => {
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated }), delay);
+    });
+  }, []);
+
+
+// Intercepte le bouton retour Android pour prioriser nos états locaux
+useFocusEffect(
+  useCallback(() => {
+    if (Platform.OS !== 'android') return;
+
+    const onBackPress = () => {
+      // ordre de fermeture : modales/menus -> clavier -> preview PJ -> sortir du détail
+      if (showNewConversationModal) {
+        setShowNewConversationModal(false);
+        return true;
+      }
+      if (showAttachmentOptions) {
+        setShowAttachmentOptions(false);
+        return true;
+      }
+      if (isKeyboardVisible) {
+        Keyboard.dismiss();
+        return true;
+      }
+      if (pendingAttachment) {
+        setPendingAttachment(null);
+        return true;
+      }
+      if (activeChat) {
+        setActiveChat(null);
+        return true;
+      }
+      // rien à gérer côté écran -> laisser la nav par défaut (changer d’onglet / quitter)
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [
+    activeChat,
+    showNewConversationModal,
+    showAttachmentOptions,
+    isKeyboardVisible,
+    pendingAttachment,
+  ])
+);
+
 
   // --------- Création / recherche d'une 1–1 via param `client` ----------
   const findOrCreateConversationWithClient = useCallback(
@@ -457,15 +510,15 @@ export default function MessagesScreen() {
         if (foundId) return await hydrateConv(foundId);
 
         // sinon créer via RPC
-const { data: convId, error: rpcErr } = await supabase.rpc(
-  'create_conversation_with_members',
-  {
-    p_actor_id: Number(user.id),        // 👈 add this
-    p_member_ids: [Number(targetClientId)],
-    p_title: null,
-    p_is_group: false,
-  }
-);
+        const { data: convId, error: rpcErr } = await supabase.rpc(
+          'create_conversation_with_members',
+          {
+            p_actor_id: Number(user.id),
+            p_member_ids: [Number(targetClientId)],
+            p_title: null,
+            p_is_group: false,
+          }
+        );
 
         if (rpcErr) throw rpcErr;
 
@@ -479,6 +532,17 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
     },
     [user]
   );
+
+  // 👂 clavier (Android & iOS)
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = () => { setKeyboardVisible(true); scrollToEndSoon(60); };
+    const onHide = () => setKeyboardVisible(false);
+    const showSub = Keyboard.addListener(showEvt, onShow);
+    const hideSub = Keyboard.addListener(hideEvt, onHide);
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, [scrollToEndSoon]);
 
   // --------- Realtime: nouveaux messages toutes conversations ----------
   useEffect(() => {
@@ -693,13 +757,13 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
       } finally {
         if (alive) {
           setIsLoadingMessages(false);
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 80);
+          scrollToEndSoon(80);
         }
       }
     };
     fetchMessages();
     return () => { alive = false; };
-  }, [activeChat, user?.id]);
+  }, [activeChat, user?.id, scrollToEndSoon]);
 
   // --------- Realtime nouveaux messages (de cette conversation) ----------
   useEffect(() => {
@@ -742,12 +806,12 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
               devError('mark read on live insert', e);
             }
           }
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
+          scrollToEndSoon(50);
         }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [activeChat?.id, user?.id]);
+  }, [activeChat?.id, user?.id, scrollToEndSoon]);
 
   // --------- Realtime reçus de lecture ----------
   useEffect(() => {
@@ -888,45 +952,44 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
 
       setDraftText('');
       setPendingAttachment(null);
+      scrollToEndSoon(40);
     } catch (e) {
       maskAndNotify('handleSend', e, "Échec de l'envoi du message.");
     }
-  }, [activeChat, currentUserId, pendingAttachment]);
+  }, [activeChat, currentUserId, pendingAttachment, scrollToEndSoon]);
 
   const handleChooseImage = useCallback(async () => {
-  // Sur web pas besoin de permission
-  if (Platform.OS !== 'web' && !mediaPermission?.granted) {
-    const permission = await requestMediaPermission();
-    if (!permission.granted) {
-      notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
-      return;
+    if (Platform.OS !== 'web' && !mediaPermission?.granted) {
+      const permission = await requestMediaPermission();
+      if (!permission.granted) {
+        notifyError('Autorisez l’accès à la médiathèque pour choisir une photo.');
+        return;
+      }
     }
-  }
 
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    allowsEditing: true,
-    aspect: [4, 3],
-    quality: 1,
-  });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 1,
+    });
 
-  if (!result.canceled && result.assets?.length) {
-    const asset = result.assets[0];
-    const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
-    const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
+    if (!result.canceled && result.assets?.length) {
+      const asset = result.assets[0];
+      const name = asset.fileName || asset.uri?.split('/').pop() || 'image.jpg';
+      const mime = asset.mimeType || guessMimeFromName(name) || 'image/jpeg';
 
-    try {
-      const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
-      setPendingAttachment({ uri: publicUrl, name, mime, isImage: true });
-    } catch (e) {
-      devError('upload image', e);
-      notifyError('Téléversement impossible. Réessayez.');
+      try {
+        const publicUrl = await uploadFileToSupabase(asset.uri, name, mime);
+        setPendingAttachment({ uri: publicUrl, name, mime, isImage: true });
+      } catch (e) {
+        devError('upload image', e);
+        notifyError('Téléversement impossible. Réessayez.');
+      }
     }
-  }
 
-  setShowAttachmentOptions(false);
-}, [mediaPermission, requestMediaPermission]);
-
+    setShowAttachmentOptions(false);
+  }, [mediaPermission, requestMediaPermission]);
 
   const handleChooseDocument = useCallback(async () => {
     try {
@@ -967,7 +1030,6 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
     }
   };
 
-  // ✅ RENDER FUNCTIONS (pas de <ChatView/> interne qui remonte/démonte)
   const renderChatList = () => (
     <ScrollView style={styles.chatList}>
       <View style={styles.headerContainer}>
@@ -1009,19 +1071,19 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
                 <View style={styles.chatItemHeader}>
                   <Text style={styles.chatItemName} numberOfLines={1}>{name}</Text>
                   {!!last && <Text style={styles.chatItemTime}>{formatSmartListTimestamp(last.timestamp)}</Text>}
-                  </View>
+                </View>
                 {!!last && (
                   <Text
                     style={[styles.chatItemLastMessage, (chat.unreadCount ?? 0) > 0 && styles.unreadMessage]}
                     numberOfLines={1}
                   >
                     {last.senderId === currentUserId ? 'Vous : ' : ''}
-                   {[
-  last.content?.trim(),
-  last.image ? '📷 Photo' : undefined,
-  last.file ? `📎 ${last.file.name}` : undefined,
-].filter(Boolean).join(' · ')}
-</Text>
+                    {[
+                      last.content?.trim(),
+                      last.image ? '📷 Photo' : undefined,
+                      last.file ? `📎 ${last.file.name}` : undefined,
+                    ].filter(Boolean).join(' · ')}
+                  </Text>
                 )}
               </View>
               {(chat.unreadCount ?? 0) > 0 && (
@@ -1049,11 +1111,17 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
     const headerAvatar = headerDisplayParticipant?.avatar || DEFAULT_AVATAR;
 
     return (
-      <KeyboardAvoidingView
-        style={styles.chatView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + headerHeight : 0}
-      >
+     <KeyboardAvoidingView
+  style={styles.chatView}
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+  keyboardVerticalOffset={
+    Platform.OS === 'ios'
+      ? insets.top + headerHeight
+      : tabBarHeight + 8 // 👈 Android : laisse la place au TabBar quand le clavier est ouvert
+  }
+>
+
+
         <View style={styles.chatHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <TouchableOpacity style={styles.backButton} onPress={() => setActiveChat(null)}>
             <ChevronLeft size={24} color="#1a1a1a" />
@@ -1074,10 +1142,10 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
           <ScrollView
             ref={scrollViewRef}
             style={styles.messagesList}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[styles.messagesContent, { paddingBottom: inputBarHeight }]}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+            onContentSizeChange={() => scrollToEndSoon(0, false)}
           >
             {messages.map((msg, index) => {
               const isOwnMessage = msg.senderId === currentUserId;
@@ -1087,11 +1155,10 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
               return (
                 <View key={msg.id}>
                   {showDate && (
-  <View style={styles.dateHeader}>
-    <Text style={styles.dateText}>{formatDayHeader(msg.timestamp)}</Text>
-  </View>
-)}
-
+                    <View style={styles.dateHeader}>
+                      <Text style={styles.dateText}>{formatDayHeader(msg.timestamp)}</Text>
+                    </View>
+                  )}
 
                   <View
                     style={[styles.messageContainer, isOwnMessage ? styles.ownMessage : styles.otherMessage]}
@@ -1100,50 +1167,46 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
                       <Text style={styles.messageSender}>{sender?.name}</Text>
                     )}
 
-                   {/* Texte s'il y en a */}
-{typeof msg.content === 'string' && msg.content.trim().length > 0 && (
-  <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
-    {msg.content}
-  </Text>
-)}
+                    {typeof msg.content === 'string' && msg.content.trim().length > 0 && (
+                      <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
+                        {msg.content}
+                      </Text>
+                    )}
 
-{/* Image si présente */}
-{msg.image && (
-  <Image source={{ uri: msg.image }} style={styles.messageImage} />
-)}
+                    {msg.image && (
+                      <Image source={{ uri: msg.image }} style={styles.messageImage} />
+                    )}
 
-{/* Document si présent */}
-{msg.file && (
-  <TouchableOpacity
-    style={[
-      styles.messageFileContainer,
-      // fond plus doux dans une bulle bleue (message envoyé)
-      isOwnMessage && { backgroundColor: 'rgba(255,255,255,0.15)' },
-    ]}
-    onPress={async () => {
-      try { await WebBrowser.openBrowserAsync(msg.file!.uri); }
-      catch { Linking.openURL(msg.file!.uri); }
-    }}
-    activeOpacity={0.7}
-  >
-    <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
-    <Text
-      style={[
-        styles.messageFileName,
-        isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
-      ]}
-      numberOfLines={1}
-      ellipsizeMode="tail"
-    >
-      {msg.file.name}
-    </Text>
-  </TouchableOpacity>
-)}
+                    {msg.file && (
+                      <TouchableOpacity
+                        style={[
+                          styles.messageFileContainer,
+                          isOwnMessage && { backgroundColor: 'rgba(255,255,255,0.15)' },
+                        ]}
+                        onPress={async () => {
+                          try { await WebBrowser.openBrowserAsync(msg.file!.uri); }
+                          catch { Linking.openURL(msg.file!.uri); }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <FileText size={24} color={isOwnMessage ? 'white' : '#1a1a1a'} />
+                        <Text
+                          style={[
+                            styles.messageFileName,
+                            isOwnMessage ? styles.ownMessageText : styles.otherMessageText,
+                          ]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {msg.file.name}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
 
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <Text style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}>
-  {formatSmartBubbleTime(msg.timestamp)}
-</Text>
+                        {formatSmartBubbleTime(msg.timestamp)}
+                      </Text>
 
                       {isOwnMessage && (
                         msg.readByAll
@@ -1158,8 +1221,18 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
           </ScrollView>
         )}
 
-        {/* ✅ Preview de la PJ en attente */}
-        <View style={{ backgroundColor: 'white' }}>
+        {/* ✅ Preview de la PJ en attente + barre d’input (hauteur mesurée) */}
+        <View
+          style={{ backgroundColor: 'white' }}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            if (h !== inputBarHeight) {
+              setInputBarHeight(h);
+              // ancre bas quand l'input grandit / options PJ ouvertes
+              scrollToEndSoon(0, false);
+            }
+          }}
+        >
           {pendingAttachment && (
             <View style={styles.pendingAttachmentBar}>
               {pendingAttachment.isImage ? (
@@ -1176,17 +1249,15 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
             </View>
           )}
 
-          <View style={{ paddingBottom: insets.bottom, backgroundColor: 'white' }}>
-            <ChatInput
-              handleSend={handleSend}
-              showAttachmentOptions={showAttachmentOptions}
-              setShowAttachmentOptions={setShowAttachmentOptions}
-              handleChooseImage={handleChooseImage}
-              handleChooseDocument={handleChooseDocument}
-              value={draftText}
-              onChangeText={setDraftText}
-            />
-          </View>
+          <ChatInput
+            handleSend={handleSend}
+            showAttachmentOptions={showAttachmentOptions}
+            setShowAttachmentOptions={setShowAttachmentOptions}
+            handleChooseImage={handleChooseImage}
+            handleChooseDocument={handleChooseDocument}
+            value={draftText}
+            onChangeText={setDraftText}
+          />
         </View>
       </KeyboardAvoidingView>
     );
@@ -1216,16 +1287,16 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
           setIsCreatingConversation(true);
           try {
             const { data: convId, error: rpcErr } = await supabase.rpc(
-  'create_conversation_with_members',
-  {
-    p_actor_id: Number(user.id),                      // 👈 add this
-    p_member_ids: selectedContacts.map(c => Number(c.id)),
-    p_title: selectedContacts.length > 1
-              ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
-              : null,
-    p_is_group: selectedContacts.length > 1,
-  }
-);
+              'create_conversation_with_members',
+              {
+                p_actor_id: Number(user.id),
+                p_member_ids: selectedContacts.map(c => Number(c.id)),
+                p_title: selectedContacts.length > 1
+                  ? `Groupe avec ${selectedContacts.map(c => c.name).join(', ')}`
+                  : null,
+                p_is_group: selectedContacts.length > 1,
+              }
+            );
 
             if (rpcErr) throw rpcErr;
 
@@ -1255,7 +1326,7 @@ const { data: convId, error: rpcErr } = await supabase.rpc(
               unreadCount: 0,
             };
 
-           setChats(prev => sortChatsByLastActivity([newChat, ...prev]));
+            setChats(prev => sortChatsByLastActivity([newChat, ...prev]));
             setActiveChat(newChat);
 
             setShowNewConversationModal(false);
