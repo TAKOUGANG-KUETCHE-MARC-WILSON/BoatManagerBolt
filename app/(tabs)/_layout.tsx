@@ -1,7 +1,7 @@
 // app/(tabs)/_layout.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Tabs } from 'expo-router';
-import { Platform, AppState, View, Text } from 'react-native';
+import { Tabs, router } from 'expo-router';
+import { Platform, AppState, View, BackHandler, Text } from 'react-native';
 import { Chrome as Home, MessageSquare, User, FileText } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
@@ -12,6 +12,7 @@ import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
 import { bootOnLoginOrReopen } from '@/src/notifications/boot';
 import { supabase } from '@/src/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native';
 
 // ---- Badge visuel sur le logo du header
 const LogoWithBadge = ({ total }: { total: number }) => (
@@ -49,6 +50,25 @@ export default function TabLayout() {
   const [unreadRequests, setUnreadRequests] = useState(0);
 
   const uid = useMemo(() => (user?.id ? Number(user.id) : undefined), [user?.id]);
+
+
+
+  useFocusEffect(
+  React.useCallback(() => {
+    if (Platform.OS !== 'android') return;
+    const onBack = () => {
+      if (router.canGoBack && router.canGoBack()) {
+        router.back();
+      } else {
+        BackHandler.exitApp();
+      }
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+    return () => sub.remove();
+  }, [])
+);
+
 
   // ---- Permissions / channel (badge icône app)
   useEffect(() => {

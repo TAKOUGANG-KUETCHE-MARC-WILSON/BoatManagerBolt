@@ -1,6 +1,6 @@
 // app/login.tsx
 import { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, BackHandler, TouchableOpacity, ImageBackground, Platform, KeyboardAvoidingView, ActivityIndicator, ScrollView, Modal, Alert } from 'react-native';
 import { Mail, Lock, ArrowLeft, Anchor, ChevronDown, LogIn } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
@@ -205,7 +205,7 @@ export default function LoginScreen() {
               if (router.canGoBack && router.canGoBack()) {
                 router.back();
               } else {
-                router.replace('/(tabs)'); // ou '/(tabs)' selon ta structure
+                BackHandler.exitApp();// ou '/(tabs)' selon ta structure
               }
             }}
           >

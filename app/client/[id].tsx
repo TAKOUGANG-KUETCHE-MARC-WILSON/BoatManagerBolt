@@ -9,27 +9,106 @@ import { useFocusEffect } from '@react-navigation/native';
 
 // Définition de l'avatar par défaut
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
+const DEFAULT_BOAT_PHOTO = 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop';
 
 
 // Fonctions utilitaires pour les URLs d'avatars
+// --- Helpers URL normalisés (comme dans le 1er fichier) ---
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
 
+const stripStoragePublicPrefix = (value: string, bucket: string) => {
+  // cas "/storage/v1/object/public/<bucket>/path/to/file.jpg"
+  const prefix = `/storage/v1/object/public/${bucket}/`;
+  const idx = value.indexOf(prefix);
+  if (idx !== -1) return value.substring(idx + prefix.length);
+  // cas "bucket/path/to/file.jpg"
+  if (value.startsWith(`${bucket}/`)) return value.substring(bucket.length + 1);
+  // cas déjà relative au bucket
+  return value;
+};
 
+// Public URL robuste
+const getPublicImageUrl = (filePath: string, bucketName: string): string => {
+  if (!filePath) return '';
+  if (isHttpUrl(filePath)) return filePath;
+  const path = stripStoragePublicPrefix(filePath, bucketName);
+  const { data } = supabase.storage.from(bucketName).getPublicUrl(path);
+  return data?.publicUrl || '';
+};
+
+// Signed URL pour avatars
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return '';
   if (isHttpUrl(value)) return value;
-
-
-  const { data, error } = await supabase
-    .storage
-    .from('avatars')
-    .createSignedUrl(value, 60 * 60 * 24 * 7); // 1h de validité
-
-
-  if (error || !data?.signedUrl) return '';
-  return data.signedUrl;
+  const path = stripStoragePublicPrefix(value, 'avatars');
+  const { data, error } = await supabase.storage.from('avatars').createSignedUrl(path, 60 * 60 * 24 * 7);
+  return (!error && data?.signedUrl) ? data.signedUrl : '';
 };
 
+// Signed URL robuste pour boat.images
+const getSignedBoatPhoto = async (value?: string) => {
+  if (!value) return '';
+  if (isHttpUrl(value)) return value;
+
+  try {
+    const bucket = 'boat.images';
+
+    // cas "/storage/v1/object/public/boat.images/..."
+    const publicPrefix = `/storage/v1/object/public/${bucket}/`;
+    const idx = value.indexOf(publicPrefix);
+    let path = value;
+    if (idx !== -1) path = value.substring(idx + publicPrefix.length);
+    // cas "boat.images/..."
+    else if (value.startsWith(`${bucket}/`)) path = value.substring(bucket.length + 1);
+
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (!error && data?.signedUrl) return data.signedUrl;
+  } catch (e) {
+    if (__DEV__) console.error('[getSignedBoatPhoto]', e);
+  }
+  return '';
+};
+
+const getBoatDisplayUrl = async (rawPath?: string): Promise<string> => {
+  if (!rawPath) return DEFAULT_BOAT_PHOTO;
+
+  // 1. Si c'est déjà une URL http ET que le bucket est public, ça peut 403 si privé.
+  //    Donc on ESSAIE d'abord de fabriquer une signed URL à partir du chemin après le prefix public.
+  let signedPhotoUrl = '';
+
+  if (
+    rawPath.includes('/storage/v1/object/public/boat.images/')
+  ) {
+    try {
+      const storagePrefix = '/storage/v1/object/public/boat.images/';
+      const idx = rawPath.indexOf(storagePrefix);
+      if (idx !== -1) {
+        const path = rawPath.substring(idx + storagePrefix.length);
+        const { data: signedUrlData, error: signedUrlError } = await supabase
+          .storage
+          .from('boat.images')
+          .createSignedUrl(path, 60 * 60 * 24 * 7);
+
+        if (!signedUrlError && signedUrlData?.signedUrl) {
+          signedPhotoUrl = signedUrlData.signedUrl;
+        }
+      }
+    } catch (e) {
+      if (__DEV__) console.error('[getBoatDisplayUrl createSignedUrl full http case]', e);
+    }
+  }
+
+  // 2. fallback via getSignedBoatPhoto (gère les cas "boat.images/xxx" etc.)
+  const altSignedOrRaw = await getSignedBoatPhoto(rawPath);
+
+  // 3. Choix final, dans le même ordre d'importance que BoatProfileScreen
+  return (
+    signedPhotoUrl ||
+    rawPath ||              // attention: dans BoatProfileScreen ils font ça aussi
+    altSignedOrRaw ||
+    DEFAULT_BOAT_PHOTO
+  );
+};
 
 interface Client {
   id: string;
@@ -77,121 +156,120 @@ export default function ClientDetailsScreen() {
 
 
   const fetchClientData = useCallback(async () => {
-    if (!id) {
-      setError("ID du client manquant.");
+  if (!id) {
+    setError("ID du client manquant.");
+    setLoading(false);
+    return;
+  }
+
+  setLoading(true);
+  setError(null);
+
+  try {
+    // 1. Fetch client details
+    const { data: clientData, error: clientError } = await supabase
+      .from('users')
+      .select(`
+        id,
+        first_name,
+        last_name,
+        avatar,
+        e_mail,
+        phone,
+        status,
+        created_at,
+        last_login,
+        user_ports(ports(name)),
+        boat(id, name, type, image)
+      `)
+      .eq('id', id)
+      .eq('profile', 'pleasure_boater')
+      .single();
+
+    if (clientError || !clientData) {
+      console.error('Error fetching client:', clientError);
+      setError('Client non trouvé.');
       setLoading(false);
       return;
     }
 
+    // ✅ Utiliser les helpers globaux
+    const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
+    const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
 
-    setLoading(true);
-    setError(null);
+    // ✅ Traiter les bateaux avec getSignedBoatPhoto (fonction globale)
+    const processedBoats = await Promise.all(
+  (clientData.boat || []).map(async (b: any) => {
+    const finalBoatImageUrl = await getBoatDisplayUrl(b.image || '');
 
-
-    try {
-      // 1. Fetch client details
-      const { data: clientData, error: clientError } = await supabase
-        .from('users')
-        .select(`
-          id,
-          first_name,
-          last_name,
-          avatar,
-          e_mail,
-          phone,
-          status,
-          created_at,
-          last_login,
-          user_ports(ports(name)),
-          boat(id, name, type, image)
-        `)
-        .eq('id', id)
-        .eq('profile', 'pleasure_boater')
-        .single();
+    return {
+      id: b.id.toString(),
+      name: b.name,
+      type: b.type,
+      image: finalBoatImageUrl, // déjà fallbacké
+      lastService: 'N/A',
+      nextService: 'N/A',
+      status: 'active' as const,
+    };
+  })
+);
 
 
-      if (clientError || !clientData) {
-        console.error('Error fetching client:', clientError);
-        setError('Client non trouvé.');
-        setLoading(false);
-        return;
-      }
+    setClient({
+      id: clientData.id,
+      name: `${clientData.first_name} ${clientData.last_name}`,
+      avatar: avatarUrl || DEFAULT_AVATAR,
+      email: clientData.e_mail,
+      phone: clientData.phone,
+      memberSince: new Date(clientData.created_at).toLocaleDateString('fr-FR', { 
+        year: 'numeric', 
+        month: 'long' 
+      }),
+      status: clientData.status,
+      lastContact: clientData.last_login 
+        ? new Date(clientData.last_login).toISOString().split('T')[0] 
+        : 'N/A',
+      port: clientPort,
+      boats: processedBoats,
+    });
 
+    // 2. Fetch service history
+    const { data: historyData, error: historyError } = await supabase
+      .from('service_request')
+      .select(`
+        id,
+        date,
+        description,
+        statut,
+        boat(id, name),
+        categorie_service(description1)
+      `)
+      .eq('id_client', id)
+      .order('date', { ascending: false });
 
-      const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
-      const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
-
-
-      const processedBoats = await Promise.all((clientData.boat || []).map(async (b: any) => {
-        // Assuming boat images are in 'boat.images' bucket
-        const boatImageUrl = await getSignedAvatarUrl(b.image);
-        // You might need to fetch lastService and nextService from other tables (e.g., service_request, rendez_vous)
-        // For now, these are placeholders or derived from request history
-        return {
-          id: b.id.toString(),
-          name: b.name,
-          type: b.type,
-          image: boatImageUrl || 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop', // Default boat image
-          lastService: 'N/A', // Placeholder
-          nextService: 'N/A', // Placeholder
-          status: 'active' as 'active' | 'maintenance' | 'inactive', // Placeholder
-        };
-      }));
-
-
-      setClient({
-        id: clientData.id,
-        name: `${clientData.first_name} ${clientData.last_name}`,
-        avatar: avatarUrl || DEFAULT_AVATAR,
-        email: clientData.e_mail,
-        phone: clientData.phone,
-        memberSince: new Date(clientData.created_at).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long' }),
-        status: clientData.status,
-        lastContact: clientData.last_login ? new Date(clientData.last_login).toISOString().split('T')[0] : 'N/A',
-        port: clientPort,
-        boats: processedBoats,
-      });
-
-
-      // 2. Fetch service history for the client
-      const { data: historyData, error: historyError } = await supabase
-        .from('service_request')
-        .select(`
-          id,
-          date,
-          description,
-          statut,
-          boat(id, name),
-          categorie_service(description1)
-        `)
-        .eq('id_client', id)
-        .order('date', { ascending: false });
-
-
-      if (historyError) {
-        console.error('Error fetching service history:', historyError);
-      } else {
-        setServiceHistory(historyData.map((req: any) => ({
-          id: req.id.toString(),
-          date: req.date,
-          type: req.categorie_service?.description1 || 'N/A',
-          description: req.description,
-          status: req.statut,
-          boat: {
-            id: req.boat?.id.toString() || 'N/A',
-            name: req.boat?.name || 'N/A',
-          },
-        })));
-      }
-
-
-    } catch (e: any) {
-      console.error('Unexpected error fetching client data:', e);
-      setError('Une erreur inattendue est survenue.');
-    } finally {
-      setLoading(false);
+    if (historyError) {
+      console.error('Error fetching service history:', historyError);
+    } else {
+      setServiceHistory(historyData.map((req: any) => ({
+        id: req.id.toString(),
+        date: req.date,
+        type: req.categorie_service?.description1 || 'N/A',
+        description: req.description,
+        status: req.statut,
+        boat: {
+          id: req.boat?.id.toString() || 'N/A',
+          name: req.boat?.name || 'N/A',
+        },
+      })));
     }
-  }, [id]);
+
+  } catch (e: any) {
+    console.error('Unexpected error fetching client data:', e);
+    setError('Une erreur inattendue est survenue.');
+  } finally {
+    setLoading(false);
+  }
+}, [id]);
 
 
   useFocusEffect(

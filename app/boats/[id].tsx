@@ -1,4 +1,3 @@
-// app/boats/[id].tsx
 import { useState, useEffect, useCallback, memo } from 'react'; // Ajoutez useCallback
 import { router, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, Image as ImageIcon, X, FileText, Calendar, PenTool as Tool, ClipboardList, Plus, Download, Upload, ChevronRight, Check, Radio, Briefcase, Anchor, Sailboat, Fish, Users, Chrome as Home, Trophy, CircleHelp as HelpCircle, Wrench, Ship, MapPin, Tag, Info, Clock, Settings, BookText, Edit } from 'lucide-react-native';
@@ -13,7 +12,6 @@ import { Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
-
 // --- Notifications & logs (prod-safe) ---
 const notifyError = (msg: string) => {
   if (Platform.OS === 'android') {
@@ -25,7 +23,6 @@ const notifyError = (msg: string) => {
   }
 };
 
-
 const notifyInfo = (msg: string) => {
   if (Platform.OS === 'android') {
     // @ts-ignore
@@ -35,24 +32,20 @@ const notifyInfo = (msg: string) => {
   }
 };
 
-
 const log = (...args: any[]) => { if (__DEV__) console.log(...args); };
 const logError = (scope: string, err: unknown) => {
   if (__DEV__) console.error(`[${scope}]`, err);
   // Intégration Sentry/Bugsnag possible ici
 };
 
-
 // --- Helpers URL image bateau ---
 const DEFAULT_BOAT_PHOTO = 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop';
 const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
-
 
 const getSignedBoatPhoto = async (value?: string) => {
   try {
     if (!value) return DEFAULT_BOAT_PHOTO;
     if (isHttpUrl(value)) return value;
-
 
     // cas "storage/v1/object/public/boat.images/xxx"
     const prefix = '/storage/v1/object/public/boat.images/';
@@ -62,7 +55,6 @@ const getSignedBoatPhoto = async (value?: string) => {
       const { data, error } = await supabase.storage.from('boat.images').createSignedUrl(path, 60 * 60 * 24 * 7);
       if (!error && data?.signedUrl) return data.signedUrl;
     }
-
 
     // cas chemin interne bucket: "boat.images/.../file.jpg"
     if (value.startsWith('boat.images/')) {
@@ -74,9 +66,6 @@ const getSignedBoatPhoto = async (value?: string) => {
   }
   return DEFAULT_BOAT_PHOTO;
 };
-
-
-
 
 
 
@@ -95,7 +84,6 @@ interface BoatDetails {
   place_de_port: string; // Added place_de_port
 }
 
-
 interface UserDocument {
   id: string;
   name: string;
@@ -103,7 +91,6 @@ interface UserDocument {
   date: string;
   file_url: string;
 }
-
 
 interface TechnicalRecord {
   id: string;
@@ -113,7 +100,6 @@ interface TechnicalRecord {
   performedBy: string;
   documents?: UserDocument[]; // Assuming technical records can have documents
 }
-
 
 interface InventoryItem {
   id: string;
@@ -126,7 +112,6 @@ interface InventoryItem {
   notes?: string;
   description?: string
 }
-
 
 interface UsageType {
   legalNature: 'personal' | 'professional' | null;
@@ -145,7 +130,6 @@ interface UsageType {
   };
 }
 
-
 // Extracted and memoized UsageTypeTab component
 const UsageTypeTab = memo(({
   boatId, // Pass boatId to save usage type
@@ -160,7 +144,6 @@ const UsageTypeTab = memo(({
 }) => {
   const [isLeaseEndDatePickerVisible, setIsLeaseEndDatePickerVisible] = useState(false);
 
-
   const handleSetLegalNature = useCallback((nature: 'personal' | 'professional') => {
     setUsageType(prev => ({
       ...prev,
@@ -168,14 +151,12 @@ const UsageTypeTab = memo(({
     }));
   }, [setUsageType]);
 
-
   const handleSetOwnershipStatus = useCallback((status: 'full_ownership' | 'joint_ownership' | 'financial_lease') => {
     setUsageType(prev => ({
       ...prev,
       ownershipStatus: status
     }));
   }, [setUsageType]);
-
 
   const handleToggleUsagePurpose = useCallback((purpose: keyof UsageType['usagePurposes']) => {
     setUsageType(prev => ({
@@ -187,13 +168,11 @@ const UsageTypeTab = memo(({
     }));
   }, [setUsageType]);
 
-
   const handleSaveUsageType = useCallback(async () => {
   if (!boatId) {
     notifyError('ID du bateau manquant pour enregistrer ces informations.');
     return;
   }
-
 
   const updatedUsageType: UsageType = {
     ...usageType,
@@ -204,7 +183,6 @@ const UsageTypeTab = memo(({
       otherDescription: usageType.usagePurposes.other ? otherUsageDescription : undefined,
     },
   };
-
 
   try {
     const { error } = await supabase
@@ -224,7 +202,6 @@ const UsageTypeTab = memo(({
       .select()
       .single();
 
-
     if (error) {
       logError('saveUsageType', error);
       notifyError(`Échec de l'enregistrement (${error.message}).`);
@@ -236,7 +213,6 @@ const UsageTypeTab = memo(({
     notifyError('Erreur inattendue lors de l’enregistrement.');
   }
 }, [boatId, usageType, leaseType, leaseEndDate, otherUsageDescription]);
-
 
   return (
     <View style={styles.tabContent}>
@@ -260,7 +236,6 @@ const UsageTypeTab = memo(({
             <Text style={styles.optionText}>Particulier</Text>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetLegalNature('professional')}
@@ -278,7 +253,6 @@ const UsageTypeTab = memo(({
           </TouchableOpacity>
         </View>
       </View>
-
 
       {/* Ownership Status Section */}
       <View style={styles.usageSection}>
@@ -300,7 +274,6 @@ const UsageTypeTab = memo(({
             <Text style={styles.optionText}>Pleine propriété</Text>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetOwnershipStatus('joint_ownership')}
@@ -317,7 +290,6 @@ const UsageTypeTab = memo(({
             <Text style={styles.optionText}>Indivision</Text>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleSetOwnershipStatus('financial_lease')}
@@ -333,7 +305,6 @@ const UsageTypeTab = memo(({
             </View>
             <Text style={styles.optionText}>Location financière</Text>
           </TouchableOpacity>
-
 
           {usageType.ownershipStatus === 'financial_lease' && (
             <View style={styles.leaseDetailsContainer}>
@@ -367,7 +338,6 @@ const UsageTypeTab = memo(({
         </View>
       </View>
 
-
       {/* Usage Purposes Section */}
       <View style={styles.usageSection}>
         <Text style={styles.usageSectionTitle}>Utilisation</Text>
@@ -391,7 +361,6 @@ const UsageTypeTab = memo(({
             </View>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('fishing')}
@@ -410,7 +379,6 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Pêche</Text>
             </View>
           </TouchableOpacity>
-
 
           <TouchableOpacity
             style={styles.optionRow}
@@ -431,7 +399,6 @@ const UsageTypeTab = memo(({
             </View>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('charter')}
@@ -450,7 +417,6 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Charter/Location</Text>
             </View>
           </TouchableOpacity>
-
 
           <TouchableOpacity
             style={styles.optionRow}
@@ -471,7 +437,6 @@ const UsageTypeTab = memo(({
             </View>
           </TouchableOpacity>
 
-
           <TouchableOpacity
             style={styles.optionRow}
             onPress={() => handleToggleUsagePurpose('permanentHousing')}
@@ -490,7 +455,6 @@ const UsageTypeTab = memo(({
               <Text style={styles.optionText}>Habitat permanent</Text>
             </View>
           </TouchableOpacity>
-
 
           <TouchableOpacity
             style={styles.optionRow}
@@ -511,7 +475,6 @@ const UsageTypeTab = memo(({
             </View>
           </TouchableOpacity>
 
-
           {usageType.usagePurposes.other && (
             <View style={styles.otherUsageContainer}>
               <TextInput
@@ -526,7 +489,6 @@ const UsageTypeTab = memo(({
         </View>
       </View>
 
-
       <TouchableOpacity
         style={styles.saveUsageButton}
         onPress={handleSaveUsageType}
@@ -535,10 +497,8 @@ const UsageTypeTab = memo(({
       </TouchableOpacity>
     </View>
 
-
   );
 });
-
 
 export default function BoatProfileScreen() {
   const { id } = useLocalSearchParams();
@@ -562,7 +522,6 @@ export default function BoatProfileScreen() {
     }
   });
 
-
   const [showAddDocumentModal, setShowAddDocumentModal] = useState(false);
   const [showAddTechnicalRecordModal, setShowAddTechnicalRecordModal] = useState(false);
   const [showAddInventoryItemModal, setShowAddInventoryItemModal] = useState(false);
@@ -572,7 +531,6 @@ export default function BoatProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-
   // Move fetchBoatData outside useEffect to be reusable and memoized
   const fetchBoatData = useCallback(async () => {
     if (!id || typeof id !== 'string') {
@@ -580,7 +538,6 @@ export default function BoatProfileScreen() {
       setLoading(false);
       return;
     }
-
 
     setLoading(true);
     setFetchError(null);
@@ -606,7 +563,6 @@ export default function BoatProfileScreen() {
         .eq('id', id)
         .single();
 
-
       if (boatError) {
         if (boatError.code === 'PGRST116') {
           setFetchError('Bateau non trouvé.');
@@ -618,11 +574,26 @@ export default function BoatProfileScreen() {
         return;
       }
 
-
       if (boatData) {
-        // MODIFIÉ : Utilisation de getSignedBoatPhoto pour obtenir l'URL de la photo
+        let signedPhotoUrl = '';
+        if (
+          boatData.image &&
+          boatData.image.includes('/storage/v1/object/public/boat.images/')
+        ) {
+          const storagePrefix = '/storage/v1/object/public/boat.images/';
+          const idx = boatData.image.indexOf(storagePrefix);
+          if (idx !== -1) {
+            const path = boatData.image.substring(idx + storagePrefix.length);
+            const { data: signedUrlData, error: signedUrlError } = await supabase
+              .storage
+              .from('boat.images')
+              .createSignedUrl(path, 60 * 60 * 24 * 7);
+            if (!signedUrlError) {
+              signedPhotoUrl = signedUrlData?.signedUrl ?? '';
+            }
+          }
+        }
         const photoUrl = await getSignedBoatPhoto(boatData.image || '');
-       
         setBoatDetails({
           id: boatData.id.toString(),
           name: boatData.name || 'N/A',
@@ -634,18 +605,17 @@ export default function BoatProfileScreen() {
           engineHours: boatData.temps_moteur || 'N/A',
           length: boatData.longueur || 'N/A',
           homePort: boatData.ports?.name || 'N/A',
-          // MODIFIÉ : Utilisation de photoUrl ou de l'URL de secours
-          photo: photoUrl, // getSignedBoatPhoto retourne déjà DEFAULT_BOAT_PHOTO si pas d'image
+          photo: signedPhotoUrl ||
+            boatData.image || photoUrl ||
+            'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop',
           place_de_port: boatData.place_de_port || 'N/A',
         });
-
 
         // Fetch inventory items
         const { data: inventoryData, error: inventoryError } = await supabase
           .from('boat_inventory')
-          .select('id, name, description, brand, model, serial_number, purchase_date, notes')
+          .select('id, name, category, description, brand, model, serial_number, purchase_date, notes')
           .eq('boat_id', id);
-
 
         if (inventoryError) {
           console.error('Error fetching inventory:', inventoryError);
@@ -663,13 +633,11 @@ export default function BoatProfileScreen() {
           })));
         }
 
-
         // Fetch user documents
         const { data: documentsData, error: documentsError } = await supabase
           .from('user_documents')
           .select('id, name, type, date, file_url')
           .eq('id_boat', id);
-
 
         if (documentsError) {
           console.error('Error fetching documents:', documentsError);
@@ -683,13 +651,11 @@ export default function BoatProfileScreen() {
           })));
         }
 
-
         // Fetch technical records
         const { data: technicalRecordsData, error: technicalRecordsError } = await supabase
           .from('boat_technical_records')
           .select('id, title, description, date, performed_by')
           .eq('boat_id', id);
-
 
         if (technicalRecordsError) {
           console.error('Error fetching technical records:', technicalRecordsError);
@@ -703,14 +669,12 @@ export default function BoatProfileScreen() {
           })));
         }
 
-
         // Fetch usage type
         const { data: usageTypeData, error: usageTypeError } = await supabase
           .from('boat_usage_types')
           .select('*')
           .eq('boat_id', id)
           .single();
-
 
         if (usageTypeError && usageTypeError.code !== 'PGRST116') { // PGRST116 means no rows found
           console.error('Error fetching usage type:', usageTypeError);
@@ -731,7 +695,6 @@ export default function BoatProfileScreen() {
           setOtherUsageDescription(usageTypeData.other_description || '');
         }
 
-
       } else {
         setFetchError('Bateau non trouvé.');
       }
@@ -743,7 +706,6 @@ export default function BoatProfileScreen() {
     }
   }, [id, user]); // Re-fetch if user changes (e.g., permissions)
 
-
   // Use useFocusEffect to re-fetch data when the screen comes into focus
   useFocusEffect(
     useCallback(() => {
@@ -752,46 +714,37 @@ export default function BoatProfileScreen() {
     }, [fetchBoatData]) // Dependency: fetchBoatData (which is memoized)
   );
 
-
   const handleEditBoat = () => {
     router.push(`/boats/edit/${id}`);
   };
-
 
   const handleAddDocument = () => {
     router.push(`/boats/document/new?boatId=${id}`);
   };
 
-
   const handleAddTechnicalRecord = () => {
     router.push(`/boats/technical/new?boatId=${id}`);
   };
-
 
   const handleAddInventoryItem = () => {
     router.push(`/boats/inventory/new?boatId=${id}`);
   };
 
-
   const handleOpenInventory = () => {
     router.push(`/boats/inventory?boatId=${id}`);
   };
-
 
   const handleViewDocument = (document: UserDocument) => {
     router.push(`/boats/document/${document.id}?boatId=${id}`);
   };
 
-
   const handleViewTechnicalRecord = (record: TechnicalRecord) => {
     router.push(`/boats/technical/${record.id}?boatId=${id}`);
   };
 
-
   const handleViewInventoryItem = (item: InventoryItem) => {
     router.push(`/boats/inventory/${item.id}?boatId=${id}`);
   };
-
 
   if (loading) {
     return (
@@ -816,7 +769,6 @@ export default function BoatProfileScreen() {
       </SafeAreaView>
     );
   }
-
 
   if (fetchError || !boatDetails) {
     return (
@@ -847,7 +799,6 @@ export default function BoatProfileScreen() {
     );
   }
 
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top','left','right']}>
     <Stack.Screen options={{ headerShown: false }} />
@@ -869,13 +820,11 @@ export default function BoatProfileScreen() {
         </TouchableOpacity>
       </View>
 
-
       <Image
     source={{ uri: boatDetails.photo }}
     style={styles.boatImage}
     resizeMode="cover"
   />
-
 
       <View style={styles.tabs}>
         <TouchableOpacity
@@ -919,7 +868,6 @@ export default function BoatProfileScreen() {
           </Text>
         </TouchableOpacity>
       </View>
-
 
       {activeTab === 'general' && (
         <View style={styles.tabContent}>
@@ -973,14 +921,12 @@ export default function BoatProfileScreen() {
         </View>
       )}
 
-
       {activeTab === 'documents' && (
         <View style={styles.tabContent}>
           <TouchableOpacity style={styles.addButton} onPress={handleAddDocument}>
             <Plus size={20} color="#0066CC" />
             <Text style={styles.addButtonText}>Ajouter un document</Text>
           </TouchableOpacity>
-
 
           {documents.length > 0 ? (
             <View style={styles.documentsList}>
@@ -1011,14 +957,12 @@ export default function BoatProfileScreen() {
         </View>
       )}
 
-
       {activeTab === 'technical' && (
         <View style={styles.tabContent}>
           <TouchableOpacity style={styles.addButton} onPress={handleAddTechnicalRecord}>
             <Plus size={20} color="#0066CC" />
             <Text style={styles.addButtonText}>Ajouter une intervention</Text>
           </TouchableOpacity>
-
 
           {technicalRecords.length > 0 ? (
             <View style={styles.recordsList}>
@@ -1046,9 +990,7 @@ export default function BoatProfileScreen() {
           )}
         </View>
 
-
       )}
-
 
       {activeTab === 'inventory' && (
         <View style={styles.tabContent}>
@@ -1061,7 +1003,6 @@ export default function BoatProfileScreen() {
               <Text style={styles.addButtonText}>Ajouter un équipement</Text>
             </TouchableOpacity>
 
-
             {/* <TouchableOpacity
               style={styles.checklistButton}
               onPress={handleOpenInventory}
@@ -1070,7 +1011,6 @@ export default function BoatProfileScreen() {
               <Text style={styles.checklistButtonText}>Inventaire complet</Text>
             </TouchableOpacity> */}
           </View>
-
 
           {inventory.length > 0 ? (
             <View style={styles.inventoryList}>
@@ -1105,7 +1045,6 @@ export default function BoatProfileScreen() {
         </View>
       )}
 
-
       {activeTab === 'usage' && (
         <UsageTypeTab
           boatId={id}
@@ -1122,17 +1061,14 @@ export default function BoatProfileScreen() {
     </ScrollView>
     </SafeAreaView>
 
-
   );
 }
-
 
 const styles = StyleSheet.create({
    safeArea: {
     flex: 1,
     backgroundColor: '#fff', // même couleur que le header
   },
-
 
   container: {
     flex: 1,
@@ -1418,11 +1354,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   inventoryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
     backgroundColor: 'white',
     borderRadius: 12,
+    padding: 16,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -1565,6 +1499,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
     gap: 16,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
   },
   errorButton: {
     backgroundColor: '#0066CC',
@@ -1764,6 +1703,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
-
-
