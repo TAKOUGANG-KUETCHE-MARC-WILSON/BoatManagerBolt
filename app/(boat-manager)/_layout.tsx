@@ -1,8 +1,23 @@
 // app/(boat-manager)/_layout.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, TouchableOpacity, AppState, View, Text } from 'react-native';
-import { Tabs, router } from 'expo-router';
-import { Users, FileText, MessageSquare, User, Calendar, Plus, ArrowLeft } from 'lucide-react-native';
+import {
+  Platform,
+  TouchableOpacity,
+  AppState,
+  View,
+  Text,
+  BackHandler, // ⬅️ ajout
+} from 'react-native';
+import { Tabs, router, usePathname } from 'expo-router'; // ⬅️ usePathname importé ici
+import {
+  Users,
+  FileText,
+  MessageSquare,
+  User,
+  Calendar,
+  Plus,
+  ArrowLeft,
+} from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -11,6 +26,7 @@ import { useResetBadgeOnLogout } from '@/app/services/utils/useResetBadgeOnLogou
 import { Logo } from '../../components/Logo';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native'; // ⬅️ on l'utilise pour écouter le back quand ce layout est focus
 
 // ---------- Logo + badge dans le header
 const LogoWithBadge = ({ total }: { total: number }) => (
@@ -49,6 +65,65 @@ export default function BoatManagerTabLayout() {
 
   const uid = useMemo(() => (user?.id ? Number(user.id) : undefined), [user?.id]);
   const isBoatManager = user?.role === 'boat_manager';
+
+  const pathname = usePathname(); // ⬅️ ex: "/(boat-manager)/clients", "/(boat-manager)/clients-list", etc.
+
+  // --- INTERCEPTION DU BOUTON BACK ANDROID ---
+  // Règle :
+  //  - si on est sur un onglet racine (clients / requests / company-request / planning / messages / profile)
+  //    => quitter l'app
+  //  - sinon (ex: clients-list, quote-upload, etc.)
+  //    => juste router.back()
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return;
+
+      const onBackPress = () => {
+        // on extrait juste la dernière partie du chemin
+        // "/(boat-manager)/clients-list" -> "clients-list"
+        // "/(boat-manager)/clients" -> "clients"
+        const lastSegment = pathname
+          .split('/')
+          .filter(Boolean)
+          .pop() || '';
+
+        // Les écrans racine des tabs boat manager :
+        const ROOT_TABS = [
+          'clients',          // Accueil
+          'requests',         // Demandes
+          'company-request',  // Création demande
+          'planning',         // Planning
+          'messages',         // Messagerie
+          'profile',          // Profil
+        ];
+
+        const isOnRootTab = ROOT_TABS.includes(lastSegment);
+
+        if (isOnRootTab) {
+          // 🛑 au lieu de revenir vers un autre layout / welcome-unauthenticated
+          // on ferme carrément l'app.
+          BackHandler.exitApp();
+          return true;
+        }
+
+        // Sinon on est sur un écran "secondaire" (ex: clients-list, quote-upload...)
+        // -> on revient en arrière dans l'app, pas besoin d'aller ailleurs
+        if (router.canGoBack()) {
+          router.back();
+          return true;
+        }
+
+        // fallback parano : si pour une raison chelou on ne peut pas revenir,
+        // on ferme l'app pour éviter d'afficher un autre rôle
+        BackHandler.exitApp();
+        return true;
+      };
+
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => sub.remove();
+    }, [pathname])
+  );
+  // --- FIN interception back ---
 
   const formatBadge = (n: number) => (n > 0 ? (n > 99 ? '99+' : n) : undefined);
 
@@ -89,7 +164,12 @@ export default function BoatManagerTabLayout() {
         .select('unread_count')
         .eq('user_id', uid);
 
-      totalMsg = error ? 0 : (data ?? []).reduce((s, r: any) => s + Number(r.unread_count || 0), 0);
+      totalMsg = error
+        ? 0
+        : (data ?? []).reduce(
+            (s, r: any) => s + Number(r.unread_count || 0),
+            0
+          );
       setUnreadMessages(totalMsg);
     } catch {
       totalMsg = 0;
@@ -111,13 +191,14 @@ export default function BoatManagerTabLayout() {
       setUnreadRequests(0);
     }
 
-    // 3) ✅ Badge d’icône = SOMME immédiate (ne dépend pas du state)
+    // 3) ✅ Badge d’icône = SOMME immédiate
     await Notifications.setBadgeCountAsync(totalMsg + totalReq).catch(() => {});
   }, [uid]);
 
   // ---- Garde-fou + premier chargement
   useEffect(() => {
     if (!isBoatManager) {
+      // si jamais un autre rôle se retrouve ici par erreur => renvoyer vers l'app plaisancier
       router.replace('/(tabs)');
       return;
     }
@@ -132,12 +213,22 @@ export default function BoatManagerTabLayout() {
       .channel(`bm-badges-${uid}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'user_conversation_unreads', filter: `user_id=eq.${uid}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_conversation_unreads',
+          filter: `user_id=eq.${uid}`,
+        },
         () => fetchUnreadCounts()
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'service_request', filter: `id_boat_manager=eq.${uid}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'service_request',
+          filter: `id_boat_manager=eq.${uid}`,
+        },
         () => fetchUnreadCounts()
       )
       .subscribe();
@@ -162,7 +253,10 @@ export default function BoatManagerTabLayout() {
   }, [uid]);
 
   // ✅ somme unique pour le header
-  const totalForLogo = useMemo(() => unreadMessages + unreadRequests, [unreadMessages, unreadRequests]);
+  const totalForLogo = useMemo(
+    () => unreadMessages + unreadRequests,
+    [unreadMessages, unreadRequests]
+  );
 
   if (!isBoatManager) return null;
 
@@ -171,7 +265,6 @@ export default function BoatManagerTabLayout() {
       <StatusBar style="dark" backgroundColor="#ffffff" hidden={false} />
 
       <Tabs
-      
         screenOptions={{
           headerShown: true,
           tabBarActiveTintColor: '#0066CC',
@@ -185,9 +278,10 @@ export default function BoatManagerTabLayout() {
           name="clients"
           options={{
             title: 'Accueil',
-            tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
-            // ✅ passe explicitement la SOMME au logo
-            headerTitle: () => <LogoWithBadge  />,
+            tabBarIcon: ({ color, size }) => (
+              <Users color={color} size={size} />
+            ),
+            headerTitle: () => <LogoWithBadge />,
           }}
         />
 
@@ -195,7 +289,9 @@ export default function BoatManagerTabLayout() {
           name="requests"
           options={{
             title: 'Demandes',
-            tabBarIcon: ({ color, size }) => <FileText color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <FileText color={color} size={size} />
+            ),
             tabBarBadge: formatBadge(unreadRequests),
             tabBarBadgeStyle: { backgroundColor: '#EF4444' },
           }}
@@ -205,7 +301,9 @@ export default function BoatManagerTabLayout() {
           name="company-request"
           options={{
             title: 'Création demande',
-            tabBarIcon: ({ color, size }) => <Plus color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <Plus color={color} size={size} />
+            ),
           }}
         />
 
@@ -213,7 +311,9 @@ export default function BoatManagerTabLayout() {
           name="planning"
           options={{
             title: 'Planning',
-            tabBarIcon: ({ color, size }) => <Calendar color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <Calendar color={color} size={size} />
+            ),
           }}
         />
 
@@ -221,7 +321,9 @@ export default function BoatManagerTabLayout() {
           name="messages"
           options={{
             title: 'Messagerie',
-            tabBarIcon: ({ color, size }) => <MessageSquare color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <MessageSquare color={color} size={size} />
+            ),
             tabBarBadge: formatBadge(unreadMessages),
             tabBarBadgeStyle: { backgroundColor: '#EF4444' },
           }}
@@ -231,14 +333,25 @@ export default function BoatManagerTabLayout() {
           name="profile"
           options={{
             title: 'Profil',
-            tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <User color={color} size={size} />
+            ),
           }}
         />
 
-        {/* écrans masqués */}
-        <Tabs.Screen name="quote-upload" options={{ title: 'Devis', headerShown: true, href: null }} />
-        <Tabs.Screen name="other-boat-managers-list" options={{ title: 'Devis', headerShown: false, href: null }} />
-        <Tabs.Screen name="headquarters-contacts-list" options={{ title: 'Devis', headerShown: false, href: null }} />
+        {/* écrans masqués (push internes) */}
+        <Tabs.Screen
+          name="quote-upload"
+          options={{ title: 'Devis', headerShown: true, href: null }}
+        />
+        <Tabs.Screen
+          name="other-boat-managers-list"
+          options={{ title: 'Devis', headerShown: false, href: null }}
+        />
+        <Tabs.Screen
+          name="headquarters-contacts-list"
+          options={{ title: 'Devis', headerShown: false, href: null }}
+        />
         <Tabs.Screen
           name="clients-list"
           options={{
@@ -246,9 +359,14 @@ export default function BoatManagerTabLayout() {
             href: null,
             headerLargeTitle: false,
             headerTitleStyle: { fontSize: 16, fontWeight: '600' },
-            headerStyle: { height: Platform.OS === 'ios' ? 48 : 56 },
+            headerStyle: {
+              height: Platform.OS === 'ios' ? 48 : 56,
+            },
             headerLeft: () => (
-              <TouchableOpacity onPress={() => router.back()} style={{ paddingHorizontal: 12 }}>
+              <TouchableOpacity
+                onPress={() => router.back()}
+                style={{ paddingHorizontal: 12 }}
+              >
                 <ArrowLeft size={20} color="#1a1a1a" />
               </TouchableOpacity>
             ),

@@ -1073,12 +1073,40 @@ useFocusEffect(
     if (Platform.OS !== 'android') return;
 
     const onBackPress = () => {
-      if (showNewConversationModal) { setShowNewConversationModal(false); return true; }
-      if (showAttachmentOptions) { setShowAttachmentOptions(false); return true; }
-      if (isKeyboardVisible) { Keyboard.dismiss(); return true; }
-      if (pendingAttachment) { setPendingAttachment(null); return true; }
-      if (activeChat) { setActiveChat(null); return true; }
-      return false;
+      // 1. Si une modale "nouvelle conversation" est ouverte -> on la ferme
+      if (showNewConversationModal) {
+        setShowNewConversationModal(false);
+        return true;
+      }
+
+      // 2. Si le menu pièces jointes est ouvert -> on le ferme
+      if (showAttachmentOptions) {
+        setShowAttachmentOptions(false);
+        return true;
+      }
+
+      // 3. Si le clavier est ouvert -> on le ferme
+      if (isKeyboardVisible) {
+        Keyboard.dismiss();
+        return true;
+      }
+
+      // 4. Si on a une pièce jointe en attente -> on l'annule
+      if (pendingAttachment) {
+        setPendingAttachment(null);
+        return true;
+      }
+
+      // 5. Si on est DANS une conversation -> on revient juste à la liste des chats
+      if (activeChat) {
+        setActiveChat(null);
+        return true;
+      }
+
+      // 6. Sinon on est déjà à la liste générale des conversations :
+      // -> on QUITTE l'app au lieu de revenir en arrière vers un autre écran
+      BackHandler.exitApp();
+      return true;
     };
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
@@ -1091,6 +1119,7 @@ useFocusEffect(
     pendingAttachment,
   ])
 );
+
   const renderChatView = () => {
     if (!activeChat) return null;
 
