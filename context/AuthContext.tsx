@@ -466,7 +466,7 @@ bcrypt.setRandomFallback((len: number) => {
 
 
 
-    let newStatus = 'inactive';
+    let newStatus = 'active';
     if (userInDb.last_login) {
       const lastLoginDate = new Date(userInDb.last_login);
       if (lastLoginDate < threeMonthsAgo) {

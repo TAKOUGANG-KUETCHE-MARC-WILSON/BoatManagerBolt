@@ -1,33 +1,51 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, ActivityIndicator, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Image,
+  TouchableOpacity,
+  Platform,
+  ActivityIndicator,
+  Alert,
+  StatusBar,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Phone, Mail, Bot as Boat, MessageSquare, FileText, MapPin, Calendar, CircleCheck as CheckCircle2, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import {
+  ArrowLeft,
+  Phone,
+  Mail,
+  Bot as Boat,
+  MessageSquare,
+  FileText,
+  MapPin,
+  Calendar,
+  CircleCheck as CheckCircle2,
+  ChevronRight,
+} from 'lucide-react-native';
 import { supabase } from '@/src/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 
-
 // Définition de l'avatar par défaut
 const DEFAULT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/1077/1077114.png';
-const DEFAULT_BOAT_PHOTO = 'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop';
+const DEFAULT_BOAT_PHOTO =
+  'https://images.unsplash.com/photo-1605281317010-fe5ffe798166?q=80&w=2044&auto=format&fit=crop';
 
-
-// Fonctions utilitaires pour les URLs d'avatars
-// --- Helpers URL normalisés (comme dans le 1er fichier) ---
-const isHttpUrl = (v?: string) => !!v && (v.startsWith('http://') || v.startsWith('https://'));
+// Helpers URL
+const isHttpUrl = (v?: string) =>
+  !!v && (v.startsWith('http://') || v.startsWith('https://'));
 
 const stripStoragePublicPrefix = (value: string, bucket: string) => {
-  // cas "/storage/v1/object/public/<bucket>/path/to/file.jpg"
   const prefix = `/storage/v1/object/public/${bucket}/`;
   const idx = value.indexOf(prefix);
   if (idx !== -1) return value.substring(idx + prefix.length);
-  // cas "bucket/path/to/file.jpg"
   if (value.startsWith(`${bucket}/`)) return value.substring(bucket.length + 1);
-  // cas déjà relative au bucket
   return value;
 };
 
-// Public URL robuste
 const getPublicImageUrl = (filePath: string, bucketName: string): string => {
   if (!filePath) return '';
   if (isHttpUrl(filePath)) return filePath;
@@ -36,16 +54,16 @@ const getPublicImageUrl = (filePath: string, bucketName: string): string => {
   return data?.publicUrl || '';
 };
 
-// Signed URL pour avatars
 const getSignedAvatarUrl = async (value?: string) => {
   if (!value) return '';
   if (isHttpUrl(value)) return value;
   const path = stripStoragePublicPrefix(value, 'avatars');
-  const { data, error } = await supabase.storage.from('avatars').createSignedUrl(path, 60 * 60 * 24 * 7);
-  return (!error && data?.signedUrl) ? data.signedUrl : '';
+  const { data, error } = await supabase.storage
+    .from('avatars')
+    .createSignedUrl(path, 60 * 60 * 24 * 7);
+  return !error && data?.signedUrl ? data.signedUrl : '';
 };
 
-// Signed URL robuste pour boat.images
 const getSignedBoatPhoto = async (value?: string) => {
   if (!value) return '';
   if (isHttpUrl(value)) return value;
@@ -53,15 +71,17 @@ const getSignedBoatPhoto = async (value?: string) => {
   try {
     const bucket = 'boat.images';
 
-    // cas "/storage/v1/object/public/boat.images/..."
     const publicPrefix = `/storage/v1/object/public/${bucket}/`;
     const idx = value.indexOf(publicPrefix);
     let path = value;
     if (idx !== -1) path = value.substring(idx + publicPrefix.length);
-    // cas "boat.images/..."
-    else if (value.startsWith(`${bucket}/`)) path = value.substring(bucket.length + 1);
+    else if (value.startsWith(`${bucket}/`))
+      path = value.substring(bucket.length + 1);
 
-    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(path, 60 * 60 * 24 * 7);
+
     if (!error && data?.signedUrl) return data.signedUrl;
   } catch (e) {
     if (__DEV__) console.error('[getSignedBoatPhoto]', e);
@@ -72,42 +92,32 @@ const getSignedBoatPhoto = async (value?: string) => {
 const getBoatDisplayUrl = async (rawPath?: string): Promise<string> => {
   if (!rawPath) return DEFAULT_BOAT_PHOTO;
 
-  // 1. Si c'est déjà une URL http ET que le bucket est public, ça peut 403 si privé.
-  //    Donc on ESSAIE d'abord de fabriquer une signed URL à partir du chemin après le prefix public.
   let signedPhotoUrl = '';
 
-  if (
-    rawPath.includes('/storage/v1/object/public/boat.images/')
-  ) {
+  if (rawPath.includes('/storage/v1/object/public/boat.images/')) {
     try {
       const storagePrefix = '/storage/v1/object/public/boat.images/';
       const idx = rawPath.indexOf(storagePrefix);
       if (idx !== -1) {
         const path = rawPath.substring(idx + storagePrefix.length);
-        const { data: signedUrlData, error: signedUrlError } = await supabase
-          .storage
-          .from('boat.images')
-          .createSignedUrl(path, 60 * 60 * 24 * 7);
+        const { data: signedUrlData, error: signedUrlError } =
+          await supabase.storage
+            .from('boat.images')
+            .createSignedUrl(path, 60 * 60 * 24 * 7);
 
         if (!signedUrlError && signedUrlData?.signedUrl) {
           signedPhotoUrl = signedUrlData.signedUrl;
         }
       }
     } catch (e) {
-      if (__DEV__) console.error('[getBoatDisplayUrl createSignedUrl full http case]', e);
+      if (__DEV__)
+        console.error('[getBoatDisplayUrl createSignedUrl full http case]', e);
     }
   }
 
-  // 2. fallback via getSignedBoatPhoto (gère les cas "boat.images/xxx" etc.)
   const altSignedOrRaw = await getSignedBoatPhoto(rawPath);
 
-  // 3. Choix final, dans le même ordre d'importance que BoatProfileScreen
-  return (
-    signedPhotoUrl ||
-    rawPath ||              // attention: dans BoatProfileScreen ils font ça aussi
-    altSignedOrRaw ||
-    DEFAULT_BOAT_PHOTO
-  );
+  return signedPhotoUrl || rawPath || altSignedOrRaw || DEFAULT_BOAT_PHOTO;
 };
 
 interface Client {
@@ -122,28 +132,37 @@ interface Client {
     name: string;
     type: string;
     image: string;
-    lastService?: string; // Derived from service_request
-    nextService?: string; // Derived from service_request
-    status: 'active' | 'maintenance' | 'inactive'; // Derived client-side
+    lastService?: string;
+    nextService?: string;
+    status: 'active' | 'maintenance' | 'inactive';
   }>;
   lastContact?: string;
-  status: 'active' | 'pending' | 'inactive'; // This status is from DB
+  status: 'active' | 'pending' | 'inactive';
   port: string;
 }
-
 
 interface ServiceHistory {
   id: string;
   date: string;
-  type: string; // Categorie service description1
-  description: string; // Service request description
-  status: 'submitted' | 'in_progress' | 'forwarded' | 'quote_sent' | 'quote_accepted' | 'scheduled' | 'completed' | 'ready_to_bill' | 'to_pay' | 'paid' | 'cancelled';
+  type: string;
+  description: string;
+  status:
+    | 'submitted'
+    | 'in_progress'
+    | 'forwarded'
+    | 'quote_sent'
+    | 'quote_accepted'
+    | 'scheduled'
+    | 'completed'
+    | 'ready_to_bill'
+    | 'to_pay'
+    | 'paid'
+    | 'cancelled';
   boat: {
     id: string;
     name: string;
   };
 }
-
 
 export default function ClientDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -154,22 +173,22 @@ export default function ClientDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-
   const fetchClientData = useCallback(async () => {
-  if (!id) {
-    setError("ID du client manquant.");
-    setLoading(false);
-    return;
-  }
+    if (!id) {
+      setError('ID du client manquant.');
+      setLoading(false);
+      return;
+    }
 
-  setLoading(true);
-  setError(null);
+    setLoading(true);
+    setError(null);
 
-  try {
-    // 1. Fetch client details
-    const { data: clientData, error: clientError } = await supabase
-      .from('users')
-      .select(`
+    try {
+      // 1. Fetch client details
+      const { data: clientData, error: clientError } = await supabase
+        .from('users')
+        .select(
+          `
         id,
         first_name,
         last_name,
@@ -181,96 +200,99 @@ export default function ClientDetailsScreen() {
         last_login,
         user_ports(ports(name)),
         boat(id, name, type, image)
-      `)
-      .eq('id', id)
-      .eq('profile', 'pleasure_boater')
-      .single();
+      `
+        )
+        .eq('id', id)
+        .eq('profile', 'pleasure_boater')
+        .single();
 
-    if (clientError || !clientData) {
-      console.error('Error fetching client:', clientError);
-      setError('Client non trouvé.');
-      setLoading(false);
-      return;
-    }
+      if (clientError || !clientData) {
+        console.error('Error fetching client:', clientError);
+        setError('Client non trouvé.');
+        setLoading(false);
+        return;
+      }
 
-    // ✅ Utiliser les helpers globaux
-    const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
-    const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
+      const avatarUrl = await getSignedAvatarUrl(clientData.avatar);
+      const clientPort = clientData.user_ports?.[0]?.ports?.name || 'N/A';
 
-    // ✅ Traiter les bateaux avec getSignedBoatPhoto (fonction globale)
-    const processedBoats = await Promise.all(
-  (clientData.boat || []).map(async (b: any) => {
-    const finalBoatImageUrl = await getBoatDisplayUrl(b.image || '');
+      const processedBoats = await Promise.all(
+        (clientData.boat || []).map(async (b: any) => {
+          const finalBoatImageUrl = await getBoatDisplayUrl(b.image || '');
 
-    return {
-      id: b.id.toString(),
-      name: b.name,
-      type: b.type,
-      image: finalBoatImageUrl, // déjà fallbacké
-      lastService: 'N/A',
-      nextService: 'N/A',
-      status: 'active' as const,
-    };
-  })
-);
+          return {
+            id: b.id.toString(),
+            name: b.name,
+            type: b.type,
+            image: finalBoatImageUrl,
+            lastService: 'N/A',
+            nextService: 'N/A',
+            status: 'active' as const,
+          };
+        })
+      );
 
+      setClient({
+        id: clientData.id,
+        name: `${clientData.first_name} ${clientData.last_name}`,
+        avatar: avatarUrl || DEFAULT_AVATAR,
+        email: clientData.e_mail,
+        phone: clientData.phone,
+        memberSince: new Date(clientData.created_at).toLocaleDateString(
+          'fr-FR',
+          {
+            year: 'numeric',
+            month: 'long',
+          }
+        ),
+        status: clientData.status,
+        lastContact: clientData.last_login
+          ? new Date(clientData.last_login).toISOString().split('T')[0]
+          : 'N/A',
+        port: clientPort,
+        boats: processedBoats,
+      });
 
-    setClient({
-      id: clientData.id,
-      name: `${clientData.first_name} ${clientData.last_name}`,
-      avatar: avatarUrl || DEFAULT_AVATAR,
-      email: clientData.e_mail,
-      phone: clientData.phone,
-      memberSince: new Date(clientData.created_at).toLocaleDateString('fr-FR', { 
-        year: 'numeric', 
-        month: 'long' 
-      }),
-      status: clientData.status,
-      lastContact: clientData.last_login 
-        ? new Date(clientData.last_login).toISOString().split('T')[0] 
-        : 'N/A',
-      port: clientPort,
-      boats: processedBoats,
-    });
-
-    // 2. Fetch service history
-    const { data: historyData, error: historyError } = await supabase
-      .from('service_request')
-      .select(`
+      // 2. Fetch service history
+      const { data: historyData, error: historyError } = await supabase
+        .from('service_request')
+        .select(
+          `
         id,
         date,
         description,
         statut,
         boat(id, name),
         categorie_service(description1)
-      `)
-      .eq('id_client', id)
-      .order('date', { ascending: false });
+      `
+        )
+        .eq('id_client', id)
+        .order('date', { ascending: false });
 
-    if (historyError) {
-      console.error('Error fetching service history:', historyError);
-    } else {
-      setServiceHistory(historyData.map((req: any) => ({
-        id: req.id.toString(),
-        date: req.date,
-        type: req.categorie_service?.description1 || 'N/A',
-        description: req.description,
-        status: req.statut,
-        boat: {
-          id: req.boat?.id.toString() || 'N/A',
-          name: req.boat?.name || 'N/A',
-        },
-      })));
+      if (historyError) {
+        console.error('Error fetching service history:', historyError);
+      } else {
+        setServiceHistory(
+          historyData.map((req: any) => ({
+            id: req.id.toString(),
+            date: req.date,
+            type: req.categorie_service?.description1 || 'N/A',
+            description: req.description,
+            status: req.statut,
+            boat: {
+              id: req.boat?.id.toString() || 'N/A',
+              name: req.boat?.name || 'N/A',
+            },
+          }))
+        );
+      }
+    } catch (e: any) {
+      console.error('Unexpected error fetching client data:', e);
+      setError('Une erreur inattendue est survenue.');
+    } finally {
+      setLoading(false);
     }
-
-  } catch (e: any) {
-    console.error('Unexpected error fetching client data:', e);
-    setError('Une erreur inattendue est survenue.');
-  } finally {
-    setLoading(false);
-  }
-}, [id]);
-
+  }, [id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -278,20 +300,39 @@ export default function ClientDetailsScreen() {
     }, [fetchClientData])
   );
 
-
+  // -- LOADING STATE -------------------------------------------------
   if (loading) {
     return (
-      <View style={[styles.container, styles.centered]}>
+      <SafeAreaView
+        style={[
+          styles.safeArea,
+          styles.centered,
+          Platform.OS === 'android' && {
+            paddingTop: StatusBar.currentHeight ?? 0,
+          },
+        ]}
+        edges={['top', 'left', 'right']}
+      >
         <ActivityIndicator size="large" color="#0066CC" />
-        <Text style={styles.loadingText}>Chargement des détails du client...</Text>
-      </View>
+        <Text style={styles.loadingText}>
+          Chargement des détails du client...
+        </Text>
+      </SafeAreaView>
     );
   }
 
-
+  // -- ERROR / NOT FOUND --------------------------------------------
   if (error || !client) {
     return (
-      <View style={styles.container}>
+      <SafeAreaView
+        style={[
+          styles.safeArea,
+          Platform.OS === 'android' && {
+            paddingTop: StatusBar.currentHeight ?? 0,
+          },
+        ]}
+        edges={['top', 'left', 'right']}
+      >
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
@@ -301,8 +342,11 @@ export default function ClientDetailsScreen() {
           </TouchableOpacity>
           <Text style={styles.title}>Client non trouvé</Text>
         </View>
+
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error || 'Ce client n\'existe pas.'}</Text>
+          <Text style={styles.errorText}>
+            {error || "Ce client n'existe pas."}
+          </Text>
           <TouchableOpacity
             style={styles.errorButton}
             onPress={() => router.back()}
@@ -310,20 +354,18 @@ export default function ClientDetailsScreen() {
             <Text style={styles.errorButtonText}>Retour</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
-
+  // -- HANDLERS ------------------------------------------------------
   const handleMessage = () => {
     router.push(`/(boat-manager)/messages?client=${client.id}`);
   };
 
-
   const handleRequests = () => {
     router.push(`/(boat-manager)/requests?client=${client.id}`);
   };
-
 
   const formatDate = (dateString: string) => {
     if (!dateString || dateString === 'N/A') return 'N/A';
@@ -333,7 +375,6 @@ export default function ClientDetailsScreen() {
       year: 'numeric',
     });
   };
-
 
   const getStatusColor = (status: Client['status']) => {
     switch (status) {
@@ -348,7 +389,6 @@ export default function ClientDetailsScreen() {
     }
   };
 
-
   const getStatusLabel = (status: Client['status']) => {
     switch (status) {
       case 'active':
@@ -361,7 +401,6 @@ export default function ClientDetailsScreen() {
         return status;
     }
   };
-
 
   const getBoatStatusColor = (status: 'active' | 'maintenance' | 'inactive') => {
     switch (status) {
@@ -376,8 +415,9 @@ export default function ClientDetailsScreen() {
     }
   };
 
-
-  const getBoatStatusLabel = (status: 'active' | 'maintenance' | 'inactive') => {
+  const getBoatStatusLabel = (
+    status: 'active' | 'maintenance' | 'inactive'
+  ) => {
     switch (status) {
       case 'active':
         return 'En service';
@@ -389,7 +429,6 @@ export default function ClientDetailsScreen() {
         return status;
     }
   };
-
 
   const getServiceStatusColor = (status: ServiceHistory['status']) => {
     switch (status) {
@@ -420,7 +459,6 @@ export default function ClientDetailsScreen() {
     }
   };
 
-
   const getServiceStatusLabel = (status: ServiceHistory['status']) => {
     switch (status) {
       case 'completed':
@@ -450,217 +488,302 @@ export default function ClientDetailsScreen() {
     }
   };
 
-
+  // -- RENDER --------------------------------------------------------
   return (
-    <ScrollView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <ArrowLeft size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.title}>Détails du client</Text>
-      </View>
+    <SafeAreaView
+      style={[
+        styles.safeArea,
+        Platform.OS === 'android' && {
+          paddingTop: StatusBar.currentHeight ?? 0,
+        },
+      ]}
+      edges={['top', 'left', 'right']}
+    >
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ArrowLeft size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Détails du client</Text>
+        </View>
 
+        {/* Client Profile */}
+        <View style={styles.profileSection}>
+          <View style={styles.profileHeader}>
+            <Image source={{ uri: client.avatar }} style={styles.avatar} />
+            <View style={styles.profileInfo}>
+              <View style={styles.nameRow}>
+                <Text style={styles.name}>{client.name}</Text>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    {
+                      backgroundColor: `${getStatusColor(
+                        client.status
+                      )}15`,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: getStatusColor(client.status) },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.statusText,
+                      { color: getStatusColor(client.status) },
+                    ]}
+                  >
+                    {getStatusLabel(client.status)}
+                  </Text>
+                </View>
+              </View>
 
-      {/* Client Profile */}
-      <View style={styles.profileSection}>
-        <View style={styles.profileHeader}>
-          <Image source={{ uri: client.avatar }} style={styles.avatar} />
-          <View style={styles.profileInfo}>
-            <View style={styles.nameRow}>
-              <Text style={styles.name}>{client.name}</Text>
-              <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(client.status)}15` }]}>
-                <View style={[styles.statusDot, { backgroundColor: getStatusColor(client.status) }]} />
-                <Text style={[styles.statusText, { color: getStatusColor(client.status) }]}>
-                  {getStatusLabel(client.status)}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.contactInfo}>
-              <View style={styles.contactRow}>
-                <Phone size={16} color="#666" />
-                <Text style={styles.contactText}>{client.phone}</Text>
-              </View>
-              <View style={styles.contactRow}>
-                <Mail size={16} color="#666" />
-                <Text style={styles.contactText}>{client.email}</Text>
-              </View>
-              <View style={styles.contactRow}>
-                <MapPin size={16} color="#666" />
-                <Text style={styles.contactText}>{client.port}</Text>
-              </View>
-              <View style={styles.contactRow}>
-                <Calendar size={16} color="#666" />
-                <Text style={styles.contactText}>
-                  Membre depuis {client.memberSince}
-                </Text>
+              <View style={styles.contactInfo}>
+                <View style={styles.contactRow}>
+                  <Phone size={16} color="#666" />
+                  <Text style={styles.contactText}>{client.phone}</Text>
+                </View>
+                <View style={styles.contactRow}>
+                  <Mail size={16} color="#666" />
+                  <Text style={styles.contactText}>{client.email}</Text>
+                </View>
+                <View style={styles.contactRow}>
+                  <MapPin size={16} color="#666" />
+                  <Text style={styles.contactText}>{client.port}</Text>
+                </View>
+                <View style={styles.contactRow}>
+                  <Calendar size={16} color="#666" />
+                  <Text style={styles.contactText}>
+                    Membre depuis {client.memberSince}
+                  </Text>
+                </View>
               </View>
             </View>
           </View>
+
+          <View style={styles.actions}>
+            <TouchableOpacity style={styles.actionButton} onPress={handleMessage}>
+              <MessageSquare size={20} color="#0066CC" />
+              <Text style={styles.actionButtonText}>Message</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionButton} onPress={handleRequests}>
+              <FileText size={20} color="#0066CC" />
+              <Text style={styles.actionButtonText}>Demandes</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
-
-        <View style={styles.actions}>
+        {/* Tabs */}
+        <View style={styles.tabs}>
           <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleMessage}
+            style={[styles.tab, selectedTab === 'boats' && styles.activeTab]}
+            onPress={() => setSelectedTab('boats')}
           >
-            <MessageSquare size={20} color="#0066CC" />
-            <Text style={styles.actionButtonText}>Message</Text>
+            <Text
+              style={[
+                styles.tabText,
+                selectedTab === 'boats' && styles.activeTabText,
+              ]}
+            >
+              Bateaux
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleRequests}
+            style={[styles.tab, selectedTab === 'history' && styles.activeTab]}
+            onPress={() => setSelectedTab('history')}
           >
-            <FileText size={20} color="#0066CC" />
-            <Text style={styles.actionButtonText}>Demandes</Text>
+            <Text
+              style={[
+                styles.tabText,
+                selectedTab === 'history' && styles.activeTabText,
+              ]}
+            >
+              Historique
+            </Text>
           </TouchableOpacity>
         </View>
-      </View>
 
-
-      {/* Tabs */}
-      <View style={styles.tabs}>
-        <TouchableOpacity
-          style={[styles.tab, selectedTab === 'boats' && styles.activeTab]}
-          onPress={() => setSelectedTab('boats')}
-        >
-          <Text style={[styles.tabText, selectedTab === 'boats' && styles.activeTabText]}>
-            Bateaux
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, selectedTab === 'history' && styles.activeTab]}
-          onPress={() => setSelectedTab('history')}
-        >
-          <Text style={[styles.tabText, selectedTab === 'history' && styles.activeTabText]}>
-            Historique
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-
-      {/* Tab Content */}
-      {selectedTab === 'boats' ? (
-        <View style={styles.boatsContainer}>
-          {client.boats.length > 0 ? (
-            client.boats.map((boat) => (
-              <View key={boat.id} style={styles.boatCard}>
-                <Image source={{ uri: boat.image }} style={styles.boatImage} />
-                <View style={styles.boatContent}>
-                  <View style={styles.boatHeader}>
-                    <View style={styles.boatInfo}>
-                      <Text style={styles.boatName}>{boat.name}</Text>
-                      <Text style={styles.boatType}>{boat.type}</Text>
+        {/* Tab Content */}
+        {selectedTab === 'boats' ? (
+          <View style={styles.boatsContainer}>
+            {client.boats.length > 0 ? (
+              client.boats.map((boat) => (
+                <View key={boat.id} style={styles.boatCard}>
+                  <Image source={{ uri: boat.image }} style={styles.boatImage} />
+                  <View style={styles.boatContent}>
+                    <View style={styles.boatHeader}>
+                      <View style={styles.boatInfo}>
+                        <Text style={styles.boatName}>{boat.name}</Text>
+                        <Text style={styles.boatType}>{boat.type}</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.boatStatusBadge,
+                          {
+                            backgroundColor: `${getBoatStatusColor(
+                              boat.status
+                            )}15`,
+                          },
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.statusDot,
+                            { backgroundColor: getBoatStatusColor(boat.status) },
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.boatStatusText,
+                            { color: getBoatStatusColor(boat.status) },
+                          ]}
+                        >
+                          {getBoatStatusLabel(boat.status)}
+                        </Text>
+                      </View>
                     </View>
-                    <View style={[styles.boatStatusBadge, { backgroundColor: `${getBoatStatusColor(boat.status)}15` }]}>
-                      <View style={[styles.statusDot, { backgroundColor: getBoatStatusColor(boat.status) }]} />
-                      <Text style={[styles.boatStatusText, { color: getBoatStatusColor(boat.status) }]}>
-                        {getBoatStatusLabel(boat.status)}
+
+                    <View style={styles.boatDetails}>
+                      {boat.lastService && (
+                        <View style={styles.boatDetailRow}>
+                          <CheckCircle2 size={16} color="#666" />
+                          <Text style={styles.boatDetailText}>
+                            Dernier service : {formatDate(boat.lastService)}
+                          </Text>
+                        </View>
+                      )}
+                      {boat.nextService && (
+                        <View style={styles.boatDetailRow}>
+                          <Calendar size={16} color="#666" />
+                          <Text style={styles.boatDetailText}>
+                            Prochain service : {formatDate(boat.nextService)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.boatButton}
+                      onPress={() => router.push(`/boats/${boat.id}`)}
+                    >
+                      <Text style={styles.boatButtonText}>
+                        Voir les détails
+                      </Text>
+                      <ChevronRight size={20} color="#0066CC" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <Boat size={48} color="#ccc" />
+                <Text style={styles.emptyStateText}>
+                  Aucun bateau enregistré pour ce client.
+                </Text>
+              </View>
+            )}
+          </View>
+        ) : (
+          <View style={styles.historyContainer}>
+            {serviceHistory.length > 0 ? (
+              serviceHistory.map((service) => (
+                <TouchableOpacity
+                  key={service.id}
+                  style={styles.serviceCard}
+                  onPress={() => router.push(`/request/${service.id}`)}
+                >
+                  <View style={styles.serviceHeader}>
+                    <View style={styles.serviceInfo}>
+                      <Text style={styles.serviceType}>{service.type}</Text>
+                      <Text style={styles.serviceDate}>
+                        {formatDate(service.date)}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.serviceStatusBadge,
+                        {
+                          backgroundColor: `${getServiceStatusColor(
+                            service.status
+                          )}15`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.serviceStatusText,
+                          {
+                            color: getServiceStatusColor(service.status),
+                          },
+                        ]}
+                      >
+                        {getServiceStatusLabel(service.status)}
                       </Text>
                     </View>
                   </View>
 
-
-                  <View style={styles.boatDetails}>
-                    {boat.lastService && (
-                      <View style={styles.boatDetailRow}>
-                        <CheckCircle2 size={16} color="#666" />
-                        <Text style={styles.boatDetailText}>
-                          Dernier service : {formatDate(boat.lastService)}
-                        </Text>
-                      </View>
-                    )}
-                    {boat.nextService && (
-                      <View style={styles.boatDetailRow}>
-                        <Calendar size={16} color="#666" />
-                        <Text style={styles.boatDetailText}>
-                          Prochain service : {formatDate(boat.nextService)}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-
-                  <TouchableOpacity
-                    style={styles.boatButton}
-                    onPress={() => router.push(`/boats/${boat.id}`)}
-                  >
-                    <Text style={styles.boatButtonText}>Voir les détails</Text>
-                    <ChevronRight size={20} color="#0066CC" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))
-          ) : (
-            <View style={styles.emptyState}>
-              <Boat size={48} color="#ccc" />
-              <Text style={styles.emptyStateText}>Aucun bateau enregistré pour ce client.</Text>
-            </View>
-          )}
-        </View>
-      ) : (
-        <View style={styles.historyContainer}>
-          {serviceHistory.length > 0 ? (
-            serviceHistory.map((service) => (
-              <TouchableOpacity
-                key={service.id}
-                style={styles.serviceCard}
-                onPress={() => router.push(`/request/${service.id}`)}
-              >
-                <View style={styles.serviceHeader}>
-                  <View style={styles.serviceInfo}>
-                    <Text style={styles.serviceType}>{service.type}</Text>
-                    <Text style={styles.serviceDate}>{formatDate(service.date)}</Text>
-                  </View>
-                  <View style={[styles.serviceStatusBadge, { backgroundColor: `${getServiceStatusColor(service.status)}15` }]}>
-                    <Text style={[styles.serviceStatusText, { color: getServiceStatusColor(service.status) }]}>
-                      {getServiceStatusLabel(service.status)}
+                  <View style={styles.serviceDetails}>
+                    <View style={styles.serviceBoat}>
+                      <Boat size={16} color="#666" />
+                      <Text style={styles.serviceBoatName}>
+                        {service.boat.name}
+                      </Text>
+                    </View>
+                    <Text style={styles.serviceDescription}>
+                      {service.description}
                     </Text>
                   </View>
-                </View>
 
-
-                <View style={styles.serviceDetails}>
-                  <View style={styles.serviceBoat}>
-                    <Boat size={16} color="#666" />
-                    <Text style={styles.serviceBoatName}>{service.boat.name}</Text>
+                  <View style={styles.serviceFooter}>
+                    <Text style={styles.viewDetails}>Voir les détails</Text>
+                    <ChevronRight size={20} color="#0066CC" />
                   </View>
-                  <Text style={styles.serviceDescription}>{service.description}</Text>
-                </View>
-
-
-                <View style={styles.serviceFooter}>
-                  <Text style={styles.viewDetails}>Voir les détails</Text>
-                  <ChevronRight size={20} color="#0066CC" />
-                </View>
-              </TouchableOpacity>
-            ))
-          ) : (
-            <View style={styles.emptyState}>
-              <FileText size={48} color="#ccc" />
-              <Text style={styles.emptyStateText}>Aucun historique de service pour ce client.</Text>
-            </View>
-          )}
-        </View>
-      )}
-    </ScrollView>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <FileText size={48} color="#ccc" />
+                <Text style={styles.emptyStateText}>
+                  Aucun historique de service pour ce client.
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  scroll: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  scrollContent: {
+    paddingBottom: 32,
+  },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 12,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
@@ -674,6 +797,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1a1a1a',
   },
+
   profileSection: {
     backgroundColor: 'white',
     padding: 20,
@@ -686,6 +810,8 @@ const styles = StyleSheet.create({
   avatar: {
     width: 80,
     height: 80,
+    maxWidth: 100,
+    maxHeight: 100,
     borderRadius: 40,
   },
   profileInfo: {
@@ -695,12 +821,16 @@ const styles = StyleSheet.create({
   nameRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start', // évite d'écraser le nom si long
+    flexWrap: 'wrap',
+    gap: 8,
   },
   name: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#1a1a1a',
+    flexShrink: 1,
+    flexBasis: '60%',
   },
   statusBadge: {
     flexDirection: 'row',
@@ -719,6 +849,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+
   contactInfo: {
     gap: 8,
   },
@@ -726,11 +857,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   contactText: {
     fontSize: 14,
     color: '#666',
+    flexShrink: 1,
   },
+
   actions: {
     flexDirection: 'row',
     gap: 12,
@@ -750,6 +884,7 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
+
   tabs: {
     flexDirection: 'row',
     backgroundColor: 'white',
@@ -772,6 +907,7 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '600',
   },
+
   boatsContainer: {
     padding: 20,
     gap: 20,
@@ -797,7 +933,9 @@ const styles = StyleSheet.create({
   },
   boatImage: {
     width: '100%',
-    height: 200,
+    // Hauteur responsive : on force un ratio 16:9, pas une hauteur fixe
+    aspectRatio: 16 / 9,
+    backgroundColor: '#ddd',
   },
   boatContent: {
     padding: 16,
@@ -807,9 +945,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    rowGap: 8,
   },
   boatInfo: {
     flex: 1,
+    paddingRight: 8,
   },
   boatName: {
     fontSize: 18,
@@ -833,6 +974,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+
   boatDetails: {
     gap: 8,
   },
@@ -840,11 +982,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   boatDetailText: {
     fontSize: 14,
     color: '#666',
+    flexShrink: 1,
   },
+
   boatButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -858,6 +1003,7 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
+
   historyContainer: {
     padding: 20,
     gap: 16,
@@ -888,6 +1034,8 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    flexWrap: 'wrap',
+    rowGap: 8,
   },
   serviceInfo: {
     gap: 4,
@@ -918,6 +1066,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   serviceBoatName: {
     fontSize: 14,
@@ -940,6 +1089,7 @@ const styles = StyleSheet.create({
     color: '#0066CC',
     fontWeight: '500',
   },
+
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -963,12 +1113,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   loadingText: {
     fontSize: 16,
     color: '#666',
     marginTop: 12,
   },
 });
-
-
-

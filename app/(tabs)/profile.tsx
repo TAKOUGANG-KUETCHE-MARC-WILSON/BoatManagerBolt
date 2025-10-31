@@ -14,6 +14,8 @@ import {
   Alert,
   TextInput,
   ActivityIndicator,
+  KeyboardAvoidingView,      // 👈 AJOUT
+  Keyboard,                  // 👈 (optionnel pour onSubmitEditing)
 } from 'react-native';
 import { router, Redirect, Stack } from 'expo-router';
 import {
@@ -311,18 +313,39 @@ const EditProfileModal = memo(
 
 
     return (
-      <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Modifier mon profil</Text>
-              <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-                <X size={24} color="#666" />
-              </TouchableOpacity>
-            </View>
+  <Modal
+    visible={visible}
+    animationType="slide"
+    transparent={false}                       // 👈 plein écran, pas de fuite visuelle
+    presentationStyle="overFullScreen"
+    statusBarTranslucent
+    onRequestClose={onClose}
+  >
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.select({ ios: 'padding', android: 'height' })}
+      keyboardVerticalOffset={Platform.select({ ios: 60, android: 0 }) as number}
+    >
+      <View style={[styles.modalOverlay, { backgroundColor: '#00000066' }]}>
+        <View style={styles.modalContent}>
+           <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Modifier mon profil</Text>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <X size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
 
+          <ScrollView
+            style={[styles.modalBody, { maxHeight: undefined }]} // 👈 enlève la contrainte
+            contentContainerStyle={{ paddingBottom: 24 }}
+            keyboardShouldPersistTaps="handled"
+            contentInsetAdjustmentBehavior="automatic"
+            automaticallyAdjustKeyboardInsets
+            keyboardDismissMode={Platform.select({ ios: 'on-drag', android: 'none' })}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* ...inputs... */}
 
-            <ScrollView style={styles.modalBody}>
               <View style={styles.formGroup}>
                 <Text style={styles.formLabel}>Prénom</Text>
                 <TextInput
@@ -330,6 +353,9 @@ const EditProfileModal = memo(
                   value={formData.firstName}
                   onChangeText={(text) => setFormData((prev) => ({ ...prev, firstName: text }))}
                   placeholder="Votre prénom"
+                   returnKeyType="done"
+  blurOnSubmit
+  onSubmitEditing={() => Keyboard.dismiss()}
                 />
               </View>
 
@@ -507,7 +533,8 @@ const EditProfileModal = memo(
             isFetchingPorts={isFetchingPorts}
           />
           {/* FIN AJOUTÉ */}
-        </View>
+          </View>  
+        </KeyboardAvoidingView>
         </Modal>
       )
     }
@@ -1306,8 +1333,14 @@ setPendingDeletePortIds([]);
       <StatusBar style="dark" backgroundColor="#fff" />
 
 
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
-        {/* Profile Header */}
+     <ScrollView
+  style={styles.container}
+  contentContainerStyle={{ paddingBottom: 24 }}
+  scrollEnabled={!showEditModal}               // 👈 bloque le scroll quand la modale est ouverte
+  keyboardShouldPersistTaps="handled"
+  automaticallyAdjustKeyboardInsets
+>
+{/* Profile Header */}
         <View style={styles.header}>
           <View style={styles.profileImageContainer}>
             <Image
@@ -1833,8 +1866,11 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: 'white',
     borderRadius: 16,
-    width: '90%',
-    maxWidth: 500,
+     width: '94%',
+  height: '80%',               // 👈 important
+  alignSelf: 'center',           // 👈 centre proprement
+  margin: 0,  
+  overflow: 'hidden',
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 },
       android: { elevation: 4 },
@@ -1842,9 +1878,9 @@ const styles = StyleSheet.create({
     }),
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, padding: 16 },
-  modalTitle: { fontSize: 18, fontWeight: '600', color: '#1a1a1a', marginBottom: 16, padding: 16 },
+ modalTitle: { fontSize: 18, fontWeight: '600', color: '#1a1a1a', marginBottom: 0, padding: 0 },
   closeButton: { padding: 4 },
-  modalBody: { padding: 16, maxHeight: 400 },
+  modalBody: { padding: 16 },
   formGroup: { marginBottom: 16 },
   formLabel: { fontSize: 14, fontWeight: '500', color: '#1a1a1a', marginBottom: 8 },
   formInput: { backgroundColor: '#f8fafc', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', padding: 12, fontSize: 16, color: '#1a1a1a' },

@@ -6,9 +6,12 @@ import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, Calendar, FileText, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Buffer } from 'buffer';
 (global as any).Buffer = (global as any).Buffer || Buffer;
+
+
+ const BUCKET = 'user.documents'; // <-- déplace ici
 
 
 interface DocumentForm {
@@ -18,6 +21,7 @@ interface DocumentForm {
   date: string; // YYYY-MM-DD
   file_url: string; // URL of the file in Supabase Storage
   id_boat: string; // Foreign key to the boat
+  file_key?: string;
 }
 
 const documentTypes = [
@@ -78,16 +82,36 @@ export default function DocumentScreen() {
           }
 
           if (data) {
-            setForm({
-              id: data.id.toString(),
-              name: data.name,
-              type: data.type,
-              date: data.date,
-              file_url: data.file_url,
-              id_boat: data.id_boat.toString(),
-            });
-            setSelectedFile({ name: data.name, uri: data.file_url, type: data.type }); // Pre-fill selectedFile for display
-          } else {
+  // 1) on garde les infos en l’état
+  setForm({
+    id: data.id.toString(),
+    name: data.name,
+    type: data.type,
+    date: data.date,
+    file_url: data.file_url,
+    id_boat: data.id_boat.toString(),
+    file_key: data.file_key ?? undefined, // si la colonne existe
+  });
+
+  // 2) on tente de générer une URL signée fraîche pour l’aperçu (1h)
+  let previewUrl = data.file_url;
+  const keyForSigning =
+    data.file_key ??
+    extractPathFromPublicUrl(data.file_url, BUCKET);
+
+  if (keyForSigning) {
+    const { data: signed, error: signErr } = await supabase
+      .storage.from(BUCKET)
+      .createSignedUrl(keyForSigning, 60 * 60, { download: data.name });
+
+    if (!signErr && signed?.signedUrl) {
+      previewUrl = signed.signedUrl;
+    }
+  }
+
+  setSelectedFile({ name: data.name, uri: previewUrl, type: data.type });
+}
+else {
             setFetchError('Document non trouvé.');
           }
         } catch (e) {
@@ -151,8 +175,7 @@ export default function DocumentScreen() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const BUCKET = 'user.documents';
-
+  
 function extractPathFromPublicUrl(publicUrl: string, bucket: string) {
   // publicUrl = https://<proj>.supabase.co/storage/v1/object/public/<bucket>/<path>
   try {
@@ -224,22 +247,37 @@ const handleSubmit = async () => {
       }
 
       // 1.f) Récupérer l’URL publique
-      newFileUrl = supabase.storage.from(BUCKET).getPublicUrl(filePath).data.publicUrl;
-    }
+    // 1.f) Générer une URL signée (bucket privé OK)
+const { data: signedData, error: signErr } = await supabase.storage
+  .from(BUCKET)
+  .createSignedUrl(filePath, 60 * 60, { download: selectedFile.name });
+
+if (signErr || !signedData?.signedUrl) {
+  throw new Error(signErr?.message || "Impossible de signer l'URL du fichier.");
+}
+newFileUrl = signedData.signedUrl;
+// On garde aussi la clé (si la colonne existe côté DB)
+const newFileKey = filePath;
+
+}
 
     // 2) Opération DB
     if (isNewDocument) {
-      const { error } = await supabase
-        .from('user_documents')
-        .insert({
-          name: form.name,
-          type: form.type,
-          date: form.date,
-          file_url: newFileUrl,
-          id_boat: parseInt(form.id_boat),
-        })
-        .select('id')
-        .single();
+      const insertPayload: any = {
+  name: form.name,
+  type: form.type,
+  date: form.date,
+  file_url: newFileUrl,
+  id_boat: parseInt(form.id_boat),
+};
+if (form.file_key) insertPayload.file_key = form.file_key;
+
+const { error } = await supabase
+  .from('user_documents')
+  .insert(insertPayload)
+  .select('id')
+  .single();
+
 
       if (error) {
         console.error('Error inserting document:', error);
@@ -251,16 +289,20 @@ const handleSubmit = async () => {
       }
     } else {
       // ⚠️ assure-toi que "id" est bien défini (id du document)
-      const { error } = await supabase
-        .from('user_documents')
-        .update({
-          name: form.name,
-          type: form.type,
-          date: form.date,
-          file_url: newFileUrl,
-        })
-        .eq('id', id)
-        .eq('id_boat', form.id_boat);
+      const updatePayload: any = {
+  name: form.name,
+  type: form.type,
+  date: form.date,
+  file_url: newFileUrl,
+};
+if (newFileKey ?? form.file_key) updatePayload.file_key = newFileKey ?? form.file_key;
+
+const { error } = await supabase
+  .from('user_documents')
+  .update(updatePayload)
+  .eq('id', id)
+  .eq('id_boat', form.id_boat);
+
 
       if (error) {
         console.error('Error updating document:', error);
@@ -297,18 +339,21 @@ const handleSubmit = async () => {
             setFetchError(null);
             try {
               // 1. Delete file from storage
-              if (form.file_url && form.file_url.includes(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl)) {
-                const filePath = form.file_url.split(supabase.storage.from('user.documents').getPublicUrl('').data.publicUrl + '/')[1];
-                if (filePath) {
-                  const { error: deleteFileError } = await supabase.storage
-                    .from('user.documents')
-                    .remove([filePath]);
-                  if (deleteFileError) {
-                    console.warn('Error deleting file from storage:', deleteFileError);
-                    // Continue even if file deletion fails, as DB record is primary
-                  }
-                }
-              }
+           // on privilégie file_key si présent, sinon on extrait depuis file_url
+const filePathForDelete =
+  form.file_key ??
+  extractPathFromPublicUrl(form.file_url, BUCKET);
+
+if (filePathForDelete) {
+  const { error: deleteFileError } = await supabase.storage
+    .from(BUCKET)
+    .remove([filePathForDelete]);
+  if (deleteFileError) {
+    console.warn('Error deleting file from storage:', deleteFileError);
+    // on continue malgré tout
+  }
+}
+
 
               // 2. Delete record from database
               const { error: deleteRecordError } = await supabase

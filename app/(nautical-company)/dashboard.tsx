@@ -270,14 +270,14 @@ if (convError || !convMembers) {
           style={styles.statCard}
           onPress={() => handleNavigate('/(nautical-company)/requests?status=submitted')}
         >
-          <FileText size={24} color="#F59E0B" />
+        <FileText size={24} color="#F59E0B" />
           <Text style={styles.statNumber}>{stats.pendingRequests}</Text>
           <Text style={styles.statLabel}>Nouvelles demandes</Text>
-          {stats.pendingRequests > 0 && (
+        { /*   {stats.pendingRequests > 0 && (
             <View style={styles.notificationBadge}>
               <Text style={styles.notificationText}>{stats.pendingRequests}</Text>
             </View>
-          )}
+          )}  */}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -287,11 +287,11 @@ if (convError || !convMembers) {
           <MessageSquare size={24} color="#10B981" />
           <Text style={styles.statNumber}>{stats.newMessages}</Text>
           <Text style={styles.statLabel}>Nouveaux messages</Text>
-          {stats.newMessages > 0 && (
+         { /* {stats.newMessages > 0 && (
             <View style={styles.notificationBadge}>
               <Text style={styles.notificationText}>{stats.newMessages}</Text>
             </View>
-          )}
+          )} */}
         </TouchableOpacity>
       </View>
 

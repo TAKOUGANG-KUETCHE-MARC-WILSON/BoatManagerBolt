@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
+import { View, KeyboardAvoidingView, Keyboard, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -571,8 +571,28 @@ if (data) {
       {/* Placeholder pour garder le titre parfaitement centré */}
       <View style={{ width: 36, height: 36 }} />
     </View>
+ 
 
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+     {/* ⬇️ Ajout KeyboardAvoidingView */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        // Décale du haut pour ne pas chevaucher le header custom
+        keyboardVerticalOffset={Platform.select({ ios: 80, android: 0 }) as number}
+      >
+    <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.contentContainer}
+          // ⬇️ Important : tap = ne masque pas les onPress
+          keyboardShouldPersistTaps="handled"
+          // iOS : ajuste les insets automatiquement
+          contentInsetAdjustmentBehavior="automatic"
+          // iOS 15+ : ajuste le padding bas automatiquement quand le clavier s’affiche
+          automaticallyAdjustKeyboardInsets
+          // Optionnel : swipe pour fermer le clavier
+          keyboardDismissMode={Platform.select({ ios: 'on-drag', android: 'none' })}
+          showsVerticalScrollIndicator={false}
+        >
       <Image source={{ uri: form.photo }} style={styles.boatImage} resizeMode="cover" />
 
       {/* Tabs for boat details - assuming these are part of the original file structure */}
@@ -821,11 +841,14 @@ if (data) {
           <View style={[styles.inputWrapper, errors.place_de_port && styles.inputWrapperError]}>
             <MapPin size={20} color={errors.place_de_port ? '#ff4444' : '#666'} />
             <TextInput
-              style={styles.input}
-              value={form.place_de_port}
-              onChangeText={(text) => setForm(prev => ({ ...prev, place_de_port: text }))}
-              placeholder="ex: A12, Ponton B"
-            />
+  style={styles.input}
+  value={form.place_de_port}
+  onChangeText={(text) => setForm(prev => ({ ...prev, place_de_port: text }))}
+  placeholder="ex: A12, Ponton B"
+  returnKeyType="done"
+  blurOnSubmit
+  onSubmitEditing={() => Keyboard.dismiss()}
+/>
           </View>
           {errors.place_de_port && <Text style={styles.errorText}>{errors.place_de_port}</Text>}
         </View>
@@ -867,6 +890,7 @@ if (data) {
         onSearchQueryChange={setPortSearch}
       />
     </ScrollView>
+     </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

@@ -11,6 +11,12 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, 
 import { Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import { decode as atob } from 'base-64';
+
+
+
 
 // --- Notifications & logs (prod-safe) ---
 const notifyError = (msg: string) => {
@@ -500,6 +506,223 @@ const UsageTypeTab = memo(({
   );
 });
 
+
+
+// -------- Helpers téléchargement --------
+
+// Devine une extension simple depuis le nom/URL (fallback .bin)
+const getFileExtension = (nameOrUrl: string) => {
+  const q = nameOrUrl.split('?')[0];
+  const dot = q.lastIndexOf('.');
+  return dot !== -1 ? q.substring(dot + 1).toLowerCase() : 'bin';
+};
+
+const getFilename = (doc: { name: string; file_url: string }) => {
+  const ext = getFileExtension(doc.name || doc.file_url);
+  // nettoie le nom
+  const safeBase = (doc.name || 'document')
+    .replace(/[^\p{L}\p{N}\-_ ]/gu, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    || 'document';
+  return `${safeBase}.${ext}`;
+};
+
+// Déduis un mime type simple
+const guessMime = (ext: string) => {
+  switch (ext) {
+    case 'pdf': return 'application/pdf';
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'heic': return 'image/heic';
+    case 'txt': return 'text/plain';
+    case 'csv': return 'text/csv';
+    case 'doc': return 'application/msword';
+    case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xls': return 'application/vnd.ms-excel';
+    case 'xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    default: return 'application/octet-stream';
+  }
+};
+
+// Retourne une URL téléchargeable depuis Supabase si besoin
+// Gère 3 cas : URL http(s), chemin public style ".../storage/v1/object/public/<bucket>/<path>",
+// ou chemin "bucket/path/vers/fichier.ext"
+// Nettoie les doubles /, espaces, etc.
+const normalizePath = (p: string) =>
+  p.replace(/^[\/]+/, '').replace(/\/{2,}/g, '/');
+
+// Encode chaque segment (pour les espaces, #, etc.)
+const encodePath = (p: string) =>
+  normalizePath(p)
+    .split('/')
+    .map(seg => encodeURIComponent(seg))
+    .join('/');
+
+// Extrait { bucket, path } depuis une URL publique Supabase
+const parsePublicStorageUrl = (publicUrl: string) => {
+  // Exemple: https://<project>.supabase.co/storage/v1/object/public/user.documents/folder/file.pdf
+  const marker = '/storage/v1/object/public/';
+  const idx = publicUrl.indexOf(marker);
+  if (idx === -1) return null;
+  const tail = publicUrl.substring(idx + marker.length);
+  const slash = tail.indexOf('/');
+  if (slash === -1) return null;
+  return {
+    bucket: tail.substring(0, slash),
+    path: tail.substring(slash + 1),
+  };
+};
+
+// Retourne une URL téléchargeable fiable depuis Supabase
+const getDownloadUrlFromSupabase = async (file_url: string): Promise<string> => {
+  try {
+    if (!file_url) return '';
+
+    // Cas 1: déjà une URL http(s) → on la garde si accessible
+    if (file_url.startsWith('http://') || file_url.startsWith('https://')) {
+      // Si c'est une URL publique Supabase, on peut aussi la transformer en signée pour éviter les 404 intermittents
+      const parsed = parsePublicStorageUrl(file_url);
+      if (parsed) {
+        const { bucket, path } = parsed;
+        const { data, error } = await supabase
+          .storage
+          .from(bucket)
+          .createSignedUrl(encodePath(path), 60 * 10);
+        if (!error && data?.signedUrl) return data.signedUrl;
+      }
+      return file_url;
+    }
+
+    // Cas 2: URL style '/storage/v1/object/public/...'
+    if (file_url.includes('/storage/v1/object/public/')) {
+      const parsed = parsePublicStorageUrl(file_url);
+      if (parsed) {
+        const { bucket, path } = parsed;
+        const { data, error } = await supabase
+          .storage
+          .from(bucket)
+          .createSignedUrl(encodePath(path), 60 * 10);
+        if (!error && data?.signedUrl) return data.signedUrl;
+      }
+      return file_url; // fallback
+    }
+
+    // Cas 3: chemin 'bucket/path/to/file.ext' (avec ou sans slash initial)
+    const cleaned = normalizePath(file_url);
+    const firstSlash = cleaned.indexOf('/');
+    if (firstSlash > 0) {
+      const bucket = cleaned.substring(0, firstSlash);
+      const path = cleaned.substring(firstSlash + 1);
+      const { data, error } = await supabase
+        .storage
+        .from(bucket)
+        .createSignedUrl(encodePath(path), 60 * 10);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    }
+  } catch (e) {
+    logError('getDownloadUrlFromSupabase', e);
+  }
+  return file_url; // dernier recours
+};
+
+
+// Télécharge en cache (sandbox) de l’app et retourne l’URI local
+const downloadToCache = async (url: string, filename: string): Promise<string> => {
+  const target = FileSystem.cacheDirectory + filename;
+  const attempt = async (u: string) => {
+    const { uri, status } = await FileSystem.downloadAsync(u, target);
+    if (status < 200 || status >= 300) throw new Error(`HTTP ${status} lors du téléchargement`);
+    return uri;
+  };
+
+  try {
+    return await attempt(url);
+  } catch (e) {
+    // Si c’était une URL publique Supabase non signée, on retente avec une signée
+    const parsed = parsePublicStorageUrl(url);
+    if (parsed) {
+      const { bucket, path } = parsed;
+      const { data, error } = await supabase
+        .storage
+        .from(bucket)
+        .createSignedUrl(encodePath(path), 60 * 10);
+      if (!error && data?.signedUrl) {
+        return await attempt(data.signedUrl);
+      }
+    }
+    throw e;
+  }
+};
+
+
+// Sauvegarde côté iOS via feuille de partage
+const saveIOSWithShareSheet = async (localUri: string, mime: string, filename: string) => {
+  const canShare = await Sharing.isAvailableAsync();
+  if (!canShare) {
+    notifyInfo('Fichier téléchargé dans le cache de l’app.');
+    return;
+  }
+  await Sharing.shareAsync(localUri, {
+    mimeType: mime,
+    dialogTitle: `Enregistrer “${filename}”`,
+    UTI: mime, // iOS hint
+  });
+};
+
+// Sauvegarde côté Android dans un dossier choisi par l’utilisateur via SAF
+const saveAndroidWithSAF = async (localUri: string, filename: string, mime: string) => {
+  // Demande (ou redemande) un dossier où écrire
+  const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!perm.granted || !perm.directoryUri) {
+    throw new Error('Permission refusée pour choisir un dossier.');
+  }
+
+  // Lis en base64 puis écris le fichier dans SAF
+  const b64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
+  const destUri = await FileSystem.StorageAccessFramework.createFileAsync(
+    perm.directoryUri,
+    filename,
+    mime
+  );
+  await FileSystem.writeAsStringAsync(destUri, b64, { encoding: FileSystem.EncodingType.Base64 });
+};
+
+// Gestionnaire principal : téléchargements iOS/Android
+const downloadDocument = async (doc: { name: string; file_url: string }) => {
+  try {
+    const filename = getFilename(doc);
+    const mime = guessMime(getFileExtension(filename));
+    const url = await getDownloadUrlFromSupabase(doc.file_url);
+    log('[downloadDocument] resolved url:', url, 'doc:', doc);
+    if (!url) {
+      notifyError('URL de fichier invalide.');
+      return;
+    }
+
+    // 1) Télécharge dans le cache de l’app
+    const localUri = await downloadToCache(url, filename);
+
+    // 2) Sauvegarde selon plateforme
+    if (Platform.OS === 'ios') {
+      await saveIOSWithShareSheet(localUri, mime, filename);
+    } else if (Platform.OS === 'android') {
+      await saveAndroidWithSAF(localUri, filename, mime);
+      notifyInfo(`Fichier “${filename}” enregistré ✅`);
+    } else {
+      // web / autres plateformes
+      notifyInfo('Téléchargement disponible uniquement sur iOS/Android dans l’app.');
+    }
+  } catch (e: any) {
+    logError('downloadDocument', e);
+    notifyError(e?.message || "Échec du téléchargement.");
+  }
+};
+
+
+
+
 export default function BoatProfileScreen() {
   const { id } = useLocalSearchParams();
   const { user } = useAuth();
@@ -939,7 +1162,8 @@ export default function BoatProfileScreen() {
                     <Text style={styles.documentName}>{doc.name}</Text>
                     <Text style={styles.documentDate}>{doc.date}</Text>
                   </View>
-                  <TouchableOpacity style={styles.documentAction}>
+                  <TouchableOpacity style={styles.documentAction}
+          onPress={() => downloadDocument(doc)}>
                     <Download size={20} color="#0066CC" />
                   </TouchableOpacity>
                 </TouchableOpacity>

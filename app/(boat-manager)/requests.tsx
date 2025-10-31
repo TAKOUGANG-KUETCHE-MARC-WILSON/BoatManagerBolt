@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, TextInput, Alert, Modal } from 'react-native'; // Ajoutez 'Modal' ici
 // MODIFICATION ICI : Ajoutez 'X' à la liste des imports
 import { FileText, ArrowUpDown, Calendar, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, CircleDot, Circle as XCircle, ChevronRight, TriangleAlert as AlertTriangle, User, Bot as Boat, Building, Search, Filter, MessageSquare, Upload, Euro, X } from 'lucide-react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams  } from 'expo-router';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 
 import { useAuth } from '@/context/AuthContext'; // Import useAuth
@@ -149,6 +149,33 @@ export default function RequestsScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<BoatManagerRequestStatus | null>(null);
   const [selectedUrgency, setSelectedUrgency] = useState<UrgencyLevel | null>(null);
+  
+  // 👇 lire les paramètres provenant des liens (ex: ?status=submitted, ?urgency=urgent)
+const { status: statusParam, urgency: urgencyParam } = useLocalSearchParams<{
+  status?: string;
+  urgency?: string;
+}>();
+
+// 👇 appliquer le filtre initial quand la page s'ouvre (ou quand on revient)
+useEffect(() => {
+  // reset des deux pour éviter des combinaisons inattendues
+  setSelectedStatus(null);
+  setSelectedUrgency(null);
+
+  // sécuriser les valeurs avant d'appliquer
+  const validStatuses = new Set<BoatManagerRequestStatus>([
+    'submitted','in_progress','forwarded','quote_sent','quote_accepted',
+    'scheduled','completed','ready_to_bill','to_pay','paid','cancelled'
+  ]);
+
+  if (typeof statusParam === 'string' && validStatuses.has(statusParam as BoatManagerRequestStatus)) {
+    setSelectedStatus(statusParam as BoatManagerRequestStatus);
+  } else if (urgencyParam === 'urgent' || urgencyParam === 'normal') {
+    setSelectedUrgency(urgencyParam as UrgencyLevel);
+  }
+}, [statusParam, urgencyParam]);
+
+  
   const [requests, setRequests] = useState<Request[]>([]); // Initialize as empty
   const [loading, setLoading] = useState(true); // Add loading state
 

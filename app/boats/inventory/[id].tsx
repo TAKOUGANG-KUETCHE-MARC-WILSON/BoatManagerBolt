@@ -40,7 +40,7 @@ import { ArrowLeft, Tag, Info, Calendar, FileText, X, User, Tool, Upload, Downlo
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '@/src/lib/supabase';
 import { Buffer } from 'buffer';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import CustomDateTimePicker from '@/components/CustomDateTimePicker';
 import { useAuth } from '@/context/AuthContext';
 import * as Sharing from 'expo-sharing'; // Importation de expo-sharing

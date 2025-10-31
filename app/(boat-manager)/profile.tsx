@@ -1,5 +1,5 @@
 import { useState, useEffect, memo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch,Linking, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Platform, Modal, Alert, TextInput, Switch,Linking, ActivityIndicator, KeyboardAvoidingView  } from 'react-native';
 import { router } from 'expo-router';
 import { MapPin, Phone, Mail, Calendar, Shield, Award, Ship, Wrench, PenTool as Tool, Gauge, Key, FileText, LogOut, Image as ImageIcon, X, Plus, Pencil, User } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -101,26 +101,44 @@ const serviceIconsMap = {
 };
 
 // Extracted EditProfileModal component
-const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => (
-  <Modal
-    visible={visible}
-    transparent
-    animationType="slide"
-    onRequestClose={onClose}
+const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handleSaveProfile, newCertification, setNewCertification, handleAddCertification }) => {
+  const modalScrollRef = useRef<ScrollView | null>(null);
+  const scrollToEndSoon = () => {
+    // petit délai pour laisser le clavier apparaître, puis scroll
+    setTimeout(() => modalScrollRef.current?.scrollToEnd({ animated: true }), 50);
+  };
+  return (
+<Modal
+  visible={visible}
+  animationType="slide"
+  transparent={Platform.OS === 'ios'}
+  presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : 'fullScreen'}
+  statusBarTranslucent
+  onRequestClose={onClose}
+>
+  <KeyboardAvoidingView
+    style={{ flex: 1 }}
+    behavior={Platform.select({ ios: 'padding', android: 'height' })}
+    keyboardVerticalOffset={Platform.select({ ios: 16, android: 0 }) as number}
   >
     <View style={styles.modalOverlay}>
       <View style={styles.modalContent}>
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Modifier mon profil</Text>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
             <X size={24} color="#666" />
           </TouchableOpacity>
         </View>
-        
-        <ScrollView style={styles.modalBody}>
+
+        <ScrollView
+          ref={modalScrollRef}
+          style={[styles.modalBody, Platform.OS === 'android' && { maxHeight: undefined }]}
+          contentContainerStyle={{ paddingBottom: 24 + 72 }}
+          keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode={Platform.select({ ios: 'on-drag', android: 'none' })}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.formGroup}>
             <Text style={styles.formLabel}>Votre fonction</Text>
             <TextInput
@@ -176,29 +194,26 @@ const EditProfileModal = memo(({ visible, onClose, formData, setFormData, handle
               placeholder="Parlez de vous et de votre expérience..."
               multiline
               numberOfLines={4}
+              textAlignVertical="top"
+              onFocus={scrollToEndSoon}
             />
           </View>
         </ScrollView>
         
+        
         <View style={styles.modalFooter}>
-          <TouchableOpacity 
-            style={styles.cancelButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
             <Text style={styles.cancelButtonText}>Annuler</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.saveButton}
-            onPress={handleSaveProfile}
-          >
+          <TouchableOpacity style={styles.saveButton} onPress={handleSaveProfile}>
             <Text style={styles.saveButtonText}>Enregistrer</Text>
           </TouchableOpacity>
         </View>
       </View>
     </View>
-  </Modal>
-));
+  </KeyboardAvoidingView>
+</Modal>
+)});
 
 // Extracted PhotoModal component
 const PhotoModal = memo(({ visible, onClose, onChoosePhoto, onDeletePhoto, hasCustomPhoto }) => (
@@ -631,7 +646,7 @@ export default function ProfileScreen() {
   }
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} scrollEnabled={!showEditModal}>
       {/* Profile Header */}
       <View style={styles.header}>
         <View style={styles.profileImageContainer}>
@@ -1079,8 +1094,11 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: 'white',
     borderRadius: 16,
-    width: '90%',
-    maxWidth: 500,
+    width: '94%',
+  height: '80%',               // 👈 important
+  alignSelf: 'center',           // 👈 centre proprement
+  margin: 0,  
+  overflow: 'hidden',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -1108,15 +1126,15 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
-    marginBottom: 16,
-    padding: 16,
+    marginBottom: 10,
+    padding: 0,
   },
   closeButton: {
     padding: 4,
   },
   modalBody: {
     padding: 16,
-    maxHeight: 400,
+   // maxHeight: 400,
   },
   formGroup: {
     marginBottom: 16,

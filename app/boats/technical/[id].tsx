@@ -32,7 +32,9 @@ import {
 } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import * as FileSystemLegacy from 'expo-file-system/legacy'; 
 import * as Sharing from 'expo-sharing';
+import { Linking } from 'react-native';
 import { Buffer } from 'buffer';
 import { supabase } from '@/src/lib/supabase';
 import CustomDateTimePicker from '@/components/CustomDateTimePicker';
@@ -586,26 +588,77 @@ export default function TechnicalRecordScreen() {
     }));
   };
 
-  const handleDownloadDocument = async (document: TRDocument) => {
-    try {
-      if (Platform.OS === 'web') {
-        const win = window.open(document.uri, '_blank');
-        if (!win) throw new Error('Popup bloquée');
-      } else {
-        const filename = document.name || 'document';
-        const target = FileSystem.cacheDirectory + filename;
-        const { uri: downloadedUri } = await FileSystem.downloadAsync(document.uri, target);
-        await Sharing.shareAsync(downloadedUri, {
-          mimeType: document.type,
-          UTI: document.type === 'application/pdf' ? '.pdf' : undefined,
-        });
-      }
-      notifyInfo('Téléchargement prêt');
-    } catch (e) {
-      logError('downloadDocument', e);
-      notifyError();
+ const handleDownloadDocument = async (document: TRDocument) => {
+  try {
+    const filename = sanitizeFilename(document.name || 'document');
+    const hasExt = /\.[a-z0-9]+$/i.test(filename);
+    const finalName = hasExt ? filename : (
+      document.type === 'application/pdf' ? `${filename}.pdf` : `${filename}`
+    );
+
+    if (document.uri.startsWith('http')) {
+      // Option 1: ouvrir dans le navigateur (souvent nickel pour PDF)
+      // @ts-ignore – WebBrowser vient d'expo-web-browser si tu veux l’ajouter
+      // await WebBrowser.openBrowserAsync(document.uri);
+
+      // Option 2: télécharger dans un dossier lisible puis partager/ouvrir
+// Option 2: télécharger dans un dossier lisible puis partager/ouvrir
+// 1) Tenter de récupérer la clé de stockage depuis l'URL stockée.
+let downloadUrl = document.uri;
+const maybeKey = extractPathFromPublicUrl(document.uri, BUCKET);
+
+try {
+  if (maybeKey) {
+    // 2) Génère une URL signée fraîche (1h), compatible bucket privé.
+    const { data: signed, error: signErr } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(maybeKey, 60 * 60, { download: finalName });
+
+    if (!signErr && signed?.signedUrl) {
+      downloadUrl = signed.signedUrl;
     }
-  };
+  }
+} catch (e) {
+  logError('signed-url@download', e);
+  // on tombera en fallback sur l’URL existante (document.uri) si nécessaire
+}
+
+// 3) Ensuite, on télécharge/partage à partir de downloadUrl
+const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+
+if (!baseDir) {
+  await Linking.openURL(downloadUrl);
+  notifyInfo('Ouverture du document…');
+  return;
+}
+
+const dlDir = baseDir + 'downloads/';
+try { await FileSystem.makeDirectoryAsync(dlDir, { intermediates: true }); } catch (_) {}
+
+const target = dlDir + finalName;
+const { uri: downloadedUri } = await FileSystemLegacy.downloadAsync(downloadUrl, target);
+
+await Sharing.shareAsync(downloadedUri, {
+  mimeType: document.type || (finalName.endsWith('.pdf') ? 'application/pdf' : undefined),
+  dialogTitle: 'Ouvrir le document',
+});
+
+
+    } else {
+      // Fichier local déjà en cache (issu du picker) : on le partage direct
+      await Sharing.shareAsync(document.uri, {
+        mimeType: document.type,
+        dialogTitle: 'Ouvrir le document',
+      });
+    }
+
+    notifyInfo('Téléchargement prêt');
+  } catch (e) {
+    logError('downloadDocument', e);
+    notifyError();
+  }
+};
+
 
   // -------- Submit / Delete --------
 
@@ -708,28 +761,53 @@ export default function TechnicalRecordScreen() {
         }
 
         const key = `${boatId}/${technicalRecordId}/${Date.now()}_${safeName}`;
-        const { error: uploadError } = await supabase.storage
-          .from(BUCKET)
-          .upload(key, arrayBuffer, {
-            contentType: doc.type || 'application/octet-stream',
-            upsert: false,
-          });
-        if (uploadError) {
-          logError('storage.upload', uploadError);
-          notifyError();
-          continue;
-        }
+       // Utilise un Uint8Array explicite
+const u8 = new Uint8Array(arrayBuffer);
+const { error: uploadError } = await supabase.storage
+  .from(BUCKET)
+  .upload(key, u8, {
+    contentType: doc.type || 'application/octet-stream',
+    upsert: false,
+  });
 
-        const fileUrl = supabase.storage.from(BUCKET).getPublicUrl(key).data.publicUrl;
-        const { error: insertErr } = await supabase
-          .from('boat_technical_record_documents')
-          .insert({
-            technical_record_id: technicalRecordId,
-            name: safeName,
-            type: doc.type,
-            date: doc.date,
-            file_url: fileUrl,
-          });
+       
+if (uploadError) {
+  logError('storage.upload', uploadError);
+  notifyError();
+  continue;
+}
+
+// getPublicUrl renvoie { data: { publicUrl } } (synchrone)
+// URL signée (private-friendly)
+const { data: signedData, error: signErr } = await supabase.storage
+  .from(BUCKET)
+  .createSignedUrl(key, 60 * 60, { download: safeName }); // 1h
+
+if (signErr || !signedData?.signedUrl) {
+  logError('storage.createSignedUrl', signErr);
+  notifyError();
+  continue;
+}
+
+const fileUrl = signedData.signedUrl;
+
+// Si ta table a une colonne file_key (recommandé), on l’enregistre aussi.
+// Sinon, tu peux laisser uniquement file_url.
+const payload: any = {
+  technical_record_id: technicalRecordId,
+  name: safeName,
+  type: doc.type,
+  date: doc.date,
+  file_url: fileUrl,
+};
+(payload as any).file_key = key; // ← enlève cette ligne si ta colonne n’existe pas
+
+const { error: insertErr } = await supabase
+  .from('boat_technical_record_documents')
+  .insert(payload);
+
+
+
         if (insertErr) {
           logError('insert document row', insertErr);
           notifyError();
