@@ -1,6 +1,6 @@
 // app/(tabs)/_layout.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Tabs, router } from 'expo-router';
+import { Tabs, router,usePathname } from 'expo-router';
 import { Platform, AppState, View, BackHandler, Text } from 'react-native';
 import { Chrome as Home, MessageSquare, User, FileText } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -44,6 +44,7 @@ const LogoWithBadge = ({ total }: { total: number }) => (
 export default function TabLayout() {
   const { user } = useAuth();
   useResetBadgeOnLogout(user);
+  const pathname = usePathname();
 
   const appState = useRef(AppState.currentState);
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -53,21 +54,37 @@ export default function TabLayout() {
 
 
 
-  useFocusEffect(
-  React.useCallback(() => {
-    if (Platform.OS !== 'android') return;
-    const onBack = () => {
-      if (router.canGoBack && router.canGoBack()) {
-        router.back();
-      } else {
+   useFocusEffect(
+    React.useCallback(() => {
+      if (Platform.OS !== 'android') return;
+      // Les 4 écrans racine des tabs
+      const ROOT_TAB_ROUTES = new Set([
+        '/(tabs)/index',
+        '/(tabs)/requests',
+        '/(tabs)/messages',
+        '/(tabs)/profile',
+      ]);
+
+      const onBack = () => {
+        // Si on est sur un des 4 écrans racine → quitter l'app
+        if (ROOT_TAB_ROUTES.has(pathname)) {
+          BackHandler.exitApp();
+          return true;
+        }
+        // Sinon comportement normal : revenir en arrière s'il y a un historique
+        if (router.canGoBack && router.canGoBack()) {
+          router.back();
+          return true;
+        }
+        // Par sécurité, si pas d'historique : quitter
         BackHandler.exitApp();
-      }
-      return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
-    return () => sub.remove();
-  }, [])
-);
+        return true;
+      };
+
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, [pathname])
+  );
 
 
   // ---- Permissions / channel (badge icône app)
