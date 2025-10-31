@@ -7,7 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/src/lib/supabase'; // Import Supabase client
 import CustomDateTimePicker from '@/components/CustomDateTimePicker'; // Import CustomDateTimePicker
 import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput, ActivityIndicator, useWindowDimensions } from 'react-native'; // Assurez-vous que tous les imports sont là
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Image, Modal, Alert, TextInput, ActivityIndicator, useWindowDimensions, Linking } from 'react-native'; // Assurez-vous que tous les imports sont là
 import { Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -694,6 +694,8 @@ const downloadDocument = async (doc: { name: string; file_url: string }) => {
   try {
     const filename = getFilename(doc);
     const mime = guessMime(getFileExtension(filename));
+
+    // 0) Résoudre une URL fiable (signée si besoin, public/privé ok)
     const url = await getDownloadUrlFromSupabase(doc.file_url);
     log('[downloadDocument] resolved url:', url, 'doc:', doc);
     if (!url) {
@@ -701,24 +703,48 @@ const downloadDocument = async (doc: { name: string; file_url: string }) => {
       return;
     }
 
-    // 1) Télécharge dans le cache de l’app
+    // === WEB ===
+    if (Platform.OS === 'web') {
+      // ouvrir dans un nouvel onglet (ou fallback vers Linking)
+      try {
+        // @ts-ignore (RN web)
+        const win = window.open(url, '_blank');
+        if (!win) {
+          await Linking.openURL(url);
+        }
+        notifyInfo('Téléchargement lancé.');
+      } catch (e) {
+        await Linking.openURL(url);
+      }
+      return;
+    }
+
+    // === iOS / ANDROID ===
+    // 1) Télécharger dans le cache de l’app
     const localUri = await downloadToCache(url, filename);
 
-    // 2) Sauvegarde selon plateforme
+    // 2) Sauvegarde/partage selon plateforme
     if (Platform.OS === 'ios') {
-      await saveIOSWithShareSheet(localUri, mime, filename);
-    } else if (Platform.OS === 'android') {
-      await saveAndroidWithSAF(localUri, filename, mime);
-      notifyInfo(`Fichier “${filename}” enregistré ✅`);
-    } else {
-      // web / autres plateformes
-      notifyInfo('Téléchargement disponible uniquement sur iOS/Android dans l’app.');
-    }
+      await Linking.openURL(url);
+
+  notifyInfo('Téléchargement lancé dans Safari ✅');
+  return;
+}
+
+    if (Platform.OS === 'android') {
+      await Linking.openURL(url);
+  notifyInfo('Téléchargement lancé par Android ✅');
+  return;
+}
+
+    // autres plateformes (rare)
+    notifyInfo('Téléchargement disponible sur iOS/Android ou Web.');
   } catch (e: any) {
     logError('downloadDocument', e);
     notifyError(e?.message || "Échec du téléchargement.");
   }
 };
+
 
 
 
@@ -1162,10 +1188,14 @@ export default function BoatProfileScreen() {
                     <Text style={styles.documentName}>{doc.name}</Text>
                     <Text style={styles.documentDate}>{doc.date}</Text>
                   </View>
-                  <TouchableOpacity style={styles.documentAction}
-          onPress={() => downloadDocument(doc)}>
-                    <Download size={20} color="#0066CC" />
-                  </TouchableOpacity>
+                  <TouchableOpacity
+  style={styles.documentAction}
+  onPress={() => downloadDocument(doc)}
+  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+>
+  <Download size={20} color="#0066CC" />
+</TouchableOpacity>
+
                 </TouchableOpacity>
               ))}
             </View>

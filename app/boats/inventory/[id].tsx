@@ -32,7 +32,7 @@ const logError = (scope: string, err: unknown) => {
 
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, Modal, useWindowDimensions, Linking } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -62,6 +62,16 @@ function extractPathFromPublicUrl(publicUrl: string, bucket = BUCKET) {
     return null;
   }
 }
+
+
+// Remplace caractères à risque dans le nom de fichier
+function sanitizeFilename(name?: string) {
+  return (name || 'fichier')
+    .replace(/[\/\\:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 
 // Lit une URI locale (content://, file://) en ArrayBuffer pour éviter les Blobs vides
 async function readUriAsArrayBuffer(uri: string, filename: string) {
@@ -490,37 +500,65 @@ const r = useMemo(() => ({
   };
 
   const handleDownloadDocument = async (document: Document) => {
-    try {
-      if (Platform.OS === 'web') {
-        // Pour le web, ouvrir l'URL du document dans un nouvel onglet
-        const pdfWindow = window.open(document.uri, '_blank');
-        if (!pdfWindow) {
-          throw new Error('Échec de l\'ouverture du document dans une nouvelle fenêtre. Vérifiez si les pop-ups sont bloqués.');
+  try {
+    const filename = sanitizeFilename(document.name || 'document');
+    const hasExt = /\.[a-z0-9]+$/i.test(filename);
+    const finalName = hasExt
+      ? filename
+      : (document.type === 'application/pdf' ? `${filename}.pdf` : `${filename}`);
+
+    if (document.uri.startsWith('http')) {
+      // 1) Si possible, génère une URL signée fraîche (bucket privé/public)
+      let downloadUrl = document.uri;
+      const maybeKey = extractPathFromPublicUrl(document.uri, BUCKET);
+
+      try {
+        if (maybeKey) {
+          const { data: signed, error: signErr } = await supabase.storage
+            .from(BUCKET)
+            .createSignedUrl(maybeKey, 60 * 60, { download: finalName }); // 1h
+
+          if (!signErr && signed?.signedUrl) {
+            downloadUrl = signed.signedUrl;
+          }
         }
-      } else {
-        // Pour mobile, télécharger le fichier et le partager
-        const filename = document.name;
-        const fileUri = FileSystem.cacheDirectory + filename;
-
-        // Télécharger le fichier
-        const { uri: downloadedUri } = await FileSystem.downloadAsync(
-          document.uri,
-          fileUri
-        );
-
-        // Partager le fichier
-        await Sharing.shareAsync(downloadedUri, {
-          mimeType: document.type,
-          UTI: document.type === 'application/pdf' ? '.pdf' : undefined, // Spécifier l'UTI pour les PDF
-        });
+      } catch (e) {
+        logError('signed-url@download', e);
+        // fallback: on utilisera downloadUrl tel quel
       }
-      Alert.alert('Succès', 'Le document a été téléchargé.');
-    } catch (error: any) {
-      logError('downloadInventoryDoc', error);
-      notifyError();
 
+      // 2) Télécharger vers un répertoire lisible puis partager/ouvrir
+      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      if (!baseDir) {
+        await Linking.openURL(downloadUrl);
+        notifyInfo('Ouverture du document…');
+        return;
+      }
+
+      try { await FileSystem.makeDirectoryAsync(baseDir + 'downloads/', { intermediates: true }); } catch {}
+      const target = baseDir + 'downloads/' + finalName;
+
+      const { uri: downloadedUri } = await FileSystem.downloadAsync(downloadUrl, target);
+
+      await Sharing.shareAsync(downloadedUri, {
+        mimeType: document.type || (finalName.endsWith('.pdf') ? 'application/pdf' : undefined),
+        dialogTitle: 'Ouvrir le document',
+      });
+    } else {
+      // Fichier local (issu du picker) : on le partage direct
+      await Sharing.shareAsync(document.uri, {
+        mimeType: document.type,
+        dialogTitle: 'Ouvrir le document',
+      });
     }
-  };
+
+    notifyInfo('Téléchargement prêt');
+  } catch (e) {
+    logError('downloadInventoryDoc', e);
+    notifyError();
+  }
+};
+
 
   const handleRemoveDocument = (documentId: string) => {
     setForm(prev => ({
@@ -927,19 +965,22 @@ const r = useMemo(() => ({
                       </View>
                     </View>
                     <View style={styles.documentActions}>
-                      <TouchableOpacity
-                        style={styles.downloadDocumentButton}
-                        onPress={() => handleDownloadDocument(document)}
-                      >
-                        <Download size={20} color="#0066CC" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.removeDocumentButton}
-                        onPress={() => handleRemoveDocument(document.id)}
-                      >
-                        <X size={16} color="#ff4444" />
-                      </TouchableOpacity>
-                    </View>
+  {document.uri.startsWith('http') && (
+    <TouchableOpacity
+      style={styles.downloadDocumentButton}
+      onPress={() => handleDownloadDocument(document)}
+    >
+      <Download size={20} color="#0066CC" />
+    </TouchableOpacity>
+  )}
+  <TouchableOpacity
+    style={styles.removeDocumentButton}
+    onPress={() => handleRemoveDocument(document.id)}
+  >
+    <X size={16} color="#ff4444" />
+  </TouchableOpacity>
+</View>
+
                   </View>
                 ))}
               </View>

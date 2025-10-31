@@ -41,7 +41,7 @@ import CustomDateTimePicker from '@/components/CustomDateTimePicker';
 import { useAuth } from '@/context/AuthContext';
 
 const BUCKET = 'technical.record.documents';
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB (limite soft pour éviter OOM)
+const MAX_FILE_SIZE = 60 * 1024 * 1024; // 25MB (limite soft pour éviter OOM)
 
 // --- Notifications & logs (erreurs masquées côté client) ---
 const GENERIC_ERR = "Une erreur est survenue. Veuillez réessayer.";
